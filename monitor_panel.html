@@ -1,0 +1,215 @@
+<!-- Monitor card: injected into the dashboard page by dashboard2.py (one-line hook on "/"). Self-contained - polls /meter itself.
+     Shows the window the channelizer is decoding right now: a tile per channel with a live level bar, green = squelch open
+     (pulsing = the one you hear), amber edge = carrier present; heard log (tap to listen); nearest aircraft when airband is in the window. -->
+<style>
+.mon{margin-bottom:12px;border-color:var(--acc2,#2f81f7)}.mon .monhead{display:flex;flex-wrap:wrap;gap:4px 12px;align-items:baseline;margin-bottom:8px}.mon .monhead h3{margin:0}
+.mon .monchans{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:6px}
+.mon .mc{border:1px solid var(--line,#2a3140);border-radius:9px;padding:6px 8px;position:relative;overflow:hidden;font-size:.84rem;line-height:1.25;cursor:pointer;background:var(--card,#161b24)}
+.mon .mc b{font-family:var(--mono,monospace)}.mon .mc span{display:block;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;opacity:.75}.mon .mc u{display:block;text-decoration:none;font-size:.78rem;color:#ffd21f;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-height:1em}
+.mon .mc i{position:absolute;left:0;bottom:0;height:3px;width:0;background:var(--acc2,#2f81f7);transition:width .15s}
+.mon .mc.car{border-color:#e0a030}.mon .mc.open{border-color:var(--acc,#3fb950);background:rgba(63,185,80,.14);box-shadow:0 0 0 1px var(--acc,#3fb950) inset}.mon .mc.open i{background:var(--acc,#3fb950)}
+.mon .mc.act{animation:monpulse 1.2s ease-in-out infinite}@keyframes monpulse{0%,100%{box-shadow:0 0 0 1px var(--acc,#3fb950) inset}50%{box-shadow:0 0 0 3px var(--acc,#3fb950) inset}}
+.mon .monheard{margin-top:8px}.mon .monheard button{margin:2px 4px 2px 0}.mon .monair{margin-top:4px}.mon .monair a{color:var(--acc,#3fb950);font-family:var(--mono,monospace)}
+</style>
+<script>
+(function(){
+ const q=s=>document.querySelector(s);
+ const main=q('main');if(!main)return;
+ const card=document.createElement('div');card.className='card mon';card.id='moncard';card.style.display='none';
+ card.innerHTML='<div class="monhead"><h3 id="montitle">Monitor</h3><span class="sv" id="monsub"></span></div><div id="monchans" class="monchans"></div><div class="sv monheard" id="monheard"></div><div class="sv monair" id="monair"></div>';
+ main.insertBefore(card,main.firstChild);
+ const F=m=>Number(m).toFixed(4);const E=s=>String(s==null?'':s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+ const pct=v=>v>1?Math.max(0,Math.min(100,Math.round(100*(20*Math.log10(v/16384)+60)/60))):0;
+ const dirn=b=>['N','NE','E','SE','S','SW','W','NW'][Math.round((b||0)/45)%8];
+ const listen=(mhz,mode,name)=>{if(typeof P!=='undefined'&&P.play)P.play(+mhz,mode||(mhz<137?'am':'fm'),name||F(mhz));};
+ let key='',hk='',air=null,airT=0,peak=0,fails=0;
+ async function airPeek(){if(Date.now()-airT<8000)return;airT=Date.now();try{air=await (await fetch('/api/aircraft',{cache:'no-store'})).json();}catch(e){}}
+ function render(mo,m){
+  if(card.style.display==='none')card.style.display='';
+  const chans=mo.chans||[],ch=mo.engine==='channelizer';
+  q('#montitle').textContent=(ch?'Monitor · window '+mo.group+'/'+mo.groups:'Monitor · channel '+((mo.idx||0)+1)+'/'+mo.n)+(mo.active?' · ON AIR '+(mo.name||F(mo.active)):'');
+  q('#monsub').textContent=mo.n+' channels'+(ch?' · '+chans.length+' decoded at once around '+F(mo.center||0)+' MHz · load '+Math.round((mo.load||0)*100)+'%'+(mo.audio==='sox'?' · same audio chain as a direct listen':''):' · hopping ~0.7 s per channel')+' · '+(m.open?'squelch open':'quiet');
+  const k=chans.map(x=>x.mhz).join(',');const box=q('#monchans');
+  if(k!==key){key=k;box.innerHTML=chans.map(x=>`<div class="mc" data-m="${x.mhz}" data-mode="${x.mode||''}" data-name="${E(x.name||'')}" title="tap to listen to just this channel"><b>${F(x.mhz)}</b><span>${E(x.name||'')}</span><u></u><i></i></div>`).join('')||'<div class="sv">starting the receiver…</div>';
+   box.querySelectorAll('.mc').forEach(el=>el.onclick=()=>listen(el.dataset.m,el.dataset.mode==='am'?'am':(el.dataset.mode==='wbfm'?'wbfm':'fm'),el.dataset.name));}
+  let onch={};if(window.__ft&&air&&air.aircraft){air.aircraft.forEach(a=>{if(a.lat==null||(a.on_ground&&(a.speed_kt||0)<5))return;try{let fl=[];try{fl=window.__ft?window.__ft.freqs(a).f:[];}catch(e){}if(!fl.length&&a.freqs&&a.freqs.length)fl=a.freqs;const f=fl[0];const m=f?+(Array.isArray(f)?f[0]:(f.mhz??f[0])):0;if(m)(onch[m.toFixed(4)]=onch[m.toFixed(4)]||[]).push(a.callsign||a.icao);}catch(e){}});}
+ chans.forEach(x=>{const el=box.querySelector(`.mc[data-m="${x.mhz}"]`);if(!el)return;const u=el.querySelector('u');if(u){const cs=onch[(+x.mhz).toFixed(4)]||[];const t=cs.length?'✈ '+cs.slice(0,3).join(' ')+(cs.length>3?' +'+(cs.length-3):''):'';if(u.textContent!==t)u.textContent=t;}el.classList.toggle('open',!!x.open);el.classList.toggle('car',!!x.carrier&&!x.open);el.classList.toggle('act',mo.active===x.mhz);el.querySelector('i').style.width=((x.open||x.carrier)?Math.max(pct(x.level),35):pct(x.level))+'%';});
+  const h=(mo.heard||[]).map(x=>x.when+x.mhz).join('|');
+  if(h!==hk){hk=h;q('#monheard').innerHTML=(mo.heard&&mo.heard.length)?'Heard: '+mo.heard.slice().reverse().map(x=>`<button class="ghost" data-m="${x.mhz}" data-name="${E(x.name)}" title="listen to this channel">${E(x.name)} <span class="sv">${x.when} · ${x.secs} s${x.tones?' · '+E(x.tones):''}</span></button>`).join(''):'Nobody has talked yet - the first transmission on any of these channels plays and is logged here.';
+   q('#monheard').querySelectorAll('button').forEach(b=>b.onclick=()=>listen(b.dataset.m,null,b.dataset.name));}
+  const airband=chans.some(x=>x.mhz>=118&&x.mhz<137)||(mo.mhz>=118&&mo.mhz<137);
+  if(airband){airPeek();const a=air;if(a&&a.aircraft){const near=a.aircraft.filter(x=>!x.on_ground).slice(0,4);
+   q('#monair').innerHTML='✈ nearest now: '+(near.length?near.map(x=>`<a href="https://www.flightradar24.com/${E(x.callsign||('data/aircraft/'+(x.reg||x.icao)))}" target="_blank" rel="noopener">${E(x.callsign||x.icao)}</a> ${x.km} km ${dirn(x.bearing)}${x.alt_ft!=null?' · '+Number(x.alt_ft).toLocaleString()+' ft':''}${x.vrate?' '+(x.vrate>0?'↑':'↓'):''}${x.route?' · '+E(x.route):''}`).join(' &nbsp;·&nbsp; '):'nothing airborne nearby')+(a.source?' <span class="sv">('+E(a.source)+')</span>':'');}}
+  else q('#monair').innerHTML='';
+  // the player bar's level meter: the page's own meter() returns before updating it while monitoring
+  const l=q('#lvl');if(l){const p=pct(m.level);const i=l.querySelector('i'),s=l.querySelector('s');if(i)i.style.width=p+'%';l.classList.toggle('open',!!m.open);peak=Math.max(p,peak*0.96);if(s)s.style.left=peak+'%';}
+  const pf=q('#pfreq'),pn=q('#pname');if(mo.active){if(pf)pf.textContent=F(mo.active);if(pn)pn.textContent=(mo.name||F(mo.active))+' · ON AIR';}
+ }
+ async function tick(){try{const m=await (await fetch('/meter',{cache:'no-store'})).json();fails=0;if(m&&m.monitor&&m.playing)render(m.monitor,m);else if(card.style.display!=='none'){card.style.display='none';key='';hk='';}}
+  catch(e){if(++fails>8&&card.style.display!=='none'){card.style.display='none';key='';}}}
+ setInterval(tick,300);tick();
+})();
+</script>
+
+<!-- Aircraft <-> airband: live map on the Air tab, each aircraft tied to the YYZ/YTZ channel it is talking on, with ▶ to listen. -->
+<style>
+.leaflet-tile.darktiles,.darktiles .leaflet-tile{filter:invert(1) hue-rotate(190deg) brightness(.82) contrast(.92) saturate(.6)}
+.airpanel .airmap{height:380px;border-radius:12px;overflow:hidden;background:#0e131a;border:1px solid var(--line,#2a3140)}
+.airpanel .airhead{display:flex;flex-wrap:wrap;gap:6px 12px;align-items:center;margin-bottom:8px}.airpanel .airhead h3{margin:0;flex:1 1 auto}
+.airpanel .who{display:grid;grid-template-columns:repeat(auto-fill,minmax(290px,1fr));gap:6px;margin-top:10px}
+.airpanel .ac{border:1px solid var(--line,#2a3140);border-radius:9px;padding:7px 9px;font-size:.84rem;line-height:1.3;background:var(--card,#161b24)}
+.airpanel .ac b{font-family:var(--mono,monospace)}.airpanel .ac .ph{font-weight:600}.airpanel .ac.arr .ph{color:var(--acc,#3fb950)}.airpanel .ac.dep .ph{color:#58a6ff}.airpanel .ac.emg{border-color:#e5484d}
+.airpanel .ac .fq{margin-top:4px;display:flex;flex-wrap:wrap;gap:4px}.airpanel .ac .fq button{padding:3px 8px;font-size:.8rem}.airpanel .ac .fq button.hot{border-color:var(--acc,#3fb950);color:var(--acc,#3fb950)}
+.plane{width:40px;height:40px;display:flex;align-items:center;justify-content:center}.plane svg{width:36px;height:36px;filter:drop-shadow(0 0 2px #000)}
+.leaflet-popup-content{font:13px/1.35 -apple-system,system-ui,sans-serif;color:#111}.leaflet-popup-content b{font-family:ui-monospace,Menlo,monospace}
+@media(max-width:760px){.airpanel .airmap{height:300px}}
+</style>
+<script>
+(function(){
+ const q=s=>document.querySelector(s);const tabAir=q('#tab-air');if(!tabAir)return;
+ const E=s=>String(s==null?'':s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+ const YYZ=[43.6777,-79.6248],YTZ=[43.6275,-79.3962];
+ // Pearson / Billy Bishop channels from the app's own reference table (sdr_scan.py REF). Names match the bank, so ▶ plays the same channel the table does.
+ const CH={twrE:[118.700,'YYZ TWR E'],twrW:[118.350,'YYZ TWR W'],arr:[[124.475,'YYZ ARR 1'],[125.400,'YYZ ARR 2'],[132.800,'YYZ ARR 3'],[134.175,'YYZ ARR 4']],
+  dep:[[127.575,'YYZ DEP 1'],[128.800,'YYZ DEP 2']],gndN:[121.650,'YYZ GND N'],gndS:[121.900,'YYZ GND S'],apron:[122.825,'YYZ APRON'],atis:[120.825,'YYZ ATIS'],
+  ytzTwr:[118.200,'YTZ TWR'],ytzGnd:[121.700,'YTZ GND'],vfr:[133.400,'TOR VFR']};
+ const km=(a,b)=>{const R=6371,d2r=Math.PI/180,dl=(b[0]-a[0])*d2r,dn=(b[1]-a[1])*d2r,s=Math.sin(dl/2)**2+Math.cos(a[0]*d2r)*Math.cos(b[0]*d2r)*Math.sin(dn/2)**2;return 2*R*Math.asin(Math.sqrt(s));};
+ // which channel an aircraft is on, from phase + distance + altitude + side of the field
+ function freqs(x){const p=phase(x),alt=x.alt_ft||0,dz=km([x.lat,x.lon],YYZ),dt=km([x.lat,x.lon],YTZ);
+  if(x.on_ground){if(dz<4)return{why:'on the ground at Pearson',f:[x.lat>YYZ[0]?CH.gndN:CH.gndS,CH.apron]};if(dt<2)return{why:'on the ground at Billy Bishop',f:[CH.ytzGnd]};return{why:'on the ground',f:[]};}
+  if(/YTZ/.test(p))return{why:p+' - tower',f:[CH.ytzTwr]};
+  if(/arriving YYZ/.test(p)){if(dz<14&&alt<3500)return{why:'short final - tower',f:[x.lon>YYZ[1]?CH.twrE:CH.twrW,x.lon>YYZ[1]?CH.twrW:CH.twrE]};return{why:'on approach - Toronto Arrival',f:CH.arr};}
+  if(/departing YYZ/.test(p)){if(dz<9&&alt<3000)return{why:'just airborne - tower',f:[x.lon>YYZ[1]?CH.twrE:CH.twrW]};return{why:'climbing out - Toronto Departure',f:CH.dep};}
+  if(alt<4000&&dz>10&&dt>6)return{why:'low and local - VFR',f:[CH.vfr]};
+  return{why:(p||'enroute')+' - Toronto Centre (not in the UV-32 bank)',f:[]};}
+ // phase from altitude, vertical rate, distance to and heading toward the airport (the feed does not say; computed here)
+ function phase(x){if(x.phase)return x.phase;if(x.on_ground)return 'on the ground';const alt=x.alt_ft||0,vr=x.vrate||0,tr=x.track||0,f=fam(x.type),rt=(x.route||'');
+  const small=(f==='prop'||f==='ga'||f==='heli');                       // Billy Bishop takes turboprops, GA and helicopters only
+  const toYYZ=/CYYZ\s*$/.test(rt)||/→\s*CYYZ/.test(rt),toYTZ=/CYTZ\s*$/.test(rt)||/→\s*CYTZ/.test(rt),fromYYZ=/^\s*CYYZ/.test(rt),fromYTZ=/^\s*CYTZ/.test(rt);
+  const geo=ap=>{const d=km([x.lat,x.lon],ap);const dn=(ap[1]-x.lon)*Math.PI/180,y=Math.sin(dn)*Math.cos(ap[0]*Math.PI/180),xx=Math.cos(x.lat*Math.PI/180)*Math.sin(ap[0]*Math.PI/180)-Math.sin(x.lat*Math.PI/180)*Math.cos(ap[0]*Math.PI/180)*Math.cos(dn);
+   const brg=(Math.atan2(y,xx)*180/Math.PI+360)%360;return [d,Math.abs((tr-brg+540)%360-180)];};
+  const [dz,az]=geo(YYZ),[dt,at]=geo(YTZ);
+  if(!toYTZ&&!fromYTZ){if(toYYZ&&alt<12000&&vr<=100&&dz<60)return 'arriving YYZ';if(fromYYZ&&alt<12000&&vr>100&&dz<45)return 'departing YYZ';
+   if(!toYYZ&&!fromYYZ){if(dz<45&&alt<9000&&vr<=0&&az<50)return 'arriving YYZ';if(dz<35&&alt<9000&&vr>200&&az>110)return 'departing YYZ';}}
+  if(small||toYTZ||fromYTZ){if((toYTZ||(!fromYTZ&&vr<=0&&at<55))&&dt<28&&alt<6000)return 'arriving YTZ';if((fromYTZ||(vr>200&&at>110))&&dt<20&&alt<6000)return 'departing YTZ';}
+  return vr>300?'climbing':(vr<-300?'descending':'level');}
+ const ph=p=>/arriving/.test(p||'')?'arr':(/departing/.test(p||'')?'dep':'');
+ window.__ft={phase,freqs};
+ const listen=(f,n)=>{if(typeof P!=='undefined'&&P.play)P.play(+f,'am',n||String(f));};
+ // --- panel
+ const card=document.createElement('div');card.className='card airpanel';
+ card.innerHTML='<div class="airhead"><h3>Aircraft on the airband <span id="apn" class="tag"></span></h3><button class="pri" id="apfollow" title="the scanner tunes itself: Monitor on the channels the aircraft overhead are using right now (tower / arrival / departure), re-read every lap as they move">✈ Follow the traffic</button><button class="ghost" id="apmon" title="Monitor on the whole Airport group: every YYZ/YTZ channel decoded at once">▶ All airport channels</button><span class="sv" id="apsrc"></span></div><div class="airmap" id="airmap"></div><div class="who" id="apwho"></div>';
+ tabAir.insertBefore(card,tabAir.firstChild);
+ const logCard=document.createElement('div');logCard.className='card';logCard.innerHTML='<h3>Airport log <span class="sv">landings and departures seen by the feed, newest first</span></h3><div id="aplog" class="sv">nothing yet</div>';
+ card.after(logCard);
+ let PREV={},LOG=[];try{LOG=JSON.parse(localStorage.getItem('aplog')||'[]');}catch(e){}
+ function logEv(ev){LOG.unshift(ev);LOG=LOG.slice(0,60);try{localStorage.setItem('aplog',JSON.stringify(LOG));}catch(e){}renderLog();}
+ function renderLog(){q('#aplog').innerHTML=LOG.length?LOG.slice(0,20).map(e=>`<div>${E(e.t)} · <b style="font-family:var(--mono,monospace)">${E(e.cs)}</b> ${E(e.type||'')} <span class="${e.ev==='landed'?'':''}" style="color:${e.ev==='landed'?'var(--acc,#3fb950)':'#58a6ff'}">${E(e.ev)} ${E(e.ap)}</span>${e.route?' · '+E(e.route):''}${e.heard?' · ✓ heard '+E(e.heard):''}</div>`).join(''):'nothing yet';}
+ renderLog();
+ function trackEvents(a){const now=new Date();const t=now.toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'});const seen=new Set();
+  (a.aircraft||[]).forEach(x=>{if(x.lat==null)return;seen.add(x.icao);const p=phase(x);const prev=PREV[x.icao];
+   if(prev&&/arriving/.test(prev.p)&&(x.on_ground||((x.alt_ft||0)<400&&(x.speed_kt||0)<120)))logEv({t,cs:x.callsign||x.icao,type:x.type,ev:'landed',ap:prev.p.replace('arriving ',''),route:x.route||'',heard:HEARD[x.callsign]||''});
+   if(prev&&(prev.p==='on the ground'||prev.ground)&&/departing/.test(p)&&!x.on_ground)logEv({t,cs:x.callsign||x.icao,type:x.type,ev:'took off',ap:p.replace('departing ',''),route:x.route||'',heard:HEARD[x.callsign]||''});
+   PREV[x.icao]={p,ground:!!x.on_ground,t:Date.now(),km:x.km,alt:x.alt_ft||0,cs:x.callsign,type:x.type,route:x.route};});
+  // vanished on short final = landed (the feed loses them below ~300 ft near the field)
+  for(const k in PREV){const v=PREV[k];if(seen.has(k))continue;if(Date.now()-v.t>60000){delete PREV[k];continue;}
+   if(/arriving/.test(v.p)&&v.alt<1500&&v.km<16&&!v.logged){v.logged=true;logEv({t,cs:v.cs||k,type:v.type,ev:'landed',ap:v.p.replace('arriving ',''),route:v.route||'',heard:HEARD[v.cs]||''});}}}
+ // select the Airport chip WITHOUT its sweep (a sweep grabs the dongle and the monitor that follows cannot claim it), then start Monitor
+ // start Monitor with a category: MONCAT is the page's own override (v135) - clean; the chip trick is only the fallback for older pages
+ function monitorWith(cat,label){const mb=q('#monbtn');if(!mb)return;
+  if(typeof MONCAT!=='undefined'&&typeof P!=='undefined'&&P.play){if(typeof QUICK!=='undefined')QUICK=false;MONCAT=cat;P.play(1,'monitor',label||('Monitor: '+cat));return;}
+  const all=[...document.querySelectorAll('.chip')].find(b=>b.dataset.c==='All');if(!all)return;
+  const of=window.fetch;window.fetch=(u,o)=>(typeof u==='string'&&u.startsWith('/api/scan'))?Promise.resolve(new Response('{"ok":true}',{headers:{'Content-Type':'application/json'}})):of(u,o);
+  all.dataset.c=cat;all.click();setTimeout(()=>{all.dataset.c='All';mb.click();setTimeout(()=>{all.click();setTimeout(()=>{window.fetch=of;},400);},1200);},350);}
+ let FOLLOW=false,PEND=0;
+ const hasOwnFollow=!!document.querySelector('#airtraffic');            // the page already has its own Follow traffic button: no duplicate
+ if(hasOwnFollow)q('#apfollow').remove();
+ else q('#apfollow').onclick=()=>{const mb=q('#monbtn');if(mb&&/Stop/.test(mb.textContent)&&FOLLOW){mb.click();return;}FOLLOW=true;PEND=Date.now();monitorWith('Follow traffic','Follow traffic: the channels the planes are on');};
+ q('#apmon').onclick=()=>{const mb=q('#monbtn');if(mb&&/Stop/.test(mb.textContent)){mb.click();return;}FOLLOW=false;PEND=Date.now();monitorWith('Airport','Monitor: Airport');};
+ setInterval(()=>{const mb=q('#monbtn'),b=q('#apmon'),f=q('#apfollow');if(!mb)return;const on=/Stop/.test(mb.textContent);if(!on&&Date.now()-PEND>8000)FOLLOW=false;if(b)b.textContent=on&&!FOLLOW?'■ Stop listening':'▶ All airport channels';if(f)f.textContent=on&&FOLLOW?'■ Stop following':'✈ Follow the traffic';},1000);
+ // --- map
+ let MAP=null,layer=null,trails={},hot=new Set(),HEARD={},HEARDT=0,EMG=new Set();
+ async function heardPeek(){if(Date.now()-HEARDT<20000)return;HEARDT=Date.now();try{HEARD=(await (await fetch('/api/recent_text',{cache:'no-store'})).json())||{};}catch(e){}}
+ function lib(){return new Promise((ok,no)=>{if(window.L)return ok();const c=document.createElement('link');c.rel='stylesheet';c.href='https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css';document.head.appendChild(c);const j=document.createElement('script');j.src='https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js';j.onload=ok;j.onerror=no;document.head.appendChild(j);});}
+ // Silhouettes by ICAO type code family (top view, nose up, 64x64) - the same families Flightradar24 draws
+ const SIL={
+  narrow:'M32 2c2.2 0 3.6 3.5 3.6 7.5V45l3.4 5.5v3l-3.4-1.2V56h-7.2v-3.7l-3.4 1.2v-3L28.4 45V9.5C28.4 5.5 29.8 2 32 2zM28.6 20 4 35v4.5l24.6-6.3zM35.4 20 60 35v4.5l-24.6-6.3zM23 49.5l9-2.6 9 2.6v3l-9-1.9-9 1.9zM16 27h5v9.5h-5zM43 27h5v9.5h-5z',
+  wide:'M32 1.5c2.8 0 4.4 4 4.4 8.5V45l4 6v3.5l-4-1.4V57h-8.8v-3.9l-4 1.4V51l4-6V10c0-4.5 1.6-8.5 4.4-8.5zM27.8 18 1.5 36v5.5l26.3-7.5zM36.2 18 62.5 36v5.5l-26.3-7.5zM21 49l11-3 11 3v3.5l-11-2.2-11 2.2zM13 26.5h6.2v11H13zM44.8 26.5H51v11h-6.2z',
+  quad:'M32 1.5c2.8 0 4.4 4 4.4 8.5V45l4 6v3.5l-4-1.4V57h-8.8v-3.9l-4 1.4V51l4-6V10c0-4.5 1.6-8.5 4.4-8.5zM27.8 18 1.5 36v5.5l26.3-7.5zM36.2 18 62.5 36v5.5l-26.3-7.5zM21 49l11-3 11 3v3.5l-11-2.2-11 2.2zM8 31h5v9H8zM18 25.5h5.5v10.5H18zM40.5 25.5H46v10.5h-5.5zM51 31h5v9h-5z',
+  rear:'M32 3c1.9 0 3 3.5 3 7v37l2.5 4v2.4l-2.5-.8V55h-6v-2.4l-2.5.8V49l2.5-4V10c0-3.5 1.1-7 3-7zM29.2 24 7 38v4l22.2-6.5zM34.8 24 57 38v4l-22.2-6.5zM24.5 40h4v8h-4zM35.5 40h4v8h-4zM20 52.5l12-2.5 12 2.5v3l-12-1.7-12 1.7z',
+  prop:'M32 3c2 0 3.2 3.5 3.2 7V46l3.2 4.5v2.6l-3.2-1V56h-6.4v-3.9l-3.2 1v-2.6l3.2-4.5V10c0-3.5 1.2-7 3.2-7zM3 24h58v6.5H3zM14.5 20.5h6.5v12h-6.5zM43 20.5h6.5v12H43zM17.75 17.5a3.5 3.5 0 1 0 .01 0zM46.25 17.5a3.5 3.5 0 1 0 .01 0zM22 50.5l10-2.3 10 2.3v3l-10-1.5-10 1.5z',
+  ga:'M32 8c1.8 0 2.8 3 2.8 6v30l2.6 4v2.4l-2.6-.8V53h-5.6v-3.4l-2.6.8v-2.4l2.6-4V14c0-3 1-6 2.8-6zM32 2.5a4.5 4.5 0 1 0 .01 0zM6 22h52v5.5H6zM23 47l9-2 9 2v2.6l-9-1.3-9 1.3z',
+  heli:'M32 14a6.5 11 0 1 0 .01 0zM30.8 34h2.4v22h-2.4zM33 53l9-2.6v2.4L33 56zM12 11l40 40-2.2 2.2L9.8 13.2zM52 11 12 51l2.2 2.2L54.2 13.2zM32 30.5a1.8 1.8 0 1 0 .01 0z'};
+ const T=[[/^(R22|R44|R66|EC\d|H1\d|H60|UH1|AS\d|A109|A119|A139|AW\d|B06|B407|B412|B429|B47|S76|S92|MD5|MD6|EH10|H135|H145|H155|BK17|NH90|CH47)/,'heli'],
+  [/^(B74|A38|A34|A124|AN12|C5M|IL96|IL86|B52|E3|E6|C17|KC13)/,'quad'],
+  [/^(B76|B77|B78|A3[01]|A33|A35|MD11|DC10|IL76|KC10|L101|C17|A400)/,'wide'],
+  [/^(DH8|DHC|AT[47]|SF34|D328|B190|C208|PC12|PC24|TBM|BE[1-9]|BE20|B350|PA3[1-9]|PA46|C130|L410|AN2|AN26|CN35|C295|E120|SW[34]|F50|JS[34]|ATP|SB20|P3|C27J|DH[CT])/,'prop'],
+  [/^(CRJ|E13|E14|ERJ|MD8|MD9|DC9|B712|B717|F100|F70|GLF|GL[0-9]|GLEX|CL[36]|C25|C5[0-9]|C68|C75|LJ|FA[5-9]|F2TH|F900|H25|HA4T|E35L|E50P|E55P|E545|E550|PRM1|BE40|ASTR|G150|G280|WW24|SBR|YK4)/,'rear'],
+  [/^(C1[05-9]|C2[0-1]|C3[0-9]|P28|PA2|PA3[0-4]|PA44|SR2|DA4|DA6|BE3|BE5|BE9|M20|RV|GLID|AA5|AC|BL8|C7|CH7|DV20|P2|EVOT|ULAC|HXB|LNC)/,'ga']];
+ const fam=t=>{t=(t||'').toUpperCase();for(const [re,f] of T)if(re.test(t))return f;return 'narrow';};
+ function icon(x){const outline=x.emergency?'#e5484d':(ph(phase(x))==='arr'?'#3fb950':(ph(phase(x))==='dep'?'#58a6ff':'#1a1a1a'));const fill=x.on_ground?'#b8961a':'#ffd21f';
+  const sz=x.on_ground?22:40;return L.divIcon({className:'plane',iconSize:[sz,sz],iconAnchor:[sz/2,sz/2],html:`<svg viewBox="0 0 64 64" style="width:${sz-4}px;height:${sz-4}px;opacity:${x.on_ground?.75:1};transform:rotate(${x.track||0}deg)">${SIL[fam(x.type)].split(/(?=M)/).filter(Boolean).map(d=>`<path fill="${fill}" stroke="${outline}" stroke-width="${outline==='#1a1a1a'?1.5:3}" stroke-linejoin="round" paint-order="stroke" d="${d}"/>`).join('')}</svg>`});}
+ async function draw(a){if(!window.L){try{await lib();}catch(e){q('#airmap').textContent='map library could not load on this device';return;}}
+  if(!MAP){MAP=L.map('airmap',{zoomControl:true}).setView([43.66,-79.52],10);L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png',{maxZoom:18,attribution:'&copy; OpenStreetMap',className:'darktiles'}).addTo(MAP);
+   const h=(a.home&&a.home.length)?a.home:[43.6532,-79.3832];L.circleMarker(h,{radius:6,color:'#e5484d',fillOpacity:1}).addTo(MAP).bindPopup('Home');
+   [[YYZ,'YYZ Pearson'],[YTZ,'YTZ Billy Bishop']].forEach(([p,n])=>L.circleMarker(p,{radius:7,color:'#f0b429',fillOpacity:.9}).addTo(MAP).bindPopup(n));
+   [10,25].forEach(k=>L.circle(h,{radius:k*1000,color:'#e5484d',weight:1,fill:false,dashArray:'4 6'}).addTo(MAP));layer=L.layerGroup().addTo(MAP);}
+  layer.clearLayers();const seen=new Set();
+  (a.aircraft||[]).forEach(x=>{if(x.lat==null)return;seen.add(x.icao);const t=trails[x.icao]=(trails[x.icao]||[]);const last=t[t.length-1];if(!last||last[0]!==x.lat||last[1]!==x.lon)t.push([x.lat,x.lon]);if(t.length>30)t.shift();
+   if(t.length>1)L.polyline(t,{color:ph(phase(x))==='arr'?'#3fb950':(ph(phase(x))==='dep'?'#58a6ff':'#8b949e'),weight:1.5,opacity:.6}).addTo(layer);
+   const fr=freqs(x);const m=L.marker([x.lat,x.lon],{icon:icon(x)}).addTo(layer);
+   if(HEARD[x.callsign])L.circleMarker([x.lat,x.lon],{radius:16,color:'#3fb950',weight:2,fill:false,dashArray:'3 4'}).addTo(layer).bindTooltip('heard on air '+HEARD[x.callsign],{permanent:false});
+   if(x.emergency&&!EMG.has(x.icao)){EMG.add(x.icao);const t=document.querySelector('#toast');if(t){t.textContent='🚨 EMERGENCY squawk '+(x.squawk||'')+' - '+(x.callsign||x.icao)+' '+x.km+' km';t.classList.add('show');setTimeout(()=>t.classList.remove('show'),8000);}}
+   m.bindPopup(`<b>${E(x.callsign||x.icao)}</b> ${E(x.type||'')} ${E(x.reg||'')}${x.desc?' · '+E(x.desc):''}${HEARD[x.callsign]?' · <span style="color:#3fb950">heard '+E(HEARD[x.callsign])+'</span>':''}<br>${x.alt_ft!=null?Number(x.alt_ft).toLocaleString()+' ft':'—'}${x.vrate?' '+(x.vrate>0?'↑':'↓')+Math.abs(x.vrate)+' fpm':''} · ${x.speed_kt||0} kt · ${x.track||0}°<br>${x.km} km from home${x.route?' · '+E(x.route):''}<br><i>${E(phase(x))}</i>${fr.f.length?'<br>listen: '+fr.f.map(f=>`<a href="#" data-f="${f[0]}" data-n="${E(f[1])}">${f[1]} ${f[0].toFixed(3)}</a>`).join(' · '):''}`);
+   m.on('popupopen',e=>{e.popup.getElement().querySelectorAll('a[data-f]').forEach(l=>l.onclick=ev=>{ev.preventDefault();listen(l.dataset.f,l.dataset.n);});});});
+  for(const k in trails)if(!seen.has(k))delete trails[k];}
+ // --- who is talking where
+ function who(a){const rows=(a.aircraft||[]).filter(x=>!x.on_ground&&ph(phase(x))).sort((p,r)=>(ph(phase(p))==='arr'?0:1)-(ph(phase(r))==='arr'?0:1)||p.km-r.km).slice(0,12);
+  q('#apn').textContent=(a.n||0)+' tracked · '+rows.length+' working YYZ/YTZ';
+  q('#apsrc').textContent=(a.source?'feed: '+a.source:'')+(a.age!=null?' · '+a.age+' s ago':'')+(a.error?' · '+a.error:'');
+  q('#apwho').innerHTML=rows.length?rows.map(x=>{const fr=freqs(x);return `<div class="ac ${ph(phase(x))}${x.emergency?' emg':''}"><b>${E(x.callsign||x.icao)}</b> ${E(x.type||'')}${x.route?' · '+E(x.route):''} · ${x.km} km · ${x.alt_ft!=null?Number(x.alt_ft).toLocaleString()+' ft':'—'}${x.emergency?' · <b style="color:#e5484d">SQUAWK '+E(x.squawk)+'</b>':''}${HEARD[x.callsign]?' · <span style="color:#3fb950">✓ heard '+E(HEARD[x.callsign])+'</span>':''}<br><span class="ph">${E(phase(x))}</span> <span class="sv">· ${E(fr.why)}</span><div class="fq">${fr.f.map(f=>`<button class="ghost${hot.has(f[0].toFixed(4))?' hot':''}" data-f="${f[0]}" data-n="${E(f[1])}" title="listen on ${f[0].toFixed(3)} AM">▶ ${f[1]}</button>`).join('')}</div></div>`;}).join(''):'<div class="sv">nobody on approach or departure right now - the map still shows everything overhead</div>';
+  q('#apwho').querySelectorAll('button[data-f]').forEach(b=>b.onclick=()=>listen(b.dataset.f,b.dataset.n));}
+ // channels heard in the last 30 min light up (hot) - from the page's own state
+ async function hotset(){try{const st=await (await fetch('/api/state',{cache:'no-store'})).json();hot=new Set((st.hits||[]).filter(h=>h.mhz<137&&(h.recent||0)>0).map(h=>(+h.mhz).toFixed(4)));}catch(e){}}
+ let busy=false;async function refresh(){if(busy||!tabAir||tabAir.style.display==='none')return;busy=true;try{const a=await (await fetch('/api/aircraft',{cache:'no-store'})).json();await hotset();await heardPeek();await draw(a);who(a);trackEvents(a);}catch(e){q('#apsrc').textContent='feed: '+e.message;}finally{busy=false;}}
+ const btn=document.querySelector('.tabs button[data-t="air"]');if(btn)btn.addEventListener('click',()=>setTimeout(()=>{refresh();if(MAP)MAP.invalidateSize();},250));
+ setInterval(refresh,8000);if(tabAir.style.display!=='none')refresh();
+})();
+</script>
+
+<!-- List cap: no table on the page shows more than 20 rows at once (phone scrolling); a "show all" row expands it. The Frequencies table has its own cap. -->
+<script>
+(function(){
+ const CAP=20;const open=new WeakSet();
+ function cap(tb){if(tb.id==='rows'||open.has(tb))return;tb._capT=Date.now();const rows=[...tb.children].filter(r=>r.tagName==='TR'&&!r.classList.contains('caprow'));
+  const old=tb.querySelector('.caprow');if(old)old.remove();
+  if(rows.length<=CAP){rows.forEach(r=>{if(r.dataset.capped){r.style.display='';delete r.dataset.capped;}});return;}
+  rows.forEach((r,i)=>{if(i>=CAP){r.style.display='none';r.dataset.capped='1';}else if(r.dataset.capped){r.style.display='';delete r.dataset.capped;}});
+  const tr=document.createElement('tr');tr.className='caprow';const td=document.createElement('td');td.colSpan=20;td.style.textAlign='center';td.innerHTML=`<button class="ghost">Show all ${rows.length} (${rows.length-CAP} more)</button>`;
+  td.querySelector('button').onclick=()=>{open.add(tb);rows.forEach(r=>{r.style.display='';delete r.dataset.capped;});tr.remove();};tr.appendChild(td);tb.appendChild(tr);}
+ function sweep(){document.querySelectorAll('main tbody').forEach(cap);}
+ const mo=new MutationObserver(ms=>{const seen=new Set();ms.forEach(m=>{const t=m.target.closest?m.target.closest('tbody'):null;if(t&&!(t._capT&&Date.now()-t._capT<150))seen.add(t);});seen.forEach(cap);});
+ mo.observe(document.querySelector('main'),{childList:true,subtree:true});sweep();
+})();
+</script>
+
+<!-- Direct-listen squelch: one switch, Auto | Open. Open = squelch 0 (hear everything, weak calls included) for a channel you
+     pressed play on; remembered on this device. Monitor / Follow / Quick scan always use the smart squelch (Open would pin them on hiss). -->
+<style>.sqsw{display:inline-flex;border:1px solid var(--line,#2a3140);border-radius:9px;overflow:hidden;vertical-align:middle}.sqsw button{border:0;border-radius:0;padding:5px 10px;font:inherit;font-size:.85rem;background:transparent;color:inherit;cursor:pointer}.sqsw button.on{background:var(--acc,#3fb950);color:#000;font-weight:600}</style>
+<script>
+(function(){
+ const auto=document.querySelector('#auto'),sq=document.querySelector('#sq');if(!auto||!sq||typeof P==='undefined'||!P.play)return;
+ let OPEN=false;try{OPEN=localStorage.getItem('sqopen')==='1';}catch(e){}
+ const sw=document.createElement('span');sw.className='sqsw';sw.title='Auto: the squelch opens when someone talks. Open: hear the channel continuously, hiss and weak calls included (direct listen only).';
+ sw.innerHTML='<button data-v="0">Squelch: Auto</button><button data-v="1">Open</button>';
+ auto.closest('label').before(sw);
+ const paint=()=>sw.querySelectorAll('button').forEach(b=>b.classList.toggle('on',(b.dataset.v==='1')===OPEN));
+ // the page's sqArg() is read at play time: wrap play so Open applies to single channels only
+ let CURMD='';const orig=P.play.bind(P);P.play=function(mhz,md,name){CURMD=md||'';return orig(mhz,md,name);};
+ const origSq=window.sqArg;window.sqArg=function(){if(OPEN&&CURMD!=='monitor'&&CURMD!=='digital')return '0';return origSq?origSq():(auto.checked?'auto':sq.value);};
+ sw.querySelectorAll('button').forEach(b=>b.onclick=()=>{const v=b.dataset.v==='1';if(v===OPEN)return;OPEN=v;try{localStorage.setItem('sqopen',v?'1':'0');}catch(e){}paint();
+  if(P.cur&&P.cur.mode!=='monitor'&&P.cur.mode!=='digital'&&P.cur.mhz>1.5)P.play(P.cur.mhz,P.cur.mode,P.cur.name);   // apply to the stream you are on now
+  if(typeof toast==='function')toast(v?'Squelch open - you hear the channel continuously':'Auto squelch - opens when someone talks');});
+ paint();
+})();
+</script>

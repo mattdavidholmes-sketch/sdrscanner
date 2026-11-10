@@ -1,0 +1,213 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes"><meta name="theme-color" content="#0b0f14">
+<title>SDR Scanner</title>
+<style>
+:root{--bg:#0b0f14;--card:#151c25;--card2:#1c2632;--tx:#e8eef5;--mu:#8a99aa;--ac:#35c4ff;--ok:#3ddc84;--warn:#ffc83d;--bad:#ff5a5f}
+*{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+html,body{margin:0;background:var(--bg);color:var(--tx);font:16px/1.35 -apple-system,system-ui,Segoe UI,Roboto,sans-serif;overflow-x:hidden}
+body{padding:calc(10px + env(safe-area-inset-top)) 12px calc(24px + env(safe-area-inset-bottom))}
+h1{font-size:1.05rem;margin:2px 0 10px;display:flex;justify-content:space-between;align-items:center}
+h1 a{color:var(--mu);font-size:.8rem;font-weight:400;text-decoration:none}
+.now{background:var(--card);border-radius:16px;padding:14px;margin-bottom:12px;border:2px solid transparent}
+.now.on{border-color:var(--ok)}.now.hold{border-color:var(--warn)}
+.st{font-size:.75rem;letter-spacing:.08em;color:var(--mu);font-weight:700}
+.now.on .st{color:var(--ok)}.now.hold .st{color:var(--warn)}
+.fq{font-size:2.3rem;font-weight:800;font-variant-numeric:tabular-nums;line-height:1.1;margin:2px 0}
+.nm{font-size:1.1rem;word-break:break-word;min-height:1.4em}
+.sub{color:var(--mu);font-size:.85rem;margin-top:2px;min-height:1.1em;word-break:break-word}
+.lv{height:8px;background:var(--card2);border-radius:4px;margin:10px 0;overflow:hidden}.lv i{display:block;height:100%;width:0;background:var(--ok);transition:width .15s}
+.row{display:grid;grid-template-columns:repeat(4,1fr);gap:8px}
+button{font:inherit;color:var(--tx);background:var(--card2);border:0;border-radius:12px;padding:14px 4px;font-weight:700;min-height:52px;touch-action:manipulation}
+button:active{filter:brightness(1.4)}
+.stop{background:#4a1f22;color:#ffb3b5}.hold.act{background:var(--warn);color:#000}
+.vol{display:flex;gap:10px;align-items:center;margin-top:10px;color:var(--mu);font-size:.85rem}.vol input{flex:1;height:32px}
+.grid{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:14px}
+.tile{background:var(--card);border-radius:16px;padding:14px 12px;text-align:left;min-height:84px;display:flex;flex-direction:column;justify-content:center}
+.tile b{font-size:1.02rem}.tile span{color:var(--mu);font-size:.78rem;font-weight:400;margin-top:3px}
+.tile.sel{outline:2px solid var(--ok);background:#14301f}
+h2{font-size:.8rem;letter-spacing:.08em;color:var(--mu);margin:16px 2px 8px}
+.heard{display:flex;flex-direction:column;gap:8px}
+.h{background:var(--card);border-radius:12px;padding:10px 12px;display:grid;grid-template-columns:44px 1fr;gap:10px;align-items:start}
+.h button{min-height:44px;padding:0;border-radius:22px;width:44px;background:var(--ac);color:#001}
+.h .t{font-size:.95rem;word-break:break-word}.h .m{color:var(--mu);font-size:.75rem;margin-bottom:2px}
+.msg{color:var(--mu);font-size:.85rem;text-align:center;padding:8px;min-height:1.2em}
+.go{display:block;width:100%;background:var(--ac);color:#001;font-size:1.1rem;margin-bottom:10px;min-height:58px}
+/* layout pass: tiles fill the width, less padding, two columns on wide screens */
+body{max-width:1180px;margin:0 auto}
+.grid{grid-template-columns:repeat(auto-fill,minmax(158px,1fr));gap:8px}
+.tile{min-height:62px;padding:10px 12px;border-radius:14px}
+.now{padding:12px 14px}.fq{font-size:1.9rem}
+.go{min-height:48px;font-size:1rem}
+.row button{min-height:48px;padding:10px 4px}
+@media(min-width:700px){.vol{max-width:560px}}
+@media(min-width:900px){
+body{display:grid;grid-template-columns:minmax(320px,420px) minmax(0,1fr);gap:0 18px;align-items:start}
+h1,.go{grid-column:1/-1}
+.now{grid-column:1;grid-row:3}
+#tiles{grid-column:2;grid-row:3/8;align-content:start}
+h2{grid-column:1;grid-row:4}#heard{grid-column:1;grid-row:5}#msg{grid-column:1;grid-row:6}
+}
+</style></head><body>
+<h1><span>📻 SDR Scanner</span><a href="/?desktop=1">full site</a></h1>
+
+<button class="go" id="unlock">▶ Tap to turn on sound</button>
+
+<div class="now" id="now">
+ <div class="st" id="st">IDLE</div>
+ <div class="fq" id="fq">—</div>
+ <div class="nm" id="nm">Pick a channel group below</div>
+ <div class="sub" id="sub"></div>
+ <div class="lv"><i id="lv"></i></div>
+ <div class="row">
+  <button class="hold" id="bhold">HOLD</button><button id="bskip">SKIP</button><button id="block">LOCK OUT</button><button class="stop" id="bstop">STOP</button>
+ </div>
+ <div class="vol">🔈<input type="range" id="vol" min="0" max="1" step="0.05" value="1">🔊</div>
+</div>
+
+<div class="grid" id="tiles"></div>
+
+<h2>HEARD RECENTLY — tap to replay</h2>
+<div class="heard" id="heard"></div>
+<div class="msg" id="msg"></div>
+
+<script>
+"use strict";
+var $=function(s){return document.querySelector(s)};
+var T=[ /* label, hint, kind, a, b */
+ ["Airport","Pearson + Billy Bishop","mon","Airport"],
+ ["ROADS Toronto","plows · salt · SNOWTO","dig","dmrt:939.1375","ROADS Toronto"],
+ ["Fire / EMS (all 4 sites)","West+South+North+East at once","dig","p25:Fire + EMS - All 4 Sites Combined","Fire + EMS Combined"],
+ ["Fire / EMS - West","P25 West Simulcast","dig","p25:West Simulcast","Fire / EMS West"],
+ ["Fire Dispatch","dispatch + fire ops · 774.294","dig","p25:Fire Dispatch direct (TFS Disp 1)","Fire Dispatch"],
+ ["All P25","scan every P25 site","scan","p25"],
+ ["All DMR","scan every DMR group","scan","dmr"],
+ ["GO Lakeshore West","Mimico trains + Rail PA","dig","p25:Metrolinx Central","GO Lakeshore West"],
+ ["Metrolinx / GO","all GO + UP + buses","dig","p25:Metrolinx Central","Metrolinx Central"],
+ ["TTC Etobicoke","analog · Humber / Kipling","mon","TTC Etobicoke"],
+ ["Union Station","platform ops (porters)","mon","Union Station"],
+ ["CP Rail Etobicoke","freight yard voice","mon","CP Etobicoke Yard"],
+ ["Solid Waste Mgmt","Etobicoke + 4 more sites","mon","Solid Waste Mgmt"],
+ ["GFL Environmental","Oakville dispatch","mon","GFL Environmental"],
+ ["Walkies","FRS · GMRS · MURS","mon","Walkies"],
+ ["Top today","busiest 20 channels","mon","Top"],
+ ["Everything","all heard channels","mon",""]
+];
+var DIGEL=null,DIGT=0,DIGN=0,HOLDING=false,cur=null,actx=null,gain=null,WA=null,abort=null,seq=0,nextT=0,DIGA=null,lastMeter=null;
+
+/* ---------- audio: Web Audio -> MediaStream -> <audio>, so the phone plays it like any media (speaker, Bluetooth, silent switch, lock screen) ---------- */
+function ensure(){
+ if(!DIGEL){try{DIGEL=new Audio();DIGEL.setAttribute('playsinline','');DIGEL.src='data:audio/wav;base64,UklGRiQAAABXQVZFZm10IBAAAAABAAEARKwAAIhYAQACABAAZGF0YQAAAAA=';var q=DIGEL.play();if(q&&q.catch)q.catch(function(){DIGEL=null;});}catch(e){DIGEL=null;}}
+ if(!actx){
+  actx=new (window.AudioContext||window.webkitAudioContext)();gain=actx.createGain();gain.gain.value=+$('#vol').value;
+  var ok=false;
+  try{if(actx.createMediaStreamDestination){var d=actx.createMediaStreamDestination();WA=document.createElement('audio');WA.setAttribute('playsinline','');WA.srcObject=d.stream;WA.style.display='none';document.body.appendChild(WA);gain.connect(d);ok=true;}}catch(e){ok=false;}
+  if(!ok){WA=null;gain.connect(actx.destination);}
+ }
+ if(actx.state!=='running')actx.resume();
+ if(WA&&WA.paused){var p=WA.play();if(p&&p.catch)p.catch(function(){try{gain.disconnect();gain.connect(actx.destination);WA=null;}catch(e){}});}
+ try{if('mediaSession' in navigator){navigator.mediaSession.metadata=new MediaMetadata({title:(cur&&cur.name)||'SDR Scanner',artist:'Live radio'});
+  navigator.mediaSession.setActionHandler('pause',stopAll);navigator.mediaSession.setActionHandler('stop',stopAll);}}catch(e){}
+ $('#unlock').style.display='none';
+}
+function stopAudio(){seq++;if(abort){try{abort.abort()}catch(e){}abort=null;}if(DIGA){try{DIGA.pause();DIGA.removeAttribute('src');DIGA.load();}catch(e){}DIGA=null;}}
+async function pcm(url,my){
+ ensure();abort=new AbortController();nextT=0;
+ try{
+  var r=await fetch(url,{signal:abort.signal});if(!r.ok){say('stream error '+r.status);return;}
+  var rd=r.body.getReader(),carry=new Uint8Array(0);
+  for(;;){
+   var x=await rd.read();if(x.done||my!==seq)break;
+   var b=new Uint8Array(carry.length+x.value.length);b.set(carry);b.set(x.value,carry.length);
+   var n=Math.floor(b.length/2);if(n<1200){carry=b;continue;}
+   var s=new Int16Array(b.buffer,0,n);carry=b.slice(n*2);
+   var ab=actx.createBuffer(1,n,24000),ch=ab.getChannelData(0);for(var i=0;i<n;i++)ch[i]=s[i]/32768;
+   var src=actx.createBufferSource();src.buffer=ab;src.connect(gain);
+   if(actx.state!=='running')actx.resume();
+   var t=actx.currentTime;if(nextT<t+0.1)nextT=t+0.4;src.start(nextT);nextT+=ab.duration;
+  }
+ }catch(e){if(e.name!=='AbortError')say('audio: '+e.message);}
+}
+function digAudio(){ /* SDRTrunk audio comes to the phone through the Icecast relay; the element was unlocked by the tap in ensure() so iOS lets it start later */
+ if(!DIGEL)return;
+ if(DIGA)return;DIGA=DIGEL;DIGA.src='/sdrt_audio?t='+Date.now();DIGA.volume=+$('#vol').value;DIGT=Date.now();DIGN=0;
+ var p=DIGA.play();if(p&&p.catch)p.catch(function(){say('tap "turn on sound"');$('#unlock').style.display='block';});
+}
+setInterval(function(){if(!DIGA)return;var a=DIGA,stuck=a.paused||a.ended||!!a.error||(a.currentTime===DIGN&&Date.now()-DIGT>12000);
+ if(a.currentTime!==DIGN){DIGN=a.currentTime;DIGT=Date.now();}
+ if(stuck&&Date.now()-DIGT>3000){DIGT=Date.now();try{a.src='/sdrt_audio?t='+Date.now();a.volume=+$('#vol').value;var p=a.play();if(p&&p.catch)p.catch(function(){});}catch(e){}}},4000);
+
+/* ---------- actions ---------- */
+function say(t){$('#msg').textContent=t||'';}
+async function j(u){try{var r=await fetch(u,{cache:'no-store'});return await r.json();}catch(e){return {error:e.message};}}
+async function serverStop(){await j('/api/sdrt/dmrscan?on=0');await j('/api/sdrt/stop');await fetch('/stop').catch(function(){});}
+async function stopAll(){stopAudio();cur=null;paintTiles();await serverStop();refresh();}
+async function start(i){
+ var t=T[i];ensure();stopAudio();var my=seq;cur={i:i,name:t[0]};paintTiles();say('starting '+t[0]+'…');
+ await j('/api/sdrt/dmrscan?on=0');
+ if(t[2]==='mon'){
+  await j('/api/sdrt/stop');
+  var cat=t[3];pcm('/stream?raw=1&mhz=1&mode=monitor&sq=auto&voice=1&name='+encodeURIComponent('Monitor: '+t[0])+'&cat='+encodeURIComponent(cat)+'&t='+Date.now(),my);
+ }else if(t[2]==='dig'){
+  var r=await j('/api/sdrt/play?target='+encodeURIComponent(t[3]));
+  if(r.error){say(r.error);return;}
+  digAudio();
+ }else if(t[2]==='scan'){
+  var r2=await j('/api/sdrt/dmrscan?on=1&kind='+t[3]+'&step=90');
+  if(r2.error){say(r2.error);return;}
+  digAudio();
+ }
+ say('');refresh();
+}
+function paintTiles(){var el=$('#tiles');if(!el.children.length){T.forEach(function(t,i){var b=document.createElement('button');b.className='tile';b.innerHTML='<b></b><span></span>';b.firstChild.textContent=t[0];b.lastChild.textContent=t[1];b.onclick=function(){start(i)};el.appendChild(b);});}
+ [].forEach.call(el.children,function(b,i){b.classList.toggle('sel',!!cur&&cur.i===i);});}
+
+/* ---------- now playing ---------- */
+async function refresh(){
+ var m=await j('/meter');if(m.error){$('#st').textContent='OFFLINE';return;}
+ lastMeter=m;var mo=m.monitor||{},sd=m.sdrtrunk||{};
+ var el=$('#now'),st='IDLE',fq='—',nm='Pick a channel group below',sub='';
+ if(sd.alive&&sd.target){st=sd.problem?'NO RADIO':(sd.calls&&sd.calls.length&&sd.calls[0].live?'ON A CALL':'DECODING');nm=sd.name||sd.target;sub=sd.problem?('⚠ '+sd.problem):(sd.note||'');if(sd.stream&&cur&&!DIGA)digAudio();}
+ else if(m.playing){
+  var held=HOLDING;
+  st=held?'HOLD':(m.open?'STOPPED ON':'SCANNING');
+  var f=mo.active||mo.mhz||m.playing;if(f&&f>1){fq=(+f).toFixed(4)+' MHz';}
+  nm=mo.name||m.name||'';sub=(mo.lap_s?('lap '+mo.lap_s+' s · '):'')+(mo.n?(mo.n+' channels'):'');
+ }
+ el.className='now'+(st==='IDLE'?'':(st==='HOLD'?' hold':' on'));
+ $('#st').textContent=st;$('#fq').textContent=fq;$('#nm').textContent=nm;$('#sub').textContent=sub;
+ $('#lv').style.width=Math.min(100,Math.round((m.level||0)*100))+'%';
+ $('#bhold').classList.toggle('act',st==='HOLD');$('#bhold').textContent=st==='HOLD'?'RESUME':'HOLD';
+}
+$('#bhold').onclick=async function(){var r=await j('/scanner/'+(HOLDING?'resume':'hold'));if(r.error)say(r.error);else HOLDING=!!r.hold;refresh();};
+$('#bskip').onclick=async function(){HOLDING=false;await j('/scanner/skip');refresh();};
+$('#block').onclick=async function(){var r=await j('/scanner/lockout');say(r.error||'locked out');refresh();};
+$('#bstop').onclick=stopAll;
+$('#unlock').onclick=function(){ensure();if(cur&&cur.i!=null)start(cur.i);};
+$('#vol').oninput=function(){var v=+this.value;if(gain)gain.gain.value=v;if(DIGA)DIGA.volume=v;};
+
+/* ---------- heard feed ---------- */
+function squash(t){ /* whisper sometimes loops on one phrase - collapse repeats */
+ t=(t||'').trim();var w=t.split(/\s+/),out=[],n=0;
+ for(var i=0;i<w.length;i++){var k=w.slice(i,i+3).join(' ');if(out.length>=3&&out.slice(-3).join(' ')===k){n++;if(n>2){i+=2;continue;}}out.push(w[i]);}
+ return out.join(' ');
+}
+var played=null;
+async function heard(){
+ var r=await j('/api/recordings');if(!Array.isArray(r))return;
+ var box=$('#heard');box.textContent='';
+ r.slice(0,25).forEach(function(x){
+  var d=document.createElement('div');d.className='h';
+  var b=document.createElement('button');b.textContent='▶';
+  b.onclick=function(){if(played){played.pause();played=null;}ensure();played=new Audio('/rec/'+encodeURIComponent(x.file));played.setAttribute('playsinline','');played.volume=+$('#vol').value;played.play().catch(function(){say('could not play that clip');});};
+  var c=document.createElement('div');
+  var m=document.createElement('div');m.className='m';m.textContent=(x.time||'')+' · '+(x.mhz?(+x.mhz).toFixed(4):'')+' · '+(x.name||'')+' · '+Math.round(x.secs||0)+' s';
+  var t=document.createElement('div');t.className='t';t.textContent=squash(x.text)||'(no transcript)';
+  c.appendChild(m);c.appendChild(t);d.appendChild(b);d.appendChild(c);box.appendChild(d);
+ });
+}
+paintTiles();refresh();heard();
+setInterval(refresh,1500);setInterval(heard,20000);
+document.addEventListener('visibilitychange',function(){if(!document.hidden){refresh();heard();}});
+</script></body></html>

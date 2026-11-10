@@ -1,0 +1,58 @@
+# generated/ephemeral - not source
+scan_*/
+diag/
+*.log
+*.log.gz
+_state/
+transcripts_archive/
+recordings/
+*.wav
+models/
+sdrtrunk/icecast_logs/
+sdrtrunk/*.xml
+__pycache__/
+*.pyc
+.DS_Store
+*.flag
+*.flag.json
+open_request.txt
+restart_request.txt
+sdrt_request.txt
+_helpers/*_tmp.command
+_helpers/*_tmp.command.log
+diag.txt
+
+# local data, state and generated files - never published
+bank.json*
+history.sqlite
+aircraft_log.sqlite
+digital_calls.json
+digital_carriers.json
+digital_rotation.json
+noise_floor.json
+map_home.json
+home_location.json
+dmr_aliases.json
+fr24_api_key.txt
+aircraft_source.txt
+verified.csv
+chirp_bank.csv
+gta_nets_chirp.csv
+radio_hub_chirp.csv
+sdrpp_all_bookmarks.json
+GTA Nets.html
+Radio Hub.html
+README.txt
+Validation report.txt
+# working copies and archives
+_old_versions/
+_to_delete/
+*_staged.*
+*_v1[0-9][0-9].py
+_helpers/switch_live.sh
+SDRTRUNK_HAS_DONGLE
+sdrtrunk/*.txt
+_helpers/*.plist
+_helpers/flight_feed_patch/
+_helpers/NOTE_*.txt
+remote_access.txt

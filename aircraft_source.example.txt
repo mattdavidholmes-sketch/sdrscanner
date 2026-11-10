@@ -1,0 +1,7 @@
+# Point the Aircraft tab at your own ADS-B receiver (your flightradar app with SDR integration).
+# Copy this file to  aircraft_source.txt  and put the URL of its aircraft.json on the first line, e.g.
+#   http://127.0.0.1:8080/data/aircraft.json        (dump1090 / tar1090 / readsb / the FR24 feeder's built-in dump1090)
+#   http://192.168.1.50:8080/data/aircraft.json     (a receiver on another machine on the LAN)
+# One URL per line; the first that answers wins. Without this file the dashboard probes localhost:8080 and :8078,
+# then falls back to the Flightradar24 API (fr24_api_key.txt), adsb.fi, adsb.lol and OpenSky.
+http://127.0.0.1:8080/data/aircraft.json
