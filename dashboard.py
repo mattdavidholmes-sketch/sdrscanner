@@ -1282,6 +1282,22 @@ WALKIES = [(m, "fm", n) for m, n in (
     (464.500, "Blue dot UHF (business)"), (464.550, "Green dot UHF (business)"), (467.7625, "J dot (business)"), (467.8125, "K dot (business)"),
     (467.850, "Silver star (business)"), (467.875, "Gold star (business)"), (467.900, "Red star (business)"), (467.925, "Purple star (business)"))]
 
+# (v198) CB / GRS: 40 channels of AM voice between 26.965 and 27.405 MHz (SSB lives on 36-40 and is not demodulated here). All of
+# them fit in one 0.44 MHz window, so the dongle watches every channel at the same time. What the names say is convention, not
+# regulation: 9 = emergency / assistance, 19 = truckers and highway information, 38 = SSB calling (LSB).
+_CB_NOTE = {9: "emergency", 13: "marine / RV", 14: "walkie-talkies", 17: "truckers N-S", 19: "truckers / highway", 38: "SSB calling"}
+_CB_SKIP = (26.995, 27.045, 27.095, 27.145, 27.195)                    # the five radio-control gaps in the 10 kHz raster
+CB = []
+_f = 26.965
+for _n in range(1, 41):
+    if _n == 23: CB.append((27.255, "am", "CB 23"))                    # 23, 24 and 25 are out of order on the dial for historical reasons
+    elif _n == 24: CB.append((27.235, "am", "CB 24"))
+    elif _n == 25: CB.append((27.245, "am", "CB 25"))
+    else:
+        if _n == 26: _f = 27.265
+        while round(_f, 3) in _CB_SKIP: _f = round(_f + 0.010, 3)
+        CB.append((round(_f, 3), "am", f"CB {_n}" + (f" {_CB_NOTE[_n]}" if _n in _CB_NOTE else ""))); _f = round(_f + 0.010, 3)
+
 LOCKOUT_FILE = os.path.join(HERE, "lockouts.json")
 def lockouts():
     """(v137) Channels the scanner must never stop on (the SKIP / lockout key of a real scanner), persisted."""
@@ -1428,6 +1444,7 @@ def monitor_list(cat="All", minutes=30, limit=30):
     if cat == "GFL Environmental": return [c for c in GFL_ENV if round(c[0], 4) not in lo]        # (v169)
     if cat == "Solid Waste Mgmt": return [c for c in SOLID_WASTE if round(c[0], 4) not in lo]     # (v169)
     if cat == "Walkies": return [c for c in WALKIES if round(c[0], 4) not in lo]       # (v137) every licence-free handheld channel, banked or not
+    if cat == "CB": return [c for c in CB if round(c[0], 4) not in lo]                  # (v198) all 40 CB channels, one window
     if cat == "Top": return [c for c in top_today(24) if round(c[0], 4) not in lo][:20]   # (v137) the 20 most-used voice channels of the last 24 h
     if cat.lower().startswith("follow"):                                             # Follow traffic: channels from live ADS-B (_helpers/follow_traffic.py)
         sys.path.insert(0, os.path.join(HERE, "_helpers")); import follow_traffic; return follow_traffic.follow_list()

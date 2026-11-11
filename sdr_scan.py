@@ -29,7 +29,9 @@ BANDS = {
     "uhf":  ("UHF 400-520",    400.000, 520.000, "NFM",  2.5),
 }
 BAND_SETS = {
-    "all":  ["uhf", "vhf", "air", "ps700", "ps800"],
+    "all":  ["uhf", "vhf", "air", "ps700"],       # (v198) 851-870 MHz left out: three weeks of sweeps found 99 signals there and every one is digital
+                                                 # trunking (Peel Region's P25 system among them) - nothing a sweep can turn into something to listen to.
+                                                 # The band itself (ps800) is still defined and can be swept on its own.
     "ham":  ["ham2m", "ham70", "gmrs"],
     "vhf":  ["vhf"], "uhf": ["uhf"], "air": ["air"],
 }
@@ -77,10 +79,10 @@ CATEGORY_BANDS = {
     "Railway":      ["rail"],
     "Business":     ["bizv", "bizu"],
     "Retail":       ["retv", "retu", "gmrs"],
-    "Digital":      ["ps700", "ps800", "uhf"],
+    "Digital":      ["ps700", "uhf"],
     "City services": ["vhf", "uhf"],
     "Other":        ["vhf", "uhf"],
-    "All":          ["uhf", "vhf", "air", "ps700", "ps800"],
+    "All":          ["uhf", "vhf", "air", "ps700"],
 }
 for _k, _v in CATEGORY_BANDS.items(): BAND_SETS.setdefault(_k.lower().replace("/", "").replace(" ", "_"), _v)
 

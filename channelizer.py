@@ -329,6 +329,12 @@ class Channel:
         if self.rec: self.rec.feed(b"", False)
         return None, False
 
+    def idle(self):
+        """(v198) Nothing on this channel in this block and it was not demodulated: keep the books as an empty block would."""
+        self.nblk += 1; self.gate.n += 1; self.x24 = None
+        self.carrier = False; self.am_open = False; self.gate.open = False; self.gate.level = 0.0; self.live = b""
+        return None, False
+
     def _airband(self, x, t_block):
         """(v196) One AM channel listened to on its own. airband.AmRx does all of it - the squelch on the carrier line, synchronous
         detection, the voice filter, the keying - and this method keeps the books the rest of the app reads (meter, heard log,
@@ -427,6 +433,12 @@ def group_channels(chans):
     for g in groups:
         lo, hi = g[0][0] * 1e6, g[-1][0] * 1e6; center = (lo + hi) / 2
         if any(abs(c[0] * 1e6 - center) < 25_000 for c in g): center += 150_000          # keep channels off the DC spike
+        if any(abs(c[0] * 1e6 - center) < 8_000 for c in g):
+            # (v198) still on a channel (a dense raster - CB's 40 channels put one exactly 150 kHz above their middle). The dongle's
+            # spike at its tuned centre is a spectral line, and a line on a channel is what a carrier looks like. Take the nearest
+            # centre that is as far from every channel as the raster allows.
+            fs = [c[0] * 1e6 for c in g]; mid = (lo + hi) / 2
+            center = max((mid + sft for sft in range(-300_000, 300_001, 5_000)), key=lambda c: (min(min(abs(f - c) for f in fs), 25_000), -abs(c - mid)))
         out.append((center, g))
     return out
 
@@ -539,7 +551,15 @@ class Channelizer:
                             k = round(c.mhz, 4); b = self.bias.get(k, 0.0)
                             c.ref_db = None if r is None else r - b
                             if r is not None and not c.carrier and abs(r - b) < 1.2: self.bias[k] = max(-1.5, min(1.5, b + 0.03 * (r - b)))
-                    results = [(ch,) + tuple(ch.process(iq, tb)) for ch in self.chans]
+                    if self.air and len(self.chans) > 2:
+                        # (v198) Many AM channels in one window (CB: 40 of them): turning every channel to baseband every block is
+                        # the expensive part, and nearly all of them are empty. The window's one spectrum already says which
+                        # channels have power on them (ref_db, 1 dB over the noise beside them is far under the squelch's 3.6 dB);
+                        # only those are demodulated, plus any that were on the air a moment ago. The rest cost nothing.
+                        results = [(ch,) + (tuple(ch.process(iq, tb)) if (ch.rx is None or ch.ref_db is None or ch.ref_db >= 1.0 or ch.rx_was or ch.rx.ring > 0) else ch.idle())
+                                   for ch in self.chans]
+                    else:
+                        results = [(ch,) + tuple(ch.process(iq, tb)) for ch in self.chans]
                     if self.tap is not None:
                         try:
                             for ch in self.chans:
