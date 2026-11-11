@@ -66,6 +66,63 @@ def window_refs(iq, offsets):
         out.append(10 * math.log10((p + 1e-20) / (float(np.median(gaps)) + 1e-20)) if (p is not None and len(gaps) >= 3) else None)
     return out
 
+class Tap:
+    """(v195) Keeps what the radio actually received: the 24 kS/s complex baseband of a channel for as long as a carrier is on it,
+    half a second before and after included. One file per transmission (<mhz>_<date>_<time>.c64: complex64, little-endian, the
+    channel at 0 Hz, as wide as the channel filter) and one line about it in index.jsonl (per 0.1 s block: dB over the noise
+    beside the channel, channel power, floor, modulation, squelch state).
+    Why: a receive chain can only be judged on real signals, and a recording of the audio has the chain baked in. The same
+    samples can be put through any number of demodulators afterwards and the results compared."""
+    PRE, POST, MAX_BLOCKS, MAX_MB = 5, 8, 1200, 400
+    def __init__(self, path):
+        self.dir = path; os.makedirs(path, exist_ok=True); self.pre = {}; self.files = {}
+        try: self.bytes = sum(os.path.getsize(os.path.join(path, f)) for f in os.listdir(path))
+        except OSError: self.bytes = 0
+    def feed(self, ch):
+        x = getattr(ch, "x24", None)
+        if x is None: return
+        k = round(ch.mhz, 4); g = ch.gate
+        ref = ch.ref_db if ch.ref_db is not None else (ch.pow_db - ch.floor_db if ch.floor_db is not None else 0.0)
+        on = bool(ch.am_open or ref >= 3.0) if ch.mode == "am" else bool(g.open)
+        row = [round(ref, 1), round(ch.pow_db, 1), round(ch.floor_db, 1) if ch.floor_db is not None else None, round(ch.voice_mod, 2),
+               int(bool(ch.am_open)), int(bool(ch.voice_ok)), int(bool(g.open))]
+        raw = np.asarray(x, dtype=np.complex64).tobytes()
+        st = self.files.get(k)
+        if st is None and on and self.bytes < self.MAX_MB * (1 << 20):
+            name = f"{ch.mhz:.4f}_{dt.datetime.now():%Y%m%d_%H%M%S}.c64"
+            st = self.files[k] = {"fh": open(os.path.join(self.dir, name), "wb"), "file": name, "mhz": ch.mhz, "name": ch.name, "mode": ch.mode,
+                                  "start": time.time(), "quiet": 0, "rows": [], "best": 0.0, "voice": False}
+            for b, r in self.pre.get(k, []): self._write(st, b, r)
+        if st is not None:
+            self._write(st, raw, row)
+            st["quiet"] = 0 if on else st["quiet"] + 1
+            st["best"] = max(st["best"], ref); st["voice"] = st["voice"] or bool(ch.voice_ok if ch.mode == "am" else g.open)
+            if st["quiet"] > self.POST or len(st["rows"]) >= self.MAX_BLOCKS: self.close(k)
+        buf = self.pre.setdefault(k, []); buf.append((raw, row)); del buf[:-self.PRE]
+    def _write(self, st, raw, row):
+        st["fh"].write(raw); st["rows"].append(row); self.bytes += len(raw)
+    def close(self, k):
+        st = self.files.pop(k, None)
+        if st is None: return
+        try: st["fh"].close()
+        except OSError: pass
+        p = os.path.join(self.dir, st["file"])
+        if st["best"] < 3.0 and not st["voice"]:                        # a flicker of the noise floor: not worth keeping
+            try: self.bytes -= os.path.getsize(p); os.remove(p)
+            except OSError: pass
+            return
+        try:
+            with open(os.path.join(self.dir, "index.jsonl"), "a") as f:
+                f.write(__import__("json").dumps({"file": st["file"], "mhz": st["mhz"], "name": st["name"], "mode": st["mode"], "rate": RATE,
+                                                  "start": dt.datetime.fromtimestamp(st["start"]).strftime("%Y-%m-%d %H:%M:%S"), "secs": round(len(st["rows"]) / 10, 1),
+                                                  "best_db": round(st["best"], 1), "voice": st["voice"], "pre_blocks": self.PRE,
+                                                  "cols": ["db_over_noise", "pow_db", "floor_db", "mod", "am_open", "voice_ok", "gate_open"], "blocks": st["rows"]}) + "\n")
+        except OSError: pass
+    def end_visit(self):
+        """the scan is leaving this window: the stream stops here, so every open file ends and the pre-roll is forgotten"""
+        for k in list(self.files): self.close(k)
+        self.pre.clear()
+
 def _sos(cut, fs, order=6):
     return signal.butter(order, cut / (fs / 2), output="sos")
 
@@ -121,6 +178,7 @@ class Channel:
             d, self.ziw = signal.sosfilt(self.sosw, d, zi=self.ziw); audio = d[::DECIM2] * (16384.0 / np.pi) * 0.6
         else:
             x, self.zi2 = signal.sosfilt(self.sos2, x, zi=self.zi2); x = x[::DECIM2]       # 24 kS/s complex baseband
+            self.x24 = x                                                                   # (v195) kept for the tap
             if self.mode == "am":
                 env = np.abs(x)
                 # noise blanker: clip impulse spikes (ignition / lightning) to 3x the median envelope
@@ -314,8 +372,12 @@ class Channelizer:
     DWELL = 1.1            # (v151: was 2.5; the retune flush now happens BEFORE this clock starts, so 1.4 s is a full look at a quiet window) # seconds on a group with nothing open before hopping on (5 Nov: 0.9 was too fast - retune flush + gate settle ate most of it)
     FAST_LOOK = 0.25       # (v190) seconds on a quiet window: three 0.1 s blocks, each channel judged against the noise beside it
     HOLD = 6.0             # seconds to stay after the last channel in the group closes: the gap between "go ahead" and the reply is often 3-5 s
-    def __init__(self, channels, manual=None, voice=True, gain="49.6", record_dir=None, log_path=None, on_heard=None, trusted=(), refresh=None):
+    def __init__(self, channels, manual=None, voice=True, gain="49.6", record_dir=None, log_path=None, on_heard=None, trusted=(), refresh=None, tap_dir=None):
         self.refresh = refresh                     # Follow traffic: callable returning a new channel list; read at the start of every lap (no audio cut)
+        self.tap = None                            # (v195) keeps the baseband of every transmission when a folder is given (see Tap)
+        if tap_dir:
+            try: self.tap = Tap(tap_dir)
+            except Exception: self.tap = None
         self.sox = None
         self.groups = group_channels([c for c in channels if c[0] > 0] or [(146.52, "fm", "146.52")])
         self.manual = manual; self.record_dir = record_dir; self.on_heard = on_heard
@@ -402,6 +464,11 @@ class Channelizer:
                             c.ref_db = None if r is None else r - b
                             if r is not None and not c.carrier and abs(r - b) < 1.2: self.bias[k] = max(-1.5, min(1.5, b + 0.03 * (r - b)))
                     results = [(ch,) + tuple(ch.process(iq, tb)) for ch in self.chans]
+                    if self.tap is not None:
+                        try:
+                            for ch in self.chans:
+                                if ch.mode != "wbfm": self.tap.feed(ch)
+                        except Exception: self.tap = None                              # a full disk must never stop the listening
                     if len(self.chans) >= 3:
                         # group floor = the median channel power (most channels are idle): a channel well above it carries a signal,
                         # even on the very first block after a retune (its own floor would otherwise learn the carrier as "quiet")
@@ -482,6 +549,9 @@ class Channelizer:
                     if len(self.groups) > 1 and not self.hold:                           # HOLD: stay in this window until released
                         if last_any is None and tb - t0 > dwell and tb >= grace_until: break
                         if last_any is not None and tb - last_any > self.HOLD and tb >= grace_until: break
+                if self.tap is not None:
+                    try: self.tap.end_visit()
+                    except Exception: self.tap = None
                 for ch in self.chans:
                     k = round(ch.mhz, 4)                                                # (v190) six visits running with a carrier that never proved itself: no more grace for it
                     self.steady[k] = self.steady.get(k, 0) + 1 if (ch.carrier and not (ch.voice_ok if ch.mode == "am" else ch.gate.open)) else 0
@@ -489,6 +559,9 @@ class Channelizer:
         except Exception as e:
             if self.alive: self.err = f"channelizer: {e!r}"
         finally:
+            if self.tap is not None:
+                try: self.tap.end_visit()
+                except Exception: pass
             if self.tcp: self.tcp.close()
             self.alive = False
             with self.qcond: self.qcond.notify_all()

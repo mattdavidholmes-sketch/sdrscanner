@@ -419,6 +419,40 @@ def run_diag(mhz, mode, secs=6):
         give_dongle_back(0)
     json.dump(res, open(os.path.join(DIAG_DIR, "result.json"), "w"), indent=1)
 
+TAP_DIR = os.path.join(DIAG_DIR, "iq")
+def run_tap(bank, secs):
+    """(v195) Listen to a monitor bank with the channelizer - silently, nothing is played - and keep the baseband of every
+    transmission (channelizer.Tap -> diag/iq). Clips are recorded and transcribed as in any Monitor session and "last heard" is
+    stamped. Gives way at once to a listen, to SDRTrunk and to a restart; the sweep gets the dongle back afterwards.
+    Asked for with a line in diag_request.txt:  TAP <seconds> <bank name>   e.g.  TAP 3600 YYZ Arrivals"""
+    import channelizer as CH
+    chans = monitor_list(bank)
+    if not chans or not CH.available(): say(f"capture: nothing to do for bank {bank!r}"); return
+    take_dongle(); BG_STATE["what"] = f"capture: listening silently on {bank} ({len(chans)} channels) for the receiver work"; BG_STATE["since"] = time.time()
+    t0 = time.time(); ses = None; why = "time is up"
+    try:
+        ses = CH.Channelizer(chans, None, True, "49.6", newest_scan() or HERE, FM_LOG, on_heard=monitor_heard, trusted=trusted_set(chans), tap_dir=TAP_DIR)
+        say(f"capture: {bank}, {len(chans)} channels, up to {secs // 60} min, silent (ends the moment anything else wants the radio)")
+        while time.time() - t0 < secs:
+            if USER_WANTS.is_set() or time.time() - LAST_USER_PLAY[0] < 3: why = "a listen started"; break
+            if os.path.exists(os.path.join(HERE, "SDRTRUNK_HAS_DONGLE")): why = "SDRTrunk took the radio"; break
+            if os.path.exists(RESTART_REQ): why = "a restart is waiting"; break
+            with _lock:
+                if _player.get("session") is not None: why = "a listen started"; break
+            if not ses.read(4800): why = ses.err or "the radio stopped answering"; break
+            BG_STATE["since"] = time.time()                                    # still alive: the stale-pause watchdog leaves it alone
+        heard = len(ses.heard); laps = ses.laps
+        say(f"capture ended after {round((time.time() - t0) / 60)} min ({why}): {heard} openings, {laps} laps, baseband in diag/iq")
+    except Exception as e:
+        say(f"capture stopped: {e!r}")
+    finally:
+        try:
+            if ses is not None: ses.stop()
+        except Exception: pass
+        BG_STATE["what"] = ""
+        with _lock: still = _player.get("session") is not None
+        if not still and not USER_WANTS.is_set(): give_dongle_back(0)
+
 def gain_test(lo=118.0, hi=137.0, gains=(49.6, 40.2, 32.8, 25.4), secs=15):
     """Which tuner gain hears airband best from here? Strong FM broadcast next door can overload the R820T2 at full gain.
     One rtl_power pass per gain; score = mean SNR (peak minus the band's median floor) of the strongest 8 known channels. -> diag/gain.json"""
@@ -571,7 +605,8 @@ def diag_watcher():
                 # one (11 Nov 02:41) found the dongle busy and gave back nothing
                 if listening or USER_WANTS.is_set() or time.time() - LAST_USER_PLAY[0] < 20 or os.path.exists(os.path.join(HERE, "SDRTRUNK_HAS_DONGLE")): continue       # diagnostics never take the dongle from the user
                 req = open(DIAG_REQ).read().split(); os.remove(DIAG_REQ)
-                if req and req[0] == "RATE" and len(req) >= 3: rate_test(float(req[1]), req[2])
+                if req and req[0] == "TAP" and len(req) >= 3: run_tap(" ".join(req[2:]), int(float(req[1])))
+                elif req and req[0] == "RATE" and len(req) >= 3: rate_test(float(req[1]), req[2])
                 elif req and req[0] == "GAIN": gain_test(*([float(req[1]), float(req[2])] if len(req) >= 3 else []))
                 elif len(req) >= 2: run_diag(float(req[0]), req[1], int(req[2]) if len(req) > 2 else 6)
         except Exception as e:
@@ -1504,6 +1539,7 @@ def verify_worker():
         try:
             with _lock: busy = _player.get("session") is not None
             if busy or os.path.exists(os.path.join(HERE, "SDRTRUNK_HAS_DONGLE")) or USER_WANTS.is_set() or time.time() - LAST_USER_PLAY[0] < 45 or not scan_running(): continue
+            if BG_STATE.get("what", "").startswith("capture"): continue          # (v195) a capture has the radio: no voice check or audition on top of it
             folder = newest_scan()
             if not folder: continue
             d = gather(folder)
