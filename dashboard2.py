@@ -81,7 +81,7 @@ def state():
     recs = glob.glob(os.path.join(HERE, "scan_*", "recordings", "*.wav"))      # all scan folders, same as the Recordings tab
     bands = d["bands"]
     # progress: slices done vs expected (10 min per band per round, 10 rounds)
-    return {"folder": d["folder"], "running": d["running"], "paused": d["paused"], "now": d["now"], "ip": v1.lan_ip(), "port": PORT, "usb_errors": d.get("usb_errors_recent", 0), "background": d.get("background", ""), "background_last": d.get("background_last", ""),
+    return {"folder": d["folder"], "running": d["running"], "paused": d["paused"], "now": d["now"], "t": time.time(), "ip": v1.lan_ip(), "port": PORT, "usb_errors": d.get("usb_errors_recent", 0), "background": d.get("background", ""), "background_last": d.get("background_last", ""),
             "total": d.get("total", 0), "hits": hits, "bands": bands, "recordings": len(recs), "log": d.get("log", "")[-400:],
             "player": {"mhz": v1._player["mhz"], "where": v1._player["where"]}, "dongle_lost": v1.DONGLE["lost"], "dongle_flat": v1.DONGLE.get("flat", "")}
 
@@ -194,6 +194,49 @@ def bank_save():
     except Exception: pass
 def shutil_copy(a, b):
     import shutil; shutil.copy(a, b)
+def heard_stamp(mhz, name, secs, tones, count=True):
+    """(v191) Voice was heard on this channel just now: stamp the bank the page reads.
+    Before, Monitor and the background check stamped bank.json on disk (dashboard.monitor_heard) while this module kept its own copy
+    of the bank in memory and wrote that copy back every two minutes - the stamp was lost, and "Last heard" never moved for anything
+    that was actually listened to. Only the sweep's "a signal was seen" times got through."""
+    try:
+        data = bank_load(); k = f"{mhz:.4f}"; now = time.time(); e = data.get(k)
+        if e is None:
+            e = data[k] = {"mhz": mhz, "name": name, "service": "", "mode": "AM" if mhz < 137 else "NFM", "cat": "", "uv32": v1.sdr_scan.uv32_can_hear(mhz),
+                           "first_heard": now, "best_snr": 0, "times": 0, "tone": "", "ver": ""}
+        e["last_heard"] = now; e["voice_ts"] = now
+        if count: e["times"] = e.get("times", 0) + 1
+        if secs >= 1.5 and e.get("ver") != "KNOWN": e["ver"] = "VOICE"
+        if tones: e["tone"] = tones
+        _bank["dirty"] = True; _STC["t"] = 0.0                                   # the next page poll gets a fresh state, not the 3 s old one
+        try: v1.alerts_check_heard(mhz, name, e.get("cat", ""))
+        except Exception: pass
+    except Exception: pass
+v1.monitor_heard = heard_stamp                # Monitor, Follow traffic and the voice check call this by name at the end of every confirmed opening
+
+def _listen_watch():
+    """(v191) While somebody is listening and the squelch is open on a channel, that channel IS being heard: stamp it once when it
+    opens and keep it fresh every 15 s, so the column moves while the call is still running, not only after it ends."""
+    was = None; last = 0.0
+    while True:
+        time.sleep(1.0)
+        try:
+            with v1._lock: ses = v1._player.get("session"); mhz = v1._player.get("mhz"); manual = v1._player.get("manual")
+            cur = None
+            if ses is not None:
+                if hasattr(ses, "groups"):                                       # channelizer (Monitor): the channel that is open right now
+                    a = getattr(ses, "active", None)
+                    if a is not None and (a.mode != "am" or a.voice_ok): cur = (round(a.mhz, 4), a.name)
+                elif mhz and mhz > 1 and manual != 0:                            # one channel; a squelch held open by hand proves nothing
+                    g = getattr(ses, "gate", None)
+                    if g is not None and g.open and not getattr(g, "always", False) and not (g.data or g.data_latched):
+                        cur = (round(float(mhz), 4), getattr(ses, "name", "") or f"{float(mhz):.4f}")
+            if cur and (cur != was or time.time() - last > 15):
+                heard_stamp(cur[0], cur[1], 2.0 if cur == was else 0.0, "", count=(cur != was)); last = time.time()
+            was = cur
+        except Exception: pass
+__import__("threading").Thread(target=_listen_watch, daemon=True).start()
+
 def _heard_ts(last_hhmm, now):
     """sweep 'last active' is HH:MM of today (or yesterday if it is ahead of the clock) -> unix time"""
     try:
@@ -247,7 +290,7 @@ def bank_merge(live):
                 ts = os.path.getmtime(f)
                 if ts > e.get("last_heard", 0): e["last_heard"] = ts; changed = True
     except Exception: pass
-    if changed or time.time() - _bank["saved"] > 120: bank_save()
+    if changed or _bank.get("dirty") or time.time() - _bank["saved"] > 120: _bank["dirty"] = False; bank_save()
     out = []
     for k, e in data.items():
         if e.get("ver") == "DATA" and not (764 <= e["mhz"] <= 776 or 851 <= e["mhz"] <= 870): continue   # P25 channels stay listed, named, routed to SDRTrunk
@@ -258,7 +301,7 @@ def bank_merge(live):
                "snr": h["snr"] if h else e.get("best_snr", 0), "busy": h["busy"] if h else 0, "uv32": e.get("uv32", True), "tone": (h.get("tone") if h else "") or e.get("tone", ""),
                "score": h["score"] if h else 0, "hours": h.get("hours", {}) if h else {}, "last": h.get("last") if h else "", "first": h.get("first") if h else "",
                "recent": h.get("recent", 0) if h else 0, "cont": False, "cat": e.get("cat") or category({"service": e.get("service", ""), "mhz": e["mhz"]}), "ver": (h.get("ver") if h else "") or e.get("ver", ""), "wide": bool(e.get("wide")),
-               "heard_ts": e.get("last_heard", 0), "age_min": None if age is None else round(age), "times": e.get("times", 0), "live": bool(h), "banked": True}
+               "heard_ts": e.get("last_heard", 0), "voice_ts": e.get("voice_ts", 0), "age_min": None if age is None else round(age), "times": e.get("times", 0), "live": bool(h), "banked": True}
         nm, sv, dig = digital_name(row["mhz"], row["name"], row["service"])
         if dig: row["name"], row["service"], row["ver"], row["mode"] = nm, sv, dig, "P25"
         st = p25_lookup(row["mhz"]) if (dig or 410 <= row["mhz"] <= 416 or 936 <= row["mhz"] <= 940) else None
@@ -268,11 +311,18 @@ def bank_merge(live):
             if not dig and sysn: row["name"] = p25_voice_name(row["mhz"]); row["ver"] = "DIGITAL"; row["mode"] = "P25" if "P25" in svc else "DMR"
             ts, hm = call_stamp(st.get("last", ""))
             if ts > (row["heard_ts"] or 0): row["heard_ts"] = ts; row["age_min"] = round((now.timestamp() - ts) / 60)
-            _, hmc = call_stamp(st.get("last_clear", ""))
+            tsc, hmc = call_stamp(st.get("last_clear", ""))
+            if tsc > (row["voice_ts"] or 0): row["voice_ts"] = tsc              # (v191) a decoded, unencrypted call is voice heard
             row["last_call"] = {"tg": st.get("last_tg", "") or ("Police (encrypted)" if st["enc"] else ""), "t": hmc or hm, "calls": st["calls"], "enc": st["enc"]}
         row["vrank"] = 2 if row["ver"] == "VOICE" else (1 if row["ver"] == "KNOWN" else 0)
         out.append(row)
-    out.sort(key=lambda r: -(r["heard_ts"] or 0))
+    # (v191) what the "Last heard" column sorts by: channels where voice was heard in the last 24 h come first, newest first; below them
+    # everything else by when the sweep last saw a signal there
+    nowt = now.timestamp()
+    for r in out:
+        v = r.get("voice_ts") or 0
+        r["heard_sort"] = v if (v and nowt - v < 86400) else (r["heard_ts"] or 0) - 1e9
+    out.sort(key=lambda r: -r["heard_sort"])
     for i, r in enumerate(out, 1):
         if not r["live"]: r["rank"] = 1000 + i
     # (5 Nov) the bank holds 3,000 channels; shipping all of them every poll (850 KB) and keeping them in the DOM made the page crawl.
@@ -2101,7 +2151,8 @@ main{padding:16px 18px 130px;max-width:1400px;width:100%;margin:0 auto}
 .toolbar{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:10px}.chip{padding:5px 11px;border-radius:999px;border:1px solid var(--line);background:var(--card);color:var(--mute);font-size:.8rem;cursor:pointer;user-select:none}.chip.on{background:var(--acc);color:#04130a;border-color:var(--acc);font-weight:600}
 .tablewrap{border:1px solid var(--line);border-radius:14px;overflow:auto;background:var(--card)}
 table{border-collapse:separate;border-spacing:0;width:100%;min-width:860px}th{position:sticky;top:0;background:var(--card2);font-size:.72rem;color:var(--mute);text-transform:uppercase;letter-spacing:.07em;text-align:left;padding:10px 12px;border-bottom:1px solid var(--line);cursor:pointer;user-select:none;white-space:nowrap}
-.play.stopb{background:#b33b3b;color:#fff;border-color:#b33b3b}.tx{color:var(--ink);font-size:.86rem;line-height:1.35;margin:4px 0 6px;font-style:italic}tr.prev td{opacity:.6}tr.prev .play{opacity:1}tr.hot td{opacity:1}.heard b{font-family:var(--mono);font-weight:500}.btnlink{display:inline-flex;align-items:center;padding:7px 12px;border:1px solid var(--line);border-radius:9px;color:var(--ink);text-decoration:none;font-size:.9rem;margin-right:10px}.btnlink:hover{border-color:var(--acc)}.spark{display:flex;align-items:flex-end;gap:1px;height:28px}.spark i{flex:1;background:var(--acc);border-radius:1px 1px 0 0;min-width:1px}.hod{display:flex;gap:2px;align-items:flex-end}.hod span{flex:1;display:flex;flex-direction:column;align-items:center;justify-content:flex-end}.hod i{display:block;width:100%;background:var(--acc2,#5aa9ff);border-radius:2px 2px 0 0}.hod b{font-size:.55rem;color:var(--dim);font-weight:500;height:10px}.dig{display:grid;gap:14px}.dig .card{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:14px 16px}.dig h3{margin:0 0 6px}.steps{margin:6px 0 12px 18px;color:var(--ink);line-height:1.5}.vtag{display:inline-block;padding:3px 8px;border-radius:999px;font-size:.74rem;font-weight:600;white-space:nowrap}.vtag.v1{background:rgba(61,220,132,.18);color:var(--acc);border:1px solid #1f5c3a}.vtag.v2{background:rgba(61,220,132,.08);color:var(--acc);border:1px solid #1f5c3a}.vtag.v4{color:#c9a3ff;border-color:#8a5cf6;background:rgba(138,92,246,.12)}.vtag.v3{background:transparent;color:var(--mute);border:1px solid var(--line)}.heard b.hot{color:var(--acc)}th.asc:after{content:" ▲"}th.desc:after{content:" ▼"}th:hover{color:var(--ink)}
+.play.stopb{background:#b33b3b;color:#fff;border-color:#b33b3b}.tx{color:var(--ink);font-size:.86rem;line-height:1.35;margin:4px 0 6px;font-style:italic}tr.prev td{opacity:.6}tr.prev .play{opacity:1}tr.hot td{opacity:1}.heard b{font-family:var(--mono);font-weight:500}.heard .hv,.heard .hs{font:700 .6rem/1 var(--mono);letter-spacing:.08em;text-transform:uppercase;padding:2px 5px;border-radius:4px;vertical-align:middle;white-space:nowrap}
+.heard .hv{color:#04130a;background:var(--acc)}.heard .hs{color:var(--mute);border:1px solid var(--line)}tr.vnow td{background:rgba(61,220,132,.07)}.btnlink{display:inline-flex;align-items:center;padding:7px 12px;border:1px solid var(--line);border-radius:9px;color:var(--ink);text-decoration:none;font-size:.9rem;margin-right:10px}.btnlink:hover{border-color:var(--acc)}.spark{display:flex;align-items:flex-end;gap:1px;height:28px}.spark i{flex:1;background:var(--acc);border-radius:1px 1px 0 0;min-width:1px}.hod{display:flex;gap:2px;align-items:flex-end}.hod span{flex:1;display:flex;flex-direction:column;align-items:center;justify-content:flex-end}.hod i{display:block;width:100%;background:var(--acc2,#5aa9ff);border-radius:2px 2px 0 0}.hod b{font-size:.55rem;color:var(--dim);font-weight:500;height:10px}.dig{display:grid;gap:14px}.dig .card{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:14px 16px}.dig h3{margin:0 0 6px}.steps{margin:6px 0 12px 18px;color:var(--ink);line-height:1.5}.vtag{display:inline-block;padding:3px 8px;border-radius:999px;font-size:.74rem;font-weight:600;white-space:nowrap}.vtag.v1{background:rgba(61,220,132,.18);color:var(--acc);border:1px solid #1f5c3a}.vtag.v2{background:rgba(61,220,132,.08);color:var(--acc);border:1px solid #1f5c3a}.vtag.v4{color:#c9a3ff;border-color:#8a5cf6;background:rgba(138,92,246,.12)}.vtag.v3{background:transparent;color:var(--mute);border:1px solid var(--line)}.heard b.hot{color:var(--acc)}th.asc:after{content:" ▲"}th.desc:after{content:" ▼"}th:hover{color:var(--ink)}
 td{padding:9px 12px;border-bottom:1px solid var(--line);white-space:nowrap;vertical-align:middle}tr.row{cursor:pointer;transition:background .15s}tr.row:hover td{background:rgba(90,169,255,.06)}tr.row.playing td{background:rgba(61,220,132,.08)}tr.row.quiet .f,tr.row.quiet .nm{opacity:.55}
 tr.row.new td{}td .chg{}
 .f{font-family:var(--mono);font-weight:700;font-size:1rem}.nm{font-weight:600}.sv{color:var(--mute);font-size:.8rem}
@@ -2353,7 +2404,7 @@ details.card[open]>summary{margin-bottom:10px}
  <div class="tabs"><button class="on" data-t="freq">Frequencies</button><button data-t="dir">Directory</button><button data-t="nets">Nets</button><button data-t="radio">FM Radio</button><button data-t="recs">Recordings <span id="reccount" class="tag"></span></button><button data-t="digital">Digital</button><button data-t="map">Map</button><button data-t="air">Aircraft</button><button data-t="debug">Debug</button></div>
  <section id="tab-freq">
   <div class="toolbar"><input id="q" type="search" placeholder="Search frequency, callsign, service…"><div id="chips"></div><button id="digtog" class="ghost" style="margin-left:auto;padding:4px 10px;font-size:.82rem;display:none" title="P25 and DMR channels are decoded by SDRTrunk - they play from the Digital tab. Tap to show or hide them in this list (a search always finds them)."></button><input id="hidecont" type="checkbox" checked hidden></div>
-  <div class="tablewrap"><table><thead><tr><th style="cursor:default"></th><th data-k="rank" data-t="n">#</th><th data-k="mhz" data-t="n">MHz</th><th data-k="name" data-t="s">Name</th><th data-k="vrank" data-t="n">Voice</th><th data-k="cat" data-t="s">Category</th><th data-k="service" data-t="s">Service</th><th data-k="mode" data-t="s">Mode</th><th data-k="snr" data-t="n">Signal</th><th data-k="busy" data-t="n">Busy</th><th data-k="recent" data-t="n">Activity</th><th data-k="heard_ts" data-t="n" class="desc">Last heard</th><th data-k="tone" data-t="s">Tone</th><th data-k="uv32" data-t="n">Radio</th></tr></thead><tbody id="rows"></tbody></table><div class="empty" id="empty" style="display:none">Nothing above the noise floor yet - the first band takes a few minutes.</div><div id="morerow" style="display:none;text-align:center;padding:10px"><button class="ghost" id="morebtn">Show 20 more</button> <button class="ghost" id="allbtn">Show all</button> <span class="sv" id="morenote"></span></div></div>
+  <div class="tablewrap"><table><thead><tr><th style="cursor:default"></th><th data-k="rank" data-t="n">#</th><th data-k="mhz" data-t="n">MHz</th><th data-k="name" data-t="s">Name</th><th data-k="vrank" data-t="n">Voice</th><th data-k="cat" data-t="s">Category</th><th data-k="service" data-t="s">Service</th><th data-k="mode" data-t="s">Mode</th><th data-k="snr" data-t="n">Signal</th><th data-k="busy" data-t="n">Busy</th><th data-k="recent" data-t="n">Activity</th><th data-k="heard_sort" data-t="n" class="desc" title="voice actually heard comes first (Monitor, the voice check, a listen, a decoded call); below that, when the sweep last saw a signal">Last heard</th><th data-k="tone" data-t="s">Tone</th><th data-k="uv32" data-t="n">Radio</th></tr></thead><tbody id="rows"></tbody></table><div class="empty" id="empty" style="display:none">Nothing above the noise floor yet - the first band takes a few minutes.</div><div id="morerow" style="display:none;text-align:center;padding:10px"><button class="ghost" id="morebtn">Show 20 more</button> <button class="ghost" id="allbtn">Show all</button> <span class="sv" id="morenote"></span></div></div>
  </section>
  <section id="tab-dir" style="display:none"><div class="toolbar"><input id="dq" type="search" placeholder="Search the directory: tower, VE3, GMRS, marine…"><span class="sub" style="color:var(--mute)">Every known channel - press ▶ to tune it whether or not the scan has heard it yet.</span></div>
   <div class="tablewrap"><table><thead><tr><th style="cursor:default"></th><th data-dk="mhz" data-dt="n">MHz</th><th data-dk="name" data-dt="s">Name</th><th data-dk="cat" data-dt="s">Category</th><th data-dk="mode" data-dt="s">Mode</th><th style="cursor:default">Program</th><th data-dk="snr" data-dt="n" class="desc">Heard in this scan</th><th style="cursor:default">Notes</th><th data-dk="uv32" data-dt="n">Radio</th></tr></thead><tbody id="dirrows"></tbody></table></div></section>
@@ -2438,7 +2489,7 @@ details.card[open]>summary{margin-bottom:10px}
 </div>
 <script>
 const $=s=>document.querySelector(s);const $$=s=>[...document.querySelectorAll(s)];
-let S={hits:[]},rowsByMhz=new Map(),sortK='heard_ts',sortDir=-1,sortT='n',filter='All',query='',mode='scan',tab='freq';
+let S={hits:[]},rowsByMhz=new Map(),sortK='heard_sort',sortDir=-1,sortT='n',filter='All',query='',mode='scan',tab='freq';
 try{const sv=JSON.parse(localStorage.getItem('sort3')||'null');if(sv){sortK=sv.k;sortDir=sv.d;sortT=sv.t;}filter=localStorage.getItem('filter2')||'All';}catch(e){}
 const CATS=['All','Ham repeater','Ham','Airport','FRS/GMRS','Retail','City services','Marine','MURS','Railway','Business','Digital','Other','UV-32 only'];let hideCont=true;try{hideCont=localStorage.getItem('hidecont')!=='0';}catch(e){}
 // (v184) P25 / DMR channels are decoded by SDRTrunk from the Digital tab; in this list they were 277 of 300 rows and always on top
@@ -2591,8 +2642,16 @@ function rowHTML(h){return `<td><button class="play" data-mhz="${h.mhz}" data-mo
  <td><span class="meter"><i style="width:${Math.min(100,h.snr*2.5)}%"></i></span><span class="snr">${h.snr} dB</span></td><td class="busy">${h.busy}%${h.cont?' <span class="tag" style="border-color:#6b5520;color:var(--warn)" title="on 100% of the time - a data link, beacon or sweep artifact, not voice">cont.</span>':''}</td><td>${spark(h.hours,h)}</td><td class="heard">${heardCell(h)}</td><td>${h.tone?'<span class="tag tone">'+esc(h.tone)+'</span>':''}</td><td>${h.uv32?'<span class="tag uv">UV-32</span>':'<span class="tag sdr">SDR only</span>'}</td>`;}
 function voiceCell(h){if(h.ver==='DIGITAL')return '<span class="vtag v4" title="digital voice (P25) - ▶ decodes it with SDRTrunk; audio plays through the Mac">◆ P25 digital</span>';if(h.ver==='VOICE')return '<span class="vtag v1" title="the dashboard listened and heard real speech here">✓ VOICE heard</span>';if(h.ver==='KNOWN')return '<span class="vtag v2" title="a known voice channel: airport, repeater, FRS/GMRS or store table">✓ known voice</span>';return '<span class="vtag v3" title="not auditioned yet - the dashboard checks it when nobody is listening">? unverified</span>';}
 function agreeTag(a){if(a==null)return ' <span class="tag" style="opacity:.6" title="one engine only (whisper) - install professional transcription for a cross-check">1 engine</span>';if(a>=0.6)return ' <span class="tag" style="border-color:#1f5c3a;color:var(--acc)" title="two independent engines agree on '+Math.round(a*100)+'% of the words">✓ 2 engines agree</span>';return ' <span class="tag" style="border-color:#6b5520;color:var(--warn)" title="the two engines disagree ('+Math.round(a*100)+'% overlap) - treat as uncertain">? uncertain</span>';}
-function heardCell(h){if(!h.heard_ts)return '<span class="sv">—</span>';const d=new Date(h.heard_ts*1000),a=h.age_min;const t=d.toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'});const day=(Date.now()-d.getTime())>36e5*20?d.toLocaleDateString([],{month:'short',day:'numeric'})+' ':'';
- const rel=a==null?'':(a<1?'now':a<60?a+' min ago':a<1440?Math.round(a/60)+' h ago':Math.round(a/1440)+' d ago');const hot=a!=null&&a<=30;return `<b class="${hot?'hot':''}">${day}${t}</b><br><span class="sv">${rel}${h.times>1?' · '+h.times+'×':''}</span>`;}
+// (v191) Two different facts, kept apart: VOICE = somebody was actually heard here (Monitor, the background voice check, a listen whose
+// squelch opened, a decoded digital call); SIGNAL = the sweep saw a carrier (may be data). Seconds for the first two minutes.
+function heardCell(h){const now=S.t||Date.now()/1000,v=h.voice_ts||0,sg=h.heard_ts||0;if(!v&&!sg)return '<span class="sv">—</span>';
+ const rel=ts=>{const a=Math.max(0,now-ts);return a<10?'just now':a<120?Math.round(a)+' s ago':a<3600?Math.round(a/60)+' min ago':a<86400?Math.round(a/3600)+' h ago':Math.round(a/86400)+' d ago';};
+ const clk=ts=>{const d=new Date(ts*1000);return ((Date.now()-d.getTime())>36e5*20?d.toLocaleDateString([],{month:'short',day:'numeric'})+' ':'')+d.toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'});};
+ const n=h.times>1?' · '+h.times+'×':'';
+ const fresh=v&&now-v<86400;
+ if(v&&(v>=sg-90||!sg))return `<b class="${now-v<=1800?'hot':''}">${clk(v)}</b> <span class="hv" title="voice was heard here">voice</span><br><span class="sv">${rel(v)}${n}</span>`;
+ if(fresh)return `<b class="${now-v<=1800?'hot':''}">${clk(v)}</b> <span class="hv" title="voice was heard here">voice</span><br><span class="sv" title="the sweep saw a signal here after that - not necessarily voice">${rel(v)} · signal ${clk(sg)}</span>`;
+ return `<b>${clk(sg)}</b> <span class="hs" title="the sweep saw a signal here - nobody has listened, it may be data">signal</span><br><span class="sv">${rel(sg)}${v?' · voice '+clk(v):n}</span>`;}
 function esc(s){return String(s??'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));}
 function renderRows(){paintDig();const tb=$('#rows');const seen=new Set();
  for(const h of S.hits){const k=fmt(h.mhz);seen.add(k);let tr=rowsByMhz.get(k);
@@ -2600,8 +2659,8 @@ function renderRows(){paintDig();const tb=$('#rows');const seen=new Set();
   else{const d=tr._d||{};if(d.snr!==h.snr){tr.querySelector('.meter i').style.width=Math.min(100,h.snr*2.5)+'%';const s=tr.querySelector('.snr');s.textContent=h.snr+' dB';s.classList.remove('chg');void s.offsetWidth;s.classList.add('chg');}
    if(d.busy!==h.busy){const b=tr.querySelector('.busy');b.textContent=h.busy+'%';b.classList.remove('chg');void b.offsetWidth;b.classList.add('chg');}
    if(d.tone!==h.tone||d.name!==h.name||d.ver!==h.ver){tr.innerHTML=rowHTML(h);}
-   if(d.recent!==h.recent||d.last!==h.last)tr.querySelector('.act').parentElement.innerHTML=spark(h.hours,h);if(d.heard_ts!==h.heard_ts||d.age_min!==h.age_min)tr.querySelector('.heard').innerHTML=heardCell(h);if(d.rank!==h.rank||d.live!==h.live)tr.querySelector('.rank').innerHTML=h.live?h.rank:'<span class="tag" title="not in the current sweep - last known values">banked</span>';}
-  tr._d=h;tr._h=h;tr.classList.toggle('prev',!h.live);tr.classList.toggle('hot',h.age_min!=null&&h.age_min<=30);tr.style.display=visible(h)?'':'none';}
+   if(d.recent!==h.recent||d.last!==h.last)tr.querySelector('.act').parentElement.innerHTML=spark(h.hours,h);if(d.heard_ts!==h.heard_ts||d.voice_ts!==h.voice_ts||d.age_min!==h.age_min||(S.t||0)-Math.max(h.voice_ts||0,h.heard_ts||0)<150)tr.querySelector('.heard').innerHTML=heardCell(h);if(d.rank!==h.rank||d.live!==h.live)tr.querySelector('.rank').innerHTML=h.live?h.rank:'<span class="tag" title="not in the current sweep - last known values">banked</span>';}
+  tr._d=h;tr._h=h;tr.classList.toggle('prev',!h.live);tr.classList.toggle('hot',h.age_min!=null&&h.age_min<=30);tr.classList.toggle('vnow',!!h.voice_ts&&(S.t||0)-h.voice_ts<20);tr.style.display=visible(h)?'':'none';}
  for(const [k,tr] of rowsByMhz){if(!seen.has(k)){tr.remove();rowsByMhz.delete(k);}}
  applySort();$('#empty').style.display=S.hits.length?'none':'';paintNetRows();P.paint();}
 let ROWCAP=20;                                                        // no list longer than 20 rows on screen (phone scrolling); 'Show 20 more' / 'Show all'
