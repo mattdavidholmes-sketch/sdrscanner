@@ -1774,7 +1774,7 @@ def transcribe_worker():
                 if len(txt) < 3 or low in ("you", "thank you.", "thanks for watching.", "bye.") or low.startswith("toronto pearson tower, arrival"): txt = ""   # hallucinations / echoed prompt
                 if sum(1 for w in ("tower", "arrival", "departure", "runway", "dispatch", "repeater") if w in low) >= 4 and len(txt) > 150: txt = ""   # prompt echoed back
                 # airband: the ATC-fine-tuned Whisper (asr_atc.py) is the primary engine when installed - measured 15% WER vs 95% for stock
-                atc = ""
+                atc = ""; atc_conf = None; atc_words = 0
                 try: clip_mhz = float(os.path.basename(f).split("_")[0])
                 except ValueError: clip_mhz = 0.0
                 if 108 <= clip_mhz <= 137 and atc_ok():
@@ -1783,7 +1783,7 @@ def transcribe_worker():
                         for line in pr.stdout.splitlines():
                             try:
                                 j = json.loads(line)
-                                if j.get("file") == f: atc = (j.get("text") or "").strip()
+                                if j.get("file") == f: atc = (j.get("text") or "").strip(); atc_conf = j.get("conf"); atc_words = j.get("words") or 0
                             except ValueError: pass
                     except Exception as e:
                         with open(os.path.join(HERE, "transcribe.log"), "a") as lf: lf.write(f"{dt.datetime.now():%H:%M:%S} atc {e!r}\n")
@@ -1804,8 +1804,12 @@ def transcribe_worker():
                 except Exception: pass
                 if atc:
                     agree = _agreement(atc, txt or alt) if (txt or alt) else 0.0
-                    open(tp, "w").write(atc)
-                    json.dump({"atc": atc, "whisper": txt, "parakeet": alt, "agree": round(agree, 2)}, open(tp[:-4] + ".asr.json", "w"))
+                    # (v203) The ATC model writes fluent radio phraseology even when it heard next to nothing. When it was not sure of
+                    # its own words (mean word probability under 0.62) or wrote fewer than five, and no second engine heard the same
+                    # thing, the transcript says "(unsure)" in front. Nothing is hidden.
+                    unsure = atc_conf is not None and (atc_conf < 0.62 or atc_words < 5) and agree < 0.5
+                    open(tp, "w").write(("(unsure) " if unsure else "") + atc)
+                    json.dump({"atc": atc, "whisper": txt, "parakeet": alt, "agree": round(agree, 2), "conf": atc_conf, "words": atc_words, "unsure": unsure}, open(tp[:-4] + ".asr.json", "w"))
                 elif alt:
                     agree = _agreement(txt, alt)
                     # measured on real Pearson clips: whisper large-v3-turbo with the radio vocabulary reads hissy airband far better

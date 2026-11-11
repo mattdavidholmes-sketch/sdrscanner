@@ -91,9 +91,15 @@ def main(files):
         try:
             segs, info = model.transcribe(load16k(p), language="en", beam_size=5, temperature=0.0, initial_prompt=prompt,
                                           condition_on_previous_text=False, vad_filter=True,
-                                          vad_parameters=dict(min_silence_duration_ms=400), no_speech_threshold=0.6)
-            text = " ".join(s.text.strip() for s in segs).strip()
-            print(json.dumps({"file": f, "text": text, "secs": round(time.time() - t0, 1)}), flush=True)
+                                          vad_parameters=dict(min_silence_duration_ms=400), no_speech_threshold=0.6, word_timestamps=True)
+            segs = list(segs); text = " ".join(s.text.strip() for s in segs).strip()
+            # (v203) how sure the model was: the mean probability it gave the words it wrote. On 40 clips of 128.800 (11 Nov) the two
+            # transmissions it read the same way through two different receive chains scored 0.64-0.75; what it wrote on carriers
+            # with no speech on them at all ("United four five zero", "heading flight level eight three") scored 0.28-0.61, or was
+            # a callsign lifted from the list of aircraft in the prompt. The app marks low figures; it does not hide them.
+            words = [w for s in segs for w in (s.words or [])]
+            conf = round(sum(w.probability for w in words) / len(words), 2) if words else None
+            print(json.dumps({"file": f, "text": text, "conf": conf, "words": len(words), "secs": round(time.time() - t0, 1)}), flush=True)
         except Exception as e:
             print(json.dumps({"file": f, "error": repr(e)}), flush=True)
         finally:
