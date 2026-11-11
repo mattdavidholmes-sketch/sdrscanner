@@ -401,6 +401,10 @@ def run_diag(mhz, mode, secs=6):
             if not b: res["error"] = ses.err or "no data"; break
             prc += b; o = array.array("h", b); r_out = math.sqrt(sum(x * x for x in o) / max(1, len(o)))
             res["blocks"].append({"t": round(time.time() - t0, 2), "out_rms": round(r_out), "open": ses.gate.open, "zcr": round(ses.gate.zcr, 2), "thresh": ses.gate.thresh, "in_rms": round(ses.gate.level)})
+            try:                                                           # (v196) one AM channel through the channelizer: what the airband receiver measured
+                rx = ses.chans[0].rx
+                if rx is not None: res["blocks"][-1].update(cnr_db=round(rx.cnr_db, 1), line_db=round(rx.line_db, 1), mod=round(rx.mod, 2), offset_hz=round(rx.f_off), rx_open=bool(rx.open))
+            except Exception: pass
         try: res["monitor"] = ses.meter().get("monitor"); res["err"] = ses.err
         except Exception: pass
         ses.stop()
@@ -428,6 +432,8 @@ def run_tap(bank, secs):
     import channelizer as CH
     chans = monitor_list(bank)
     if not chans or not CH.available(): say(f"capture: nothing to do for bank {bank!r}"); return
+    with _lock: listening = _player.get("session") is not None
+    if listening or USER_WANTS.is_set() or os.path.exists(os.path.join(HERE, "SDRTRUNK_HAS_DONGLE")): say("capture: the radio is in use - not started"); return
     take_dongle(); BG_STATE["what"] = f"capture: listening silently on {bank} ({len(chans)} channels) for the receiver work"; BG_STATE["since"] = time.time()
     t0 = time.time(); ses = None; why = "time is up"
     try:
@@ -437,6 +443,7 @@ def run_tap(bank, secs):
             if USER_WANTS.is_set() or time.time() - LAST_USER_PLAY[0] < 3: why = "a listen started"; break
             if os.path.exists(os.path.join(HERE, "SDRTRUNK_HAS_DONGLE")): why = "SDRTrunk took the radio"; break
             if os.path.exists(RESTART_REQ): why = "a restart is waiting"; break
+            if os.path.exists(OPEN_REQ) or os.path.exists(DIAG_REQ): why = "another request is waiting"; break   # (v196) this loop runs in the request watcher: a helper or diagnostic asked for meanwhile would otherwise wait for hours
             with _lock:
                 if _player.get("session") is not None: why = "a listen started"; break
             if not ses.read(4800): why = ses.err or "the radio stopped answering"; break
@@ -1487,6 +1494,18 @@ def make_session(mhz, mode, manual, voice, name, record, cat="All"):
         except Exception as e:
             with open(os.path.join(HERE, "verify.log"), "a") as f: f.write(f"{dt.datetime.now():%H:%M:%S} channelizer unavailable: {e!r}\n")
         return AU.Monitor(chans, manual, voice, "49.6", record, FM_LOG, on_heard=monitor_heard)
+    # (v196) One AM channel (airband; CB): the airband receiver - airband.AmRx behind the channelizer's front end. Its squelch opens on
+    # the carrier itself, so a weak aircraft is heard without holding the squelch open; the audio is detected synchronously,
+    # levelled by the carrier and keyed by it. The 4 Nov objection below (clicks at block edges, gaps) is what that receiver was
+    # written to remove; its tests measure both. _state/airband_rx.txt containing "off" brings the rtl_fm path back.
+    if mode == "am":
+        try:
+            import channelizer as CH
+            if CH.available() and CH.AB is not None and CH.airband_on():
+                return CH.Channelizer([(mhz, "am", name or f"{mhz:.4f}")], manual, voice, "49.6", record, FM_LOG, on_heard=monitor_heard,
+                                      tap_dir=TAP_DIR if os.path.exists(os.path.join(HERE, "_state", "tap.txt")) else None)
+        except Exception as e:
+            with open(os.path.join(HERE, "verify.log"), "a") as f: f.write(f"{dt.datetime.now():%H:%M:%S} airband receiver unavailable: {e!r}\n")
     # (4 Nov) A single channel ALWAYS goes through rtl_fm. The channelizer's AM path had better squelch, but its audio comes out
     # in 0.1 s blocks with a discontinuity at every block edge and 100 ms silence gaps whenever it falls behind: measured on
     # 132.800 - 1,819 clicks and 23 gaps in 14 s, against 19 and 0 through rtl_fm. The channelizer stays for Monitor (hopping).
@@ -1853,7 +1872,7 @@ class H(BaseHTTPRequestHandler):
             mt = ses.meter()
             return self.send(json.dumps({"playing": m, "open": mt["open"], "level": mt["level"], "zcr": mt["zcr"], "thresh": mt["thresh"], "floor": 0, "mode": ses.mode,
                                          "auto": ses.gate.manual is None, "tones": mt["tones"], "tone_now": mt["tone_now"], "paused": True, "fm": mt["err"] or last_fm_error(),
-                                         "data": mt.get("data", False), "monitor": mt.get("monitor"),
+                                         "data": mt.get("data", False), "monitor": mt.get("monitor"), "air": mt.get("air"),
                                          "denoise_off": mt.get("denoise_off", False)}), "application/json")   # (v170) diagnostic only - never affects playback
         if u.path == "/debug":
             def sh(cmd):

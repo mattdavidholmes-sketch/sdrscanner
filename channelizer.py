@@ -15,6 +15,14 @@ import numpy as np
 from scipy import signal
 
 import audio as AU
+try: import airband as AB            # (v196) the airband voice receiver; without it a single AM channel is handled as before
+except Exception: AB = None
+
+def airband_on():
+    """The airband receiver is used for single AM channels unless _state/airband_rx.txt says "off" (a switch, not a setting:
+    it is there so the old path can be had back without a deploy)."""
+    try: return open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "_state", "airband_rx.txt")).read().strip().lower() != "off"
+    except OSError: return True
 
 def _fs():
     """(v176) Dongle sample rate. 2.4 MS/s unless _state/sample_rate.txt (or SDR_FS) says 2880000: the wider rate puts ~20% more
@@ -157,6 +165,7 @@ class Channel:
         self.nblk = 0                              # blocks processed since this channel object was made (retune)
         self.pinned = False                        # set when the carrier never dropped for 20 s: a beacon / ATIS / data, not a conversation
         self.pin_why = ""                          # (v193) why it was pinned, for the log line
+        self.rx = None; self.rx_was = False; self.rx_voice = 0     # (v196) airband.AmRx when this AM channel is listened to on its own; its squelch last block; blocks with speech on the carrier
         self.cv_max = 0.0; self.data_end = False   # (v193) FM: the most speech-like the envelope got during this opening; the data detector ended it without any
         self.env_hist = []; self.voice_mod = 0.0; self.voice_ok = False; self.am_blocks = 0   # syllabic modulation detector (AM): speech ~0.5-1.0, steady noise/carrier < 0.15
         self.pending = []; self.pending_raw = []; self.live = b""; self.max_mod = 0.0; self.open_n = 0; self.snr_sum = 0.0; self.confirmed = True   # confirmed: the last AM open carried speech (FM: always)
@@ -179,6 +188,7 @@ class Channel:
         else:
             x, self.zi2 = signal.sosfilt(self.sos2, x, zi=self.zi2); x = x[::DECIM2]       # 24 kS/s complex baseband
             self.x24 = x                                                                   # (v195) kept for the tap
+            if self.rx is not None: return self._airband(x, t_block)
             if self.mode == "am":
                 env = np.abs(x)
                 # noise blanker: clip impulse spikes (ignition / lightning) to 3x the median envelope
@@ -318,6 +328,44 @@ class Channel:
         if self.rec: self.rec.feed(b"", False)
         return None, False
 
+    def _airband(self, x, t_block):
+        """(v196) One AM channel listened to on its own. airband.AmRx does all of it - the squelch on the carrier line, synchronous
+        detection, the voice filter, the keying - and this method keeps the books the rest of the app reads (meter, heard log,
+        recorder, tap). Why a separate path: the single-channel listen went through rtl_fm (envelope detector over +-12 kHz),
+        an audio squelch that could not hear weak calls, and a compander that lifted the hiss between the words by up to 23 dB;
+        tonight's recordings had the voice 3.5 to 7 dB above the noise on signals that deserved 17."""
+        rx = self.rx; g = self.gate
+        pcm, is_open = rx.process(x)
+        self.nblk += 1; g.n += 1
+        self.pow_db = 10 * np.log10(float(np.mean(np.abs(x) ** 2)) + 1e-12)
+        self.floor_db = self.pow_db - max(0.0, rx.cnr_db)                  # the meter's "dB over the noise" is the carrier-to-noise in a 6 kHz channel
+        self.carrier = rx.line_db >= rx.LINE_DB; self.am_open = bool(rx.open); self.voice_mod = rx.mod
+        if rx.open and not self.rx_was: self.rx_voice = 0; self.confirmed = False
+        self.rx_was = bool(rx.open)
+        # speech on the carrier, not only a carrier: three blocks whose sidebands stand well above what noise alone makes them
+        # read. Only then does the opening count as "voice heard" (bank, Last heard, the log's "voice yes").
+        if rx.open and rx.mod >= max(0.2, 3.0 * math.sqrt(16.0 / max(10 ** (rx.line_db / 10), 1e-9))): self.rx_voice += 1
+        if self.rx_voice >= 3: self.confirmed = True
+        self.voice_ok = self.confirmed
+        g.open = bool(is_open); g.zcr = 0.0; g.data = False; g.data_latched = False
+        g.level = float(np.sqrt(np.mean(np.frombuffer(pcm, dtype=np.int16).astype(np.float64) ** 2))) if is_open else 0.0
+        self.live = b""
+        if is_open:
+            if self.open_since is None: self.open_since = t_block
+            self.last_open = t_block
+            if self.rec: self.rec.feed(pcm, True)
+            self.max_mod = max(self.max_mod, rx.mod); self.open_n += 1; self.snr_sum += rx.cnr_db
+            return pcm, True
+        if self.open_since is not None:
+            self.secs_open += (self.last_open - self.open_since) + 0.1; self.open_since = None
+            if self.open_n and OPEN_LOG:
+                try:
+                    with open(OPEN_LOG, "a") as f: f.write(f"{dt.datetime.now():%m-%d %H:%M:%S} {self.name} {self.mhz:.4f} am {self.open_n/10:.1f}s max_mod {self.max_mod:.2f} mean_snr {self.snr_sum/self.open_n:.1f} voice {'yes' if self.confirmed else 'no'}\n")
+                except Exception: pass
+            self.max_mod = 0.0; self.open_n = 0; self.snr_sum = 0.0
+        if self.rec: self.rec.feed(b"", False)
+        return None, False
+
 class RtlTcp:
     """rtl_tcp server + client socket. Commands: 1 freq, 2 rate, 3 gain mode, 4 tuner gain (tenths dB), 8 AGC."""
     def __init__(self, center_hz, gain_tenths=496, log=None):
@@ -380,6 +428,8 @@ class Channelizer:
             except Exception: self.tap = None
         self.sox = None
         self.groups = group_channels([c for c in channels if c[0] > 0] or [(146.52, "fm", "146.52")])
+        # (v196) exactly one channel and it is AM: the airband receiver takes it (see Channel._airband)
+        self.solo_am = bool(AB is not None and len(self.groups) == 1 and len(self.groups[0][1]) == 1 and self.groups[0][1][0][1] == "am" and airband_on())
         self.manual = manual; self.record_dir = record_dir; self.on_heard = on_heard
         self.gain_tenths = int(round(float(gain) * 10))
         self.log = open(log_path, "a") if log_path else None
@@ -394,6 +444,7 @@ class Channelizer:
         # (5 Nov) the live audio goes through the SAME sox chain as a direct listen (voice band-pass + compand, 100 ms look-ahead):
         # Monitor sounds exactly like pressing play on the channel. Without sox the old scipy chain is used. (started last: the reader needs qcond/alive)
         try:
+            if self.solo_am: raise RuntimeError("the airband receiver delivers finished audio: no sox, no compander")
             self.sox = subprocess.Popen(AU.sox_cmd("fm", voice), stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
             threading.Thread(target=self._sox_reader, daemon=True).start()
         except Exception: self.sox = None
@@ -446,6 +497,9 @@ class Channelizer:
                     for _ in range(2 if fast else 4): self.tcp.block()                  # flush the retune transient (0.5 s: the tuner's gain ramps after a retune)
                 self.chans = [Channel(m, mo, n, center, self.manual, self.record_dir) for m, mo, n in chans if round(m, 4) not in self.lockout] or \
                              [Channel(m, mo, n, center, self.manual, self.record_dir) for m, mo, n in chans[:1]]
+                if self.solo_am:
+                    for ch in self.chans:
+                        if ch.mode == "am": ch.rx = AB.AmRx(RATE, BLOCK // (FS // RATE), manual=self.manual); ch.confirmed = False
                 for ch in self.chans:
                     ch.gate.n = max(0, AU.SETTLE - 2)          # the settle guard is for rtl_fm's DC filter; our own filters settle in 2 blocks
                     if round(ch.mhz, 4) in self.trusted: ch.gate.set_wide(True)
@@ -596,6 +650,15 @@ class Channelizer:
              "snr_db": round(a.pow_db - a.floor_db, 1) if (a and a.mode == "am" and a.floor_db is not None) else None,
              "tones": a.tones.summary() if a else "", "tone_now": a.tones.last if a else "", "err": self.err, "data": bool(g and (g.data or g.data_latched)),
              "data_secs": 0, "voice_cv": round(g.voice_cv, 2) if g else 0}
+        if self.solo_am:
+            # (v196) one airband channel: the same shape of answer as a plain single-channel listen (no "monitor" block - the page
+            # would show the scanner), plus what the receiver sees
+            c0 = self.chans[0] if self.chans else None; rx = getattr(c0, "rx", None)
+            if rx is not None:
+                m.update(open=bool(c0.gate.open), level=round(c0.gate.level), snr_db=round(rx.cnr_db, 1))
+                m["air"] = {"cnr_db": round(rx.cnr_db, 1), "carrier": bool(rx.line_db >= rx.LINE_DB), "open": bool(rx.open), "voice": bool(c0.confirmed),
+                            "mod": round(rx.mod, 2), "offset_hz": round(rx.f_off), "threshold_db": round(rx.threshold, 1), "held_open": bool(rx.always)}
+            return m
         n_all = sum(len(c) for _, c in self.groups)
         chans = []
         for ch in list(self.chans):                                              # the window as it is right now (reactive UI)
