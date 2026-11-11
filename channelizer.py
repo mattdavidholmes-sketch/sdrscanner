@@ -92,19 +92,28 @@ class Tap:
         k = round(ch.mhz, 4); g = ch.gate
         ref = ch.ref_db if ch.ref_db is not None else (ch.pow_db - ch.floor_db if ch.floor_db is not None else 0.0)
         on = bool(ch.am_open or ref >= 3.0) if ch.mode == "am" else bool(g.open)
+        rx = getattr(ch, "rx", None); line = False
+        if rx is not None:
+            # (v200) With the airband receiver on the channel a transmission is a carrier LINE, and that is what gets kept - down to
+            # 3 dB under the noise, so the ground stations that are too weak to open the squelch are still on file. The old test
+            # (3 dB more power than the channels beside it) filled the folder with 0.3 s files every time broadband noise came up:
+            # 151 of them between 04:00 and 04:10 on 11 Nov, not one with a carrier in it.
+            line = bool(rx.line_db >= rx.LINE_DB and rx.cnr_db >= -3.0); on = bool(ch.am_open) or line
         row = [round(ref, 1), round(ch.pow_db, 1), round(ch.floor_db, 1) if ch.floor_db is not None else None, round(ch.voice_mod, 2),
-               int(bool(ch.am_open)), int(bool(ch.voice_ok)), int(bool(g.open))]
+               int(bool(ch.am_open)), int(bool(ch.voice_ok)), int(bool(g.open)),
+               round(float(rx.cnr_db), 1) if rx is not None else None, round(float(rx.line_db), 1) if rx is not None else None]
         raw = np.asarray(x, dtype=np.complex64).tobytes()
         st = self.files.get(k)
         if st is None and on and self.bytes < self.MAX_MB * (1 << 20):
             name = f"{ch.mhz:.4f}_{dt.datetime.now():%Y%m%d_%H%M%S}.c64"
             st = self.files[k] = {"fh": open(os.path.join(self.dir, name), "wb"), "file": name, "mhz": ch.mhz, "name": ch.name, "mode": ch.mode,
-                                  "start": time.time(), "quiet": 0, "rows": [], "best": 0.0, "voice": False}
+                                  "start": time.time(), "quiet": 0, "rows": [], "best": 0.0, "voice": False, "line": False, "cnr": None}
             for b, r in self.pre.get(k, []): self._write(st, b, r)
         if st is not None:
             self._write(st, raw, row)
             st["quiet"] = 0 if on else st["quiet"] + 1
             st["best"] = max(st["best"], ref); st["voice"] = st["voice"] or bool(ch.voice_ok if ch.mode == "am" else g.open)
+            if line: st["line"] = True; st["cnr"] = max(st["cnr"] if st["cnr"] is not None else -99.0, float(rx.cnr_db))
             if st["quiet"] > self.POST or len(st["rows"]) >= self.MAX_BLOCKS: self.close(k)
         buf = self.pre.setdefault(k, []); buf.append((raw, row)); del buf[:-self.PRE]
     def _write(self, st, raw, row):
@@ -115,7 +124,7 @@ class Tap:
         try: st["fh"].close()
         except OSError: pass
         p = os.path.join(self.dir, st["file"])
-        if st["best"] < 3.0 and not st["voice"]:                        # a flicker of the noise floor: not worth keeping
+        if st["best"] < 3.0 and not st["voice"] and not st["line"]:    # a flicker of the noise floor: not worth keeping
             try: self.bytes -= os.path.getsize(p); os.remove(p)
             except OSError: pass
             return
@@ -123,8 +132,9 @@ class Tap:
             with open(os.path.join(self.dir, "index.jsonl"), "a") as f:
                 f.write(__import__("json").dumps({"file": st["file"], "mhz": st["mhz"], "name": st["name"], "mode": st["mode"], "rate": RATE,
                                                   "start": dt.datetime.fromtimestamp(st["start"]).strftime("%Y-%m-%d %H:%M:%S"), "secs": round(len(st["rows"]) / 10, 1),
-                                                  "best_db": round(st["best"], 1), "voice": st["voice"], "pre_blocks": self.PRE,
-                                                  "cols": ["db_over_noise", "pow_db", "floor_db", "mod", "am_open", "voice_ok", "gate_open"], "blocks": st["rows"]}) + "\n")
+                                                  "best_db": round(st["best"], 1), "best_cnr_db": round(st["cnr"], 1) if st["cnr"] is not None else None,
+                                                  "voice": st["voice"], "pre_blocks": self.PRE,
+                                                  "cols": ["db_over_noise", "pow_db", "floor_db", "mod", "am_open", "voice_ok", "gate_open", "cnr_db", "line_db"], "blocks": st["rows"]}) + "\n")
         except OSError: pass
     def end_visit(self):
         """the scan is leaving this window: the stream stops here, so every open file ends and the pre-roll is forgotten"""
@@ -167,6 +177,7 @@ class Channel:
         self.pin_why = ""                          # (v193) why it was pinned, for the log line
         self.rx = None; self.rx_was = False; self.rx_voice = 0     # (v196) airband.AmRx for this AM channel; its squelch last block; blocks with speech on the carrier
         self.rx_scan = False                       # (v197) part of a scan: nothing is played until speech shows on the carrier, and a carrier that never stops is locked out
+        self.cnr_hist = []                         # (v200) the last second of the receiver's carrier figure (None = no carrier line in that block)
         self.cv_max = 0.0; self.data_end = False   # (v193) FM: the most speech-like the envelope got during this opening; the data detector ended it without any
         self.env_hist = []; self.voice_mod = 0.0; self.voice_ok = False; self.am_blocks = 0   # syllabic modulation detector (AM): speech ~0.5-1.0, steady noise/carrier < 0.15
         self.pending = []; self.pending_raw = []; self.live = b""; self.max_mod = 0.0; self.open_n = 0; self.snr_sum = 0.0; self.confirmed = True   # confirmed: the last AM open carried speech (FM: always)
@@ -344,6 +355,7 @@ class Channel:
         rx = self.rx; g = self.gate
         pcm, is_open = rx.process(x)
         self.nblk += 1; g.n += 1
+        self.cnr_hist.append(float(rx.cnr_db) if rx.line_db >= rx.LINE_DB else None); del self.cnr_hist[:-10]
         self.pow_db = 10 * np.log10(float(np.mean(np.abs(x) ** 2)) + 1e-12)
         self.floor_db = self.pow_db - max(0.0, rx.cnr_db)                  # the meter's "dB over the noise" is the carrier-to-noise in a 6 kHz channel
         # "carrier" for the scan = one the squelch would open on or stay open for. (A line far under the squelch - Pearson's ATIS
@@ -706,7 +718,11 @@ class Channelizer:
             c0 = self.chans[0] if self.chans else None; rx = getattr(c0, "rx", None)
             if rx is not None:
                 m.update(open=bool(c0.gate.open), level=round(c0.gate.level), snr_db=round(rx.cnr_db, 1))
-                m["air"] = {"cnr_db": round(rx.cnr_db, 1), "carrier": bool(rx.line_db >= rx.LINE_DB), "open": bool(rx.open), "voice": bool(c0.confirmed),
+                # (v200) the figure is the median of the last second and "carrier" means a line in at least half of it (or an open
+                # squelch): one 0.1 s block of a carrier 6 dB under the noise jumps about by a dB or two, too restless to move an antenna by
+                hist = [v for v in list(c0.cnr_hist) if v is not None]; steady = len(hist) >= max(3, len(c0.cnr_hist) // 2)
+                m["air"] = {"cnr_db": round(float(np.median(hist)), 1) if steady else round(rx.cnr_db, 1), "carrier": bool(steady or rx.open),
+                            "open": bool(rx.open), "voice": bool(c0.confirmed),
                             "mod": round(rx.mod, 2), "offset_hz": round(rx.f_off), "threshold_db": round(rx.threshold, 1), "held_open": bool(rx.always)}
             return m
         n_all = sum(len(c) for _, c in self.groups)

@@ -2924,7 +2924,7 @@ try{const m=await (await fetch('/meter',{cache:'no-store'})).json();const l=$('#
  if(P.cur&&!P.err){const ps=$('#pstat');const where=P.cur.where==='mac'?('Mac sound out: '+(macOut||'?')):('this device · '+(P.bytes/1024).toFixed(0)+' KB · audio '+(actx?actx.state:'-'));
   // (v196) an airband channel says what the receiver sees: how strong the carrier is, or why it is silent
   const A=m.air;const air=A?(A.open&&A.carrier?'<b style="color:var(--acc)">ON AIR</b> · carrier '+Math.round(A.cnr_db)+' dB over noise'+(A.cnr_db<10?' (weak)':'')+(A.voice?'':' · no speech yet')
-    :(A.held_open?'squelch held open · no carrier':(A.carrier&&A.cnr_db>-5?'silent · a carrier is there but too weak ('+Math.round(A.cnr_db)+' dB, squelch at '+Math.round(A.threshold_db)+')':'silent · no carrier on this channel'))):'';
+    :(A.held_open?'squelch held open · no carrier':(A.carrier?'silent · carrier found, too weak: '+(A.cnr_db>=0?'+':'')+A.cnr_db.toFixed(1)+' dB against the noise (the squelch opens at +'+Math.round(A.threshold_db)+')':'silent · no carrier on this channel'))):'';
   ps.innerHTML=(A?air:(m.data?'<span class="tag sdr">DATA - muted (not voice)</span>':(m.open?'<b style="color:var(--acc)">ON AIR</b>':'squelch closed · nothing on this channel right now')))+' · '+where;}
  const base=$('#pname').textContent.replace(/ · (CTCSS|DATA).*$/,'');if(m.tones)$('#pname').innerHTML=esc(base)+' · <span class="tag tone">'+esc(m.tones)+'</span>';}catch(e){}}
 let macOut='';async function getOut(){try{const r=await (await fetch('/api/sound')).json();macOut=r.device||'';}catch(e){}}getOut();setInterval(getOut,15000);

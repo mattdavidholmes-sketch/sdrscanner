@@ -89,6 +89,7 @@ var T=[ /* label, hint, kind, a, b */
  ["Airport","Pearson + Billy Bishop","mon","Airport"],
  ["Arrivals","Pearson · all arrival channels","mon","YYZ Arrivals"],
  ["Departures","Pearson · 127.575 + 128.800","mon","YYZ Departures"],
+ ["Antenna test","Pearson ATIS · signal meter","one",120.825,"am","YYZ ATIS 120.825"],
  ["ROADS Toronto","plows · salt · SNOWTO","dig","dmrt:939.1375","ROADS Toronto"],
  ["Fire / EMS (all 4 sites)","West+South+North+East at once","dig","p25:Fire + EMS - All 4 Sites Combined","Fire + EMS Combined"],
  ["Fire / EMS - West","P25 West Simulcast","dig","p25:West Simulcast","Fire / EMS West"],
@@ -107,7 +108,7 @@ var T=[ /* label, hint, kind, a, b */
  ["Top today","busiest 20 channels","mon","Top"],
  ["Everything","all heard channels","mon",""]
 ];
-var DIGEL=null,DIGT=0,DIGN=0,HOLDING=false,cur=null,actx=null,gain=null,WA=null,abort=null,seq=0,nextT=0,DIGA=null,lastMeter=null;
+var DIGEL=null,DIGT=0,DIGN=0,HOLDING=false,cur=null,actx=null,gain=null,WA=null,abort=null,seq=0,nextT=0,DIGA=null,lastMeter=null,airBest=null;
 
 /* ---------- audio: Web Audio -> MediaStream -> <audio>, so the phone plays it like any media (speaker, Bluetooth, silent switch, lock screen) ---------- */
 function ensure(){
@@ -164,6 +165,10 @@ async function start(i){
  if(t[2]==='mon'){
   await j('/api/sdrt/stop');
   var cat=t[3];pcm('/stream?raw=1&mhz=1&mode=monitor&sq=auto&voice=1&name='+encodeURIComponent('Monitor: '+t[0])+'&cat='+encodeURIComponent(cat)+'&t='+Date.now(),my);
+ }else if(t[2]==='one'){ /* one channel on its own - the airband receiver; used as an antenna meter on a carrier that never stops */
+  await j('/api/sdrt/stop');airBest=null;
+  pcm('/stream?raw=1&mhz='+t[3]+'&mode='+t[4]+'&sq=auto&voice=1&name='+encodeURIComponent(t[5])+'&t='+Date.now(),my);
+  say('Move the antenna and watch the number: higher is better. Sound starts at +4 dB.');refresh();return;
  }else if(t[2]==='dig'){
   var r=await j('/api/sdrt/play?target='+encodeURIComponent(t[3]));
   if(r.error){say(r.error);return;}
@@ -182,17 +187,25 @@ function paintTiles(){var el=$('#tiles');if(!el.children.length){T.forEach(funct
 async function refresh(){
  var m=await j('/meter');if(m.error){$('#st').textContent='OFFLINE';return;}
  lastMeter=m;var mo=m.monitor||{},sd=m.sdrtrunk||{};
- var el=$('#now'),st='IDLE',fq='—',nm='Pick a channel group below',sub='';
+ var el=$('#now'),st='IDLE',fq='—',nm='Pick a channel group below',sub='',airLv=null;
  if(sd.alive&&sd.target){st=sd.problem?'NO RADIO':(sd.calls&&sd.calls.length&&sd.calls[0].live?'ON A CALL':'DECODING');nm=sd.name||sd.target;sub=sd.problem?('⚠ '+sd.problem):(sd.note||'');if(sd.stream&&cur&&!DIGA)digAudio();}
  else if(m.playing){
   var held=HOLDING;
   st=held?'HOLD':(m.open?'STOPPED ON':'SCANNING');
   var f=mo.active||mo.mhz||m.playing;if(f&&f>1){fq=(+f).toFixed(4)+' MHz';}
   nm=mo.name||m.name||'';sub=(mo.lap_s?('lap '+mo.lap_s+' s · '):'')+(mo.n?(mo.n+' channels'):'');
+  if(m.air){ /* one airband channel: the receiver's own figure - the carrier against the noise in the channel */
+   var A=m.air,c=+A.cnr_db,sg=function(v){return (v>=0?'+':'')+v.toFixed(1);};
+   if(A.carrier&&(airBest===null||c>airBest))airBest=c;
+   st=A.open?'ON AIR':(A.carrier?'TOO WEAK':'NO CARRIER');
+   fq=A.carrier?(sg(c)+' dB'):'— dB';nm=(m.name||nm)+(f&&f>1&&String(m.name||'').indexOf((+f).toFixed(3))<0?' · '+(+f).toFixed(4)+' MHz':'');
+   sub=(A.carrier?'carrier against the noise':'no carrier found')+' · sound from +'+Math.round(A.threshold_db)+' dB'+(airBest!==null?' · best so far '+sg(airBest):'');
+   airLv=A.carrier?Math.max(0.03,Math.min(1,(c+10)/30)):0;
+  }
  }
- el.className='now'+(st==='IDLE'?'':(st==='HOLD'?' hold':' on'));
+ el.className='now'+(st==='IDLE'?'':((st==='HOLD'||st==='TOO WEAK'||st==='NO CARRIER')?' hold':' on'));
  $('#st').textContent=st;$('#fq').textContent=fq;$('#nm').textContent=nm;$('#sub').textContent=sub;
- $('#lv').style.width=Math.min(100,Math.round((m.level||0)*100))+'%';
+ $('#lv').style.width=Math.min(100,Math.round((airLv!==null?airLv:(m.level||0))*100))+'%';
  $('#bhold').classList.toggle('act',st==='HOLD');$('#bhold').textContent=st==='HOLD'?'RESUME':'HOLD';
 }
 $('#bhold').onclick=async function(){var r=await j('/scanner/'+(HOLDING?'resume':'hold'));if(r.error)say(r.error);else HOLDING=!!r.hold;refresh();};
