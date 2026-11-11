@@ -681,9 +681,14 @@ def dmrscan_tick():
         r = dmrscan_next()
         if r.get("error"): DMRSCAN["on"] = False; dmrscan_persist(); v1.say("DMR scan: " + r["error"])
 
+_LAST_UREQ = {"target": None, "t": 0.0}
 def sdrt_user_start(target):
-    if target and target == SDRT.get("target") and time.time() - SDRT.get("started", 0) < 5:     # (v173) a double tap (or two devices) used to launch
-        SDRT["auto"] = False; return {"ok": True, "name": SDRT.get("name"), "already": True}      # SDRTrunk twice 2 s apart - the second start killed the first
+    # (v173/v177) a double tap (or two devices) used to launch SDRTrunk twice 2 s apart - the second start killed the first. v173 compared
+    # against SDRT["target"], which the first request has not set yet when the second arrives; the request itself is remembered now.
+    now = time.time()
+    if target and target == _LAST_UREQ["target"] and now - _LAST_UREQ["t"] < 6:
+        SDRT["auto"] = False; return {"ok": True, "name": SDRT.get("name"), "already": True}
+    _LAST_UREQ.update(target=target, t=now)
     SDRT["auto"] = False
     if DMRSCAN["on"] and target != SDRT.get("target"):            # (v152) a listen you chose beats the DMR scan: the scan must not hop away from it 90 s later
         DMRSCAN["on"] = False; dmrscan_persist(); v1.say("DMR scan stopped - you picked a listen")
@@ -732,7 +737,6 @@ def _sdrt_rec_loop():
                 if "baseband" in f.lower() or os.path.basename(f).startswith("RTL") or os.path.getmtime(f) < _SDRT_T0: _SDRT_SEEN.add(f); continue   # raw IQ captures / old files are not calls
                 _SDRT_SEEN.add(f)
                 base = os.path.basename(f)                               # e.g. 20261104_190212_463312500_463.3125 Bearcom_TO_123_FROM_456.wav
-                import re
                 m = re.search(r"_(\d{9})_", base); mhz = int(m.group(1)) / 1e6 if m else 0.0
                 tg = re.search(r"TO_(\d+)", base); who = ("TG" + tg.group(1)) if tg else "call"
                 stamp = base[:15] if re.match(r"\d{8}_\d{6}", base) else dt.datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -1734,7 +1738,7 @@ class H2(v1.H):
             try:
                 tg = int(q.get("tg", ["0"])[0]); solo_set(tg); restarted = False
                 if SDRT.get("target") and sdrt_running():                       # SDRTrunk reads aliases at start: restart it (about 3 s)
-                    sdrt_user_start(SDRT["target"]); restarted = True
+                    _LAST_UREQ["t"] = 0; sdrt_user_start(SDRT["target"]); restarted = True
                 return self.send(json.dumps({"ok": True, "solo": tg, "restarted": restarted}), "application/json")
             except Exception as e: return self.send(json.dumps({"error": str(e)}), "application/json")
         if u.path == "/api/sdrt/solo/state": return self.send(json.dumps(solo_load()), "application/json")

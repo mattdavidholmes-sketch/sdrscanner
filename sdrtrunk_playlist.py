@@ -29,7 +29,11 @@ P25_SITES = [
     # sites; all 16 of their frequencies span only 1.625 MHz, which fits in one 2.4 MHz dongle window - so one channel definition
     # with every site's control/traffic frequency hears whichever site is actually carrying the call, instead of just one site at a
     # time. This does NOT add TTC: TTC's own bus/subway radio is TETRA, a different system SDRTrunk cannot decode at all.
-    ("Fire + EMS - All 4 Sites Combined", False, [769.93125, 770.18125, 770.43125, 770.50625, 770.53125, 770.58125, 770.60625, 770.63125, 770.68125, 770.75625, 770.78125, 770.80625, 770.83125, 770.88125, 771.00625, 771.55625]),
+    # (v177) Order matters: SDRTrunk tries these one at a time, in this order, until it finds a control channel, and comes back to the
+    # top of the list whenever it loses lock. Sorted by frequency it started on South's channels and took 2-49 s to settle (West alone:
+    # 0-1 s). West first (the strongest site here, 770.58125 is its control channel), then South, North, East.
+    ("Fire + EMS - All 4 Sites Combined", False, [770.58125, 770.63125, 770.83125, 771.55625, 769.93125, 770.18125, 770.68125, 771.00625,
+                                                 770.43125, 770.50625, 770.75625, 770.80625, 770.53125, 770.60625, 770.78125, 770.88125]),
     # (v175) Toronto Fire's main dispatch talkgroup (TFS Disp 1, 1401) is assigned 774.29375 MHz almost every time. That is 2.74 MHz above
     # the highest control channel (771.55625), just outside what one RTL dongle can hold together with the control channel, so SDRTrunk
     # rejected those calls ("tuner unavailable"). This entry listens on 774.29375 directly as a P25 Phase 1 voice channel: dispatch only,
