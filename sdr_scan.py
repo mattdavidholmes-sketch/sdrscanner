@@ -634,7 +634,8 @@ td small{{color:var(--mute);font-size:.75rem}}
     with open(os.path.join(outdir, "report.html"), "w") as f: f.write(html)
 
 # ---------------------------------------------------------------- commands
-def _term(*_): raise KeyboardInterrupt
+_KILLED = [False]                          # set when the dashboard (or a reset) stops this scan with SIGTERM
+def _term(*_): _KILLED[0] = True; raise KeyboardInterrupt
 def cmd_scan(a):
     signal.signal(signal.SIGTERM, _term)                                     # pkill from the dashboard: stop the child sweep, write results
     if not shutil.which("rtl_power"):
@@ -742,7 +743,9 @@ def cmd_scan(a):
         hits += hs
     write_outputs(hits, outdir, a.location, load_known(a.known), started, a.hours, a.max_channels)
     print(f"\nDone. {len(hits)} hits.\n  {outdir}/report.html\n  {outdir}/chirp_uv32.csv\n  {outdir}/results.csv")
-    if sys.platform == "darwin": subprocess.call(["open", os.path.join(outdir, "report.html")])
+    # (v185) Only a scan you ran yourself in a Terminal window opens its report when it ends. A sweep the dashboard started, or one it
+    # stops to start another (every press of a category chip), used to open report.html in a new browser tab each time.
+    if sys.platform == "darwin" and sys.stdout.isatty() and not _KILLED[0]: subprocess.call(["open", os.path.join(outdir, "report.html")])
 
 def cmd_report(a):
     started = dt.datetime.now()

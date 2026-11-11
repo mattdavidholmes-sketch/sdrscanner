@@ -2742,6 +2742,7 @@ if __name__ == "__main__":
         time.sleep(0.2)
     time.sleep(1.5); v1.give_dongle_back()
     print(f"Dashboard v2: http://localhost:{PORT}   (phone: http://{v1.lan_ip()}:{PORT})   Ctrl-C to stop")
-    if sys.platform == "darwin": subprocess.Popen(["open", f"http://localhost:{PORT}"])
+    if sys.platform == "darwin" and not os.environ.get("SDR_RESTARTED"):   # (v185) a cold start opens the dashboard once; a restart of itself does not open another tab
+        subprocess.Popen(["open", f"http://localhost:{PORT}"])
     try: ThreadingHTTPServer(("0.0.0.0", PORT), H2).serve_forever()
     finally: v1.stop_player()
