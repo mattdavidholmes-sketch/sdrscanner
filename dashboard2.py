@@ -36,8 +36,8 @@ def _kill_strays():
     try:
         for ln in subprocess.run(["ps", "axo", "pid=,command="], capture_output=True, text=True, timeout=5).stdout.splitlines():
             pid, _, cmd = ln.strip().partition(" ")
-            m = re.search(r"/(sdr_scan|fastscan|dashboard2?)\.py", cmd)             # launched by absolute path ...
-            if m and pid.isdigit() and int(pid) != os.getpid() and (here + m.group(0)) not in cmd:      # ... that is not this folder
+            m = re.match(r"\S*[Pp]ython\S*\s+(?:-\S+\s+)*(/(?:(?!\.py\s).)*?/(?:sdr_scan|fastscan|dashboard2?)\.py)(?:\s|$)", cmd)   # (v181) Python RUNNING one of these by absolute path ...
+            if m and pid.isdigit() and int(pid) != os.getpid() and os.path.realpath(os.path.dirname(m.group(1))) != here:   # ... from a folder that is not this one
                 subprocess.call(["kill", pid]); print(f"stopped a stray process from another copy: {cmd[:120]}", flush=True)
     except Exception: pass
 _kill_strays()
@@ -1425,7 +1425,7 @@ def air_extras(x):
     if "YYZ" in p:
         tr = (x.get("track") or 0) % 360
         rw = next((n for c, n in ((57, "05/06"), (237, "23/24"), (147, "15"), (327, "33")) if abs((tr - c + 180) % 360 - 180) <= 25), "")
-        x["runway"] = rw
+        x["runway"] = x.get("rwy") or rw                                    # (v181) the exact runway when it is lined up with one, else the direction
     else: x["runway"] = ""
     return x
 
@@ -1481,8 +1481,8 @@ YYZ_LL = (43.6777, -79.6248); YTZ_LL = (43.6275, -79.3962)
 AIR_CH = {"twrE": (118.700, "YYZ TWR E"), "twrW": (118.350, "YYZ TWR W"), "gndN": (121.650, "YYZ GND N"), "gndS": (121.900, "YYZ GND S"),
           "apron": (122.825, "YYZ APRON"), "clnc": (121.300, "YYZ CLNC"), "atis": (120.825, "YYZ ATIS"), "ytzTwr": (118.200, "YTZ TWR"),
           "ytzGnd": (121.700, "YTZ GND"), "vfr": (133.400, "TOR VFR"), "guard": (121.500, "AIR GUARD"),
-          "arr": [(124.475, "YYZ ARR 1"), (125.400, "YYZ ARR 2"), (132.800, "YYZ ARR 3"), (134.175, "YYZ ARR 4")],
-          "dep": [(127.575, "YYZ DEP 1"), (128.800, "YYZ DEP 2")]}
+          "arr": [(132.800, "YYZ ARR 3"), (124.475, "YYZ ARR 1"), (125.400, "YYZ ARR 2")],      # (v181) main arrival channel first; 134.175 is the ILS monitor
+          "dep": [(128.800, "YYZ DEP 2"), (127.575, "YYZ DEP 1")]}
 
 def _dist_brg(a, b):
     import math
@@ -1566,9 +1566,13 @@ def aircraft_now(max_age=10):
             sys.path.insert(0, os.path.join(HERE, "_helpers")); import follow_traffic as FT
             for x in out:
                 try:
-                    p2 = FT.phase(x); f2 = [tuple(f) for f in FT.freqs(dict(x, phase=p2))]
+                    p2 = FT.phase(x)
                     if p2: x["phase"] = p2
-                    if f2: x["freqs"] = f2 + [f for f in x["freqs"] if f not in f2]
+                    if hasattr(FT, "detail"):                                    # (v181) one rule set: why, channels (most likely first), the runway it is lined up with
+                        x["why"], f2, x["rwy"] = FT.detail(x); x["freqs"] = [tuple(f) for f in f2]
+                    else:
+                        f2 = [tuple(f) for f in FT.freqs(dict(x, phase=p2))]
+                        if f2: x["freqs"] = f2 + [f for f in x["freqs"] if f not in f2]
                 except Exception: pass
         except Exception: pass
         for x in out:
@@ -2271,8 +2275,8 @@ details.card[open]>summary{margin-bottom:10px}
    <div id="alrules" class="sv" style="margin:8px 0"></div><div id="allog"></div></div></div>
   <div class="tablewrap" id="recs"></div></section>
  <section id="tab-air" style="display:none">
-  <div class="card"><h3>Aircraft over Toronto right now <span id="aircount" class="tag"></span> <span id="airsrc" class="tag" style="font-weight:normal"></span> <span style="float:right;display:inline-flex;gap:6px"><button class="pri" id="airtune" title="tune the radio to the channel the nearest airborne aircraft is most likely on">🎯 Tune nearest</button><button class="ghost" id="airfollow" title="keep re-tuning to whoever is nearest (every 15 s, only while this started the listen)">Follow nearest</button><button class="ghost" id="airtraffic" title="Monitor every channel the planes are on right now, all at once - the list re-derives itself from ADS-B at the start of every lap (_helpers/follow_traffic.py)">✈ Follow traffic</button></span></h3>
-   <p class="sub">Tap any aircraft (here or in the ✈ nearest-now line) for its details and the channels it is most likely on - ▶ tunes the radio to it immediately. Live ADS-B within 60 nm of home, nearest first, refreshed every 10 s. Source order: <b>your own SDR receiver</b> (put its aircraft.json URL in <code>aircraft_source.txt</code> when your flightradar app is running) → Flightradar24 API (token in <code>fr24_api_key.txt</code>) → open community feeds (adsb.fi / adsb.lol, no key) → OpenSky. The speech engine is primed with these callsigns so airband transcripts name the aircraft. Click a flight to open it in Flightradar24. Emergency squawks (7500/7600/7700) are flagged red.</p>
+  <div class="card"><h3>Every aircraft within 60 nm <span id="aircount" class="tag"></span> <span id="airsrc" class="tag" style="font-weight:normal"></span> <span style="float:right;display:inline-flex;gap:6px"><button class="pri" id="airtune" title="tune the radio to the channel the nearest airborne aircraft is most likely on">🎯 Tune nearest</button><button class="ghost" id="airfollow" title="keep re-tuning to whoever is nearest (every 15 s, only while this started the listen)">Follow nearest</button><button class="ghost" id="airtraffic" title="Monitor every channel the planes are on right now, all at once - the list re-derives itself from ADS-B at the start of every lap (_helpers/follow_traffic.py)">✈ Follow traffic</button></span></h3>
+   <details class="airhelp"><summary>How this works</summary><p class="sub">Positions are live ADS-B within 60 nm of home, nearest first, refreshed every 10 s: <b>your own receiver</b> if <code>aircraft_source.txt</code> holds its aircraft.json URL, else Flightradar24 (token in <code>fr24_api_key.txt</code>), else the open adsb.fi / adsb.lol feeds, else OpenSky. The channel shown for an aircraft is <b>worked out from where it is and what it is doing</b> (lined up with a runway, climbing out, on the ground) - it is not read off the radio. It is certain only once the scanner hears that callsign on a channel, which shows as ✓ heard. Tap a row for the details, ▶ to tune. Emergency squawks (7500/7600/7700) are red.</p></details>
    <div id="airemerg"></div>
    <div id="airboard" class="sub" style="margin:6px 0 10px"></div>
    <div id="airtoday" class="sub" style="margin:0 0 10px"></div>
@@ -2345,9 +2349,8 @@ async function appRestart(f){if(f&&!confirm('Restart the dashboard right now? An
 const SPEC={key:null,pin:false,data:null,t:0};
 let AIRLAST=null;async function loadAir(){try{const a=await (await fetch('/api/aircraft')).json();AIRLAST=a;$('#aircount').textContent=a.n||0;$('#airsrc').textContent=a.source?('via '+a.source):'';let heard={};try{const s=await (await fetch('/api/recent_text')).json();heard=s||{};}catch(e){}
  $('#airemerg').innerHTML=(a.emergencies||[]).length?`<p style="color:var(--red);font-weight:600">⚠ Emergency squawk: ${a.emergencies.map(esc).join(', ')}</p>`:'';
- const arr=(a.arrivals||[]),hel=(a.helis||[]);
- $('#airboard').innerHTML=(arr.length?`<div class="card" style="padding:8px 12px;margin-bottom:8px"><b>Pearson arrivals board</b> <span class="sv">next ${arr.length}, by minutes to the field</span><table class="alist" style="margin-top:4px"><thead><tr><th>ETA</th><th>Flight</th><th>Type</th><th>From</th><th>Runway</th><th>Alt</th><th>Listen</th></tr></thead><tbody>${arr.map(x=>`<tr style="cursor:pointer" onclick="openAir('${esc(x.icao)}')"><td><b>${x.eta_min} min</b></td><td style="font-family:var(--mono)">${esc(x.callsign)}</td><td class="sv">${esc(x.type||'')}</td><td class="sv">${esc((x.route||'').split(' → ')[0]||'')}</td><td class="sv">${esc(x.runway||'—')}</td><td class="sv">${x.alt_ft?x.alt_ft.toLocaleString()+' ft':'—'}</td><td>${(x.freqs||[]).map(f=>`<button class="ghost" style="padding:2px 8px;font-size:.85em" onclick="event.stopPropagation();tuneAir(${f[0]},'${esc(f[1])}')">▶ ${esc(f[1])}</button>`).join(' ')}</td></tr>`).join('')}</tbody></table></div>`:'')
- +(hel.length?`<div class="card" style="padding:8px 12px"><b>🚁 Helicopters</b> ${hel.map(x=>`<button class="ghost" style="padding:2px 8px;margin-left:6px" onclick="openAir('${esc(x.icao)}')">${esc(x.callsign)} <span class="sv">${esc(x.type||'')}${x.operator?' · '+esc(x.operator):''} · ${x.km} km ${['N','NE','E','SE','S','SW','W','NW'][Math.round((x.bearing||0)/45)%8]}${x.alt_ft?' · '+x.alt_ft.toLocaleString()+' ft':''}</span></button>`).join('')}</div>`:'');
+ const hel=(a.helis||[]);
+ $('#airboard').innerHTML=(hel.length?`<div class="card" style="padding:8px 12px"><b>🚁 Helicopters</b> ${hel.map(x=>`<button class="ghost" style="padding:2px 8px;margin-left:6px" onclick="openAir('${esc(x.icao)}')">${esc(x.callsign)} <span class="sv">${esc(x.type||'')}${x.operator?' · '+esc(x.operator):''} · ${x.km} km ${['N','NE','E','SE','S','SW','W','NW'][Math.round((x.bearing||0)/45)%8]}${x.alt_ft?' · '+x.alt_ft.toLocaleString()+' ft':''}</span></button>`).join('')}</div>`:'');
  const dirn=b=>['N','NE','E','SE','S','SW','W','NW'][Math.round(b/45)%8];
  const vr=x=>x.vrate?(x.vrate>200?' ↑':x.vrate<-200?' ↓':''):'';
  $('#airrows').innerHTML=(a.aircraft||[]).length?a.aircraft.map(x=>`<tr class="acrow" data-icao="${esc(x.icao)}" style="cursor:pointer${x.emergency?';color:var(--red)':''}"><td><a href="${x.fr24}" target="_blank" rel="noopener" style="color:var(--acc);font-family:var(--mono)">${esc(x.callsign||x.icao)}</a>${x.heli?' 🚁':''}${x.on_ground?' <span class="tag">ground</span>':''}${x.emergency?' <span class="tag" style="background:var(--red);color:#fff">'+esc(x.squawk)+'</span>':''}</td><td class="sv">${esc((a.spoken||{})[x.callsign]||'')}</td><td class="sv">${esc(x.route||'')}</td><td class="sv" title="${esc(x.desc||'')}">${esc(x.type||'')}${x.reg?' <span class="mute">'+esc(x.reg)+'</span>':''}${x.operator?'<br><span class="mute" style="font-size:.85em">'+esc(x.operator)+'</span>':''}</td><td>${x.km} km ${dirn(x.bearing)}</td><td class="sv">${x.alt_ft?x.alt_ft.toLocaleString()+' ft'+vr(x):'—'}</td><td class="sv">${x.speed_kt?x.speed_kt+' kt':'—'}</td><td class="sv">${x.track}°</td><td class="sv">${heard[x.callsign]?'✓ '+esc(heard[x.callsign]):''}</td></tr>`).join(''):`<tr><td colspan="9" class="empty">${a.error?'no ADS-B source reachable ('+esc(a.error)+')':'nothing airborne within 60 nm right now'}</td></tr>`;$$('#airrows tr.acrow').forEach(r=>r.onclick=e=>{if(e.target.closest('a'))return;openAir(r.dataset.icao);});capList($('#airrows').closest('table'),'tbody>tr','air');followTick();}catch(e){$('#airrows').innerHTML='<tr><td colspan="9" class="empty">'+esc(e.message)+'</td></tr>';}}
