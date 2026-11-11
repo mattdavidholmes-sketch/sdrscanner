@@ -98,7 +98,9 @@ class Channel:
                     if self.open_blocks >= 200: self.floor_db = self.pow_db; self.open_blocks = 0; self.pinned = True   # continuous carrier: not voice
                 if not self.am_open: self.open_blocks = 0
                 snr = self.pow_db - self.floor_db
-                self.am_open = self.nblk > 5 and (snr > self.carrier_margin or (self.am_open and snr > self.carrier_margin - 0.7)); self.carrier = self.am_open
+                # (v178) once speech is confirmed the carrier may sag to 0.3 dB over the floor before the channel is called closed (was 0.8 dB:
+                # a weak aircraft fluttering around the threshold was chopped into pieces)
+                self.am_open = self.nblk > 5 and (snr > self.carrier_margin or (self.am_open and snr > self.carrier_margin - (1.2 if self.voice_ok else 0.7))); self.carrier = self.am_open
                 # audio = envelope minus the carrier, normalised by the carrier (so a weak carrier and a strong one sound the same).
                 # The carrier estimate is smoothed across blocks: using each block's own median put a DC step (a click) at every edge.
                 self.car = med if self.car is None else 0.85 * self.car + 0.15 * med
@@ -135,17 +137,26 @@ class Channel:
             # modulation depth 0.5-1.0 over a second, the noise clips whisper called "Thank you" had 0.06-0.11. The carrier gets 0.6 s to
             # prove itself; once speech is confirmed the channel stays open until the carrier drops (pauses do not close it).
             if self.am_open: self.am_blocks += 1
-            else: self.am_blocks = 0; self.voice_ok = False
+            else:
+                self.am_blocks = 0
+                if self.am_hang <= 0: self.voice_ok = False                      # (v178) a 0.1-0.4 s carrier dropout does not un-confirm the call
             if self.am_open and self.am_blocks == 1: self.confirmed = False           # a new open: nothing proven yet
             snr_now = self.pow_db - (self.floor_db if self.floor_db is not None else self.pow_db)
             # (v155 6 Nov) a carrier 8+ dB over the floor is a real transmission (noise blips sit at ~2 dB): it opens at once and the scanner STAYS until it
             # drops - the speech detector alone refused weak-modulation calls (carrier 13 dB up, mod 0.19) after 0.6 s and the scan hopped away mid-call
-            if self.am_open and (self.voice_mod > 0.3 or snr_now >= 8.0): self.voice_ok = True; self.confirmed = True
-            g.open = g.n > AU.SETTLE and self.am_open and (self.voice_ok or self.am_blocks <= (12 if snr_now >= 4.0 else 6))
+            # (v178) monitor_opens.log, 8-10 Nov: 94% of 3,312 airband opens were cut at 0.6 s and half of them re-opened within 3 s - weak calls
+            # (carrier ~2 dB up, modulation ~0.14) were played in 0.6 s pieces. A carrier 3+ dB up with some modulation, or one that simply
+            # lasts 0.8 s at 2.5+ dB, is a transmission too (noise blips do neither); weak carriers get 1.0 s to prove themselves instead of 0.6.
+            if self.am_open and (self.voice_mod > 0.3 or snr_now >= 8.0 or (snr_now >= 3.0 and self.voice_mod > 0.18) or (self.am_blocks >= 8 and snr_now >= 2.5)):
+                self.voice_ok = True; self.confirmed = True
+            carrier_ok = self.am_open and (self.voice_ok or self.am_blocks <= (12 if snr_now >= 4.0 else (10 if snr_now >= 2.5 else 6)))
+            if carrier_ok and self.voice_ok: self.am_hang = 4                          # confirmed speech: ride through 0.4 s of carrier flutter
+            elif not self.am_open and self.am_hang > 0: self.am_hang -= 1
+            g.open = g.n > AU.SETTLE and (carrier_ok or (self.am_hang > 0 and not self.am_open))
             self.weak_blocks = 0
             # airband is analog by definition: no digital veto
             g.data = False; g.data_latched = False
-            gated = raw if g.open else bytes(len(raw))
+            gated = raw if (g.open and self.am_open) else bytes(len(raw))            # during the flutter hang the channel stays open but silent (no hiss burst)
         if g.open and not (g.data or (g.data_latched and g.data_blocks >= 10)):
             if self.open_since is None: self.open_since = t_block
             self.last_open = t_block

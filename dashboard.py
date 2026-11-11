@@ -1739,6 +1739,8 @@ class H(BaseHTTPRequestHandler):
                 USER_WANTS.clear(); give_dongle_back(0); return self.send(f"could not start the receiver: {e}", "text/plain", 500)
             USER_WANTS.clear()
             with _lock: _player.update(session=ses, mhz=mhz, since=time.time(), where="browser", gate=ses.gate, mode=mode, manual=manual)
+            _dd = getattr(self, "_dongle_done", None)                 # (v178) the receiver is running: the one-command-at-a-time gate can open again
+            if _dd: _dd()
             self.send_response(200); self.send_header("Content-Type", "application/octet-stream" if raw else "audio/wav"); self.send_header("Cache-Control", "no-store"); self.send_header("Transfer-Encoding", "chunked"); self.end_headers()
             def chunk(b): self.wfile.write(b"%x\r\n" % len(b) + b + b"\r\n")
             try:

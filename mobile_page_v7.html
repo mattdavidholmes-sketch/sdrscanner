@@ -143,7 +143,9 @@ function say(t){$('#msg').textContent=t||'';}
 async function j(u){try{var r=await fetch(u,{cache:'no-store'});return await r.json();}catch(e){return {error:e.message};}}
 async function serverStop(){await j('/api/sdrt/dmrscan?on=0');await j('/api/sdrt/stop');await fetch('/stop').catch(function(){});}
 async function stopAll(){stopAudio();cur=null;paintTiles();await serverStop();refresh();}
+var startT=0;
 async function start(i){
+ if(Date.now()-startT<1500){say('one at a time - the radio is still switching');return;}startT=Date.now();
  var t=T[i];ensure();stopAudio();var my=seq;cur={i:i,name:t[0]};paintTiles();say('starting '+t[0]+'…');
  await j('/api/sdrt/dmrscan?on=0');
  if(t[2]==='mon'){

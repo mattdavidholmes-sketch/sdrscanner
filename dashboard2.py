@@ -681,6 +681,26 @@ def dmrscan_tick():
         r = dmrscan_next()
         if r.get("error"): DMRSCAN["on"] = False; dmrscan_persist(); v1.say("DMR scan: " + r["error"])
 
+# (v178) One dongle command at a time. Every request that opens the dongle (tune, stream, SDRTrunk play, siren search, sweep, digital
+# scan) takes this gate; a second one that arrives before the first has finished is refused instead of queued. Two opens racing each
+# other was what double-clicks did: the second killed the first mid-claim, and the dongle dropped off USB. Stops are never refused.
+DG = {"busy": False, "what": "", "t0": 0.0}
+DG_LOCK = __import__("threading").Lock()
+DG_OPEN = {"/playmac": "tuning", "/stream": "tuning", "/api/sdrt/play": "starting SDRTrunk", "/api/sirens": "the siren search", "/api/scan": "starting a sweep",
+           "/api/sdrt/solo": "restarting SDRTrunk", "/api/sdrtrunk": "the hand-over to SDRTrunk"}
+def dg_what(u):
+    if u.path in DG_OPEN: return DG_OPEN[u.path]
+    if u.path == "/api/sdrt/dmrscan":
+        q = parse_qs(u.query)
+        if q.get("on", [""])[0] == "1" or q.get("next", [""])[0] == "1": return "the digital scan"
+    return None
+def dg_enter(what):
+    now = time.time()
+    with DG_LOCK:
+        if DG["busy"] and now - DG["t0"] < 45: return False, DG["what"]      # 45 s: a command that never finished cannot lock the dongle for good
+        DG.update(busy=True, what=what, t0=now); return True, ""
+def dg_exit():
+    with DG_LOCK: DG["busy"] = False
 _LAST_UREQ = {"target": None, "t": 0.0}
 def sdrt_user_start(target):
     # (v173/v177) a double tap (or two devices) used to launch SDRTrunk twice 2 s apart - the second start killed the first. v173 compared
@@ -1662,6 +1682,20 @@ class H2(v1.H):
     def do_GET(self):
         u = urlparse(self.path)
         if not gate(self): return
+        what = dg_what(u)
+        if not what: return self._get(u)
+        ok, cur = dg_enter(what)
+        if not ok:
+            msg = f"One command at a time: the dongle is still busy with {cur}. Try again in a moment."
+            if u.path in ("/playmac", "/stream"): return self.send(msg, "text/plain", 409)
+            return self.send(json.dumps({"error": msg, "busy": True}), "application/json")
+        state = {"done": False}
+        def done():
+            if not state["done"]: state["done"] = True; dg_exit()
+        self._dongle_done = done                                      # /stream calls this once the receiver is running (it then streams for as long as you listen)
+        try: return self._get(u)
+        finally: done()
+    def _get(self, u):
         if u.path == "/playmac" and is_remote(self): return self.send("Mac speakers are not available remotely - set Output to 'this device'.", "text/plain", 403)
         if u.path in ("/playmac", "/stream") and (sdrt_running() or os.path.exists(SDRT_FLAG)):
             sdrt_stop(handback=False)                    # an analog listen takes the dongle from SDRTrunk first (the sweep stays paused), and waits until Java has let go
@@ -2159,6 +2193,28 @@ main{padding-bottom:270px!important}
 #sirenbtn{flex:1 1 140px!important;width:auto!important;min-height:40px!important;padding:6px 10px!important;font-size:.95rem!important;margin:0!important}
 }
 #chips{display:flex;flex-wrap:wrap;gap:6px}.chip{white-space:nowrap}
+/* (v178) Digital tab: one list of systems, each row opens to its frequencies */
+.dgh{font:600 .74rem/1 var(--mono);letter-spacing:.1em;text-transform:uppercase;color:var(--mute);margin:16px 2px 6px}
+.dgx{border:1px solid var(--line);border-radius:12px;margin:6px 0;background:rgba(255,255,255,.02)}
+.dgx[open]{border-color:var(--acc)}
+.dgx>summary{list-style:none;display:flex;align-items:center;gap:10px;padding:7px 12px;cursor:pointer;min-height:48px}
+.dgx>summary::-webkit-details-marker{display:none}
+.dgx>summary::after{content:'▾';margin-left:auto;color:var(--mute);flex:0 0 auto}
+.dgx[open]>summary::after{content:'▴'}
+.dgx>summary .play{flex:0 0 auto}
+.dgn{font-weight:700;font-size:1.02rem;min-width:0;flex:1 1 180px}
+.dgx>summary .tag{flex:0 0 auto;white-space:nowrap}
+.dgs{color:var(--acc);font-size:.9rem;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:40%}.dgs:empty{display:none}
+.dgb{padding:6px 12px 10px;border-top:1px solid var(--line)}
+.dgf{display:flex;align-items:center;gap:10px;padding:5px 0;border-bottom:1px solid rgba(255,255,255,.05);flex-wrap:wrap}
+.dgf:last-child{border-bottom:0}.dgf .f{font-family:var(--mono);font-weight:600;min-width:96px}
+.dgx.dg-roads{background:rgba(255,210,60,.10)}
+details.card>summary{cursor:pointer;list-style:none;display:flex;align-items:center;gap:8px}
+details.card>summary::-webkit-details-marker{display:none}
+details.card>summary h3{margin:0;flex:1 1 auto}
+details.card>summary::after{content:'▾';color:var(--mute)}details.card[open]>summary::after{content:'▴'}
+details.card[open]>summary{margin-bottom:10px}
+@media(max-width:760px){.dgx>summary .tag{display:none}.dgn{flex:1 1 0;font-size:1rem}.dgs{max-width:34%}}
 </style></head><body><div class="app">
 <div id="dbanner" style="display:none;background:#b33b3b;color:#fff;padding:10px 16px;font-weight:600;line-height:1.35"></div>
 <header>
@@ -2207,52 +2263,38 @@ main{padding-bottom:270px!important}
  <section id="tab-map" style="display:none"><div class="card"><h3>Map</h3><p class="sub">Tap the map to set <b>home</b> (saved). Rings are 5 / 10 / 20 km. Pins are the airports and the CN Tower repeater site. P25 tower coordinates are not published, so they are not drawn; unit GPS is not carried on this system.</p><div id="mapbox" style="height:420px;border-radius:12px;border:1px solid var(--line,#444)"></div><div class="sv" id="mapinfo" style="margin-top:6px"></div></div></section>
  <section id="tab-digital" style="display:none">
   <div class="dig">
-   <div class="card"><h3>Digital voice (DMR / P25 / NXDN) - what is actually hearable</h3>
-    <p class="sub">A Baofeng and this app's FM demodulator cannot decode digital voice. <b>SDRTrunk</b> (already in ~/SDRTrunk) can, for systems that are not encrypted. The dongle covers all of these bands; it just has to be handed to SDRTrunk while you listen.</p>
-    <table class="alist"><thead><tr><th>System</th><th>Technology</th><th>Where</th><th>Status</th></tr></thead><tbody id="digsys"></tbody></table>
+   <div class="card"><h3>Digital systems</h3>
+    <p class="sub">Tap a row to open it - every frequency inside has its own ▶. SDRTrunk does the decoding; encrypted traffic (police, most unnamed talkgroups) stays silent. One dongle decodes one system at a time.</p>
+    <div class="btns" style="margin-bottom:4px"><button class="pri" id="dmrscanbtn">▶ Scan all DMR</button><button class="pri" id="p25scanbtn" title="steps through every P25 site (Fire/EMS first, then City, PATH, Metrolinx) - one dongle hears one site at a time">▶ Scan all P25 sites</button><button class="ghost" id="dmrscannext" title="skip to the next window now" style="display:none">SKIP window</button><select id="dmrscanstep" style="font:inherit;background:var(--card);color:var(--ink);border:1px solid var(--line);border-radius:8px;padding:6px 8px"><option value="60">60 s per window</option><option value="90" selected>90 s per window</option><option value="180">3 min per window</option><option value="300">5 min per window</option></select><span id="dmrscanst" class="sv"></span><span id="dmrscanwin" class="sv"></span></div>
+    <div id="dglist"><div class="empty">loading…</div></div>
    </div>
-   <div class="card"><h3>City of Toronto P25 Phase II - Toronto Fire + Toronto Paramedics (WACN BEE00, system 3C2)</h3>
-    <p class="sub">Four simulcast sites cover the city; <b>West</b> (Etobicoke) and <b>South</b> are the ones you will hear from the west end. These control channels are built into the SDRTrunk playlist below, with every Fire and Paramedics talkgroup named. Police talkgroups on this system are AES-encrypted: nobody can hear them.</p>
-    <table class="alist"><thead><tr><th></th><th>Site</th><th>Control channels (MHz)</th><th>Heard by the sweep</th></tr></thead><tbody id="digsites"></tbody></table>
-    <h3 style="margin-top:14px">DMR - every channel, scanned like a bank</h3>
-    <p class="sub">The dongle decodes everything inside one 2.4 MHz window at once; the channels below span several windows, so the scan walks SDRTrunk through the windows in turn - <span id="dmrscanwin">—</span> - and stays while a call is in progress. These channels are seldom used, so this is the way to hear them: start it and leave it.</p>
-    <div class="btns" style="margin-bottom:8px"><button class="pri" id="dmrscanbtn">▶ Scan all DMR</button><button class="pri" id="p25scanbtn" title="steps through every P25 Phase II site (Fire/EMS first, then City, PATH, Metrolinx) - one dongle hears one site at a time">▶ Scan all P25 sites</button><button class="ghost" id="dmrscannext" title="skip to the next window now" style="display:none">SKIP window</button><select id="dmrscanstep" style="font:inherit;background:var(--card);color:var(--ink);border:1px solid var(--line);border-radius:8px;padding:6px 8px"><option value="60">60 s per window</option><option value="90" selected>90 s per window</option><option value="180">3 min per window</option><option value="300">5 min per window</option></select><span id="dmrscanst" class="sv"></span></div>
-    <h3 style="margin-top:10px">DMR groups - each group is decoded together</h3>
-    <table class="alist"><thead><tr><th></th><th>Group</th><th>Heard / said</th></tr></thead><tbody id="digdmrg"></tbody></table>
-    <details style="margin-top:8px"><summary class="sub" style="cursor:pointer">every DMR channel (all of these are inside the scan above; ▶ decodes just one)</summary>
-    <table class="alist"><thead><tr><th></th><th>MHz</th><th>Who</th><th>Decoded by SDRTrunk</th></tr></thead><tbody id="digdmr"></tbody></table></details>
+   <div class="card"><h3>Calls decoded right now (SDRTrunk)</h3>
+    <table class="alist"><thead><tr><th>Time</th><th>Talkgroup</th><th>Event</th><th>From</th></tr></thead><tbody id="digcalls"><tr><td colspan="4" class="empty">press ▶ on a system above</td></tr></tbody></table>
    </div>
-   <div class="card"><h3>Always-on carriers the sweep found (700 / 800 MHz)</h3>
-    <p class="sub">The <b>Digital</b> chip sweeps 764-776 and 851-870 MHz. Always-on carriers land here (kept across sweeps); ones matching the site table are confirmed control channels, unknown ones go into the playlist as "Found by sweep".</p>
-    <table class="alist"><thead><tr><th>MHz</th><th>Signal</th><th>On air</th><th>What it is</th></tr></thead><tbody id="digcc"></tbody></table>
-   </div>
-   <div class="card"><h3>Fire, Paramedics and Police - every talkgroup heard</h3>
+   <details class="card"><summary><h3>Talkgroups and radios heard</h3></summary>
     <p class="sub">Rolled up from every call SDRTrunk decodes (kept across restarts). SDRTrunk plays <b>everything</b> it decodes by default. <b>Hone in</b> on a talkgroup to hear only that one (SDRTrunk restarts, about 3 s); press it again to hear everything. Police is encrypted: you see that it is talking, how often and for how long, but not the audio.</p>
     <div class="btns" id="tgchips"></div>
     <table class="alist"><thead><tr><th>Group</th><th>Talkgroup</th><th>Calls</th><th>Talk time</th><th>Last 60 min</th><th>Last heard</th><th title="hone in = hear only this talkgroup">Hone in</th></tr></thead><tbody id="tgrows"><tr><td colspan="7" class="empty">nothing decoded yet - press ▶ on a P25 site</td></tr></tbody></table>
     <h3 style="margin-top:14px">Who is talking - radios heard (unit IDs)</h3>
     <p class="sub">Every call carries the sending radio's ID. The talkgroups a radio uses say what it is (a pumper on TFS W Ops, a medic on EMS A3, a Willowbrook yard tug). Newest first; the table is the roll-up of every SDRTrunk session.</p>
     <table class="alist"><thead><tr><th>System</th><th>Radio ID</th><th>Mostly on</th><th>Talkgroups used</th><th>Calls</th><th>First / last heard</th></tr></thead><tbody id="unitrows"><tr><td colspan="6" class="empty">nothing decoded yet</td></tr></tbody></table>
-   </div>
-   <div class="card"><h3>Calls decoded right now (SDRTrunk)</h3>
-    <table class="alist"><thead><tr><th>Time</th><th>Talkgroup</th><th>Event</th><th>From</th></tr></thead><tbody id="digcalls"><tr><td colspan="4" class="empty">press ▶ on a P25 site or DMR channel</td></tr></tbody></table>
-   </div>
-   <div class="card"><h3>Scan analog AND P25 with one dongle - the rotation</h3>
+   </details>
+   <details class="card"><summary><h3>Take turns between the sweep and P25 (rotation)</h3></summary>
     <p class="sub">The dongle can only do one thing at a time, so the dashboard takes turns: the normal sweep runs, and every so often it hands the dongle to SDRTrunk for a few minutes, logs every call it decodes (list below, kept across restarts) and stamps the P25 site's Last heard. Your own ▶ always wins - a slot never starts while you listen, and a listen you start is never cut.</p>
     <div class="btns"><label class="sv"><input type="checkbox" id="roton"> include P25 in the rotation</label>
      <label class="sv">site <select id="rotsite"><option>West Simulcast</option><option>South Simulcast</option><option>North Simulcast</option><option>East Simulcast</option></select></label>
      <label class="sv">for <input id="rotmin" type="number" min="1" max="30" value="3" style="width:52px"> min</label>
      <label class="sv">every <input id="rotevery" type="number" min="5" max="120" value="15" style="width:56px"> min</label><span class="sv" id="rotstat"></span></div>
-   </div>
-   <div class="card"><h3>Calls heard on the P25 system (history)</h3>
+   </details>
+   <details class="card"><summary><h3>Call history</h3></summary>
     <table class="alist"><thead><tr><th>When</th><th>Talkgroup</th><th>Event</th><th>From</th></tr></thead><tbody id="dighist"><tr><td colspan="4" class="empty">nothing logged yet</td></tr></tbody></table>
-   </div>
-   <div class="card"><h3>How it plays</h3>
+   </details>
+   <details class="card"><summary><h3>How it plays, playlist and SDRTrunk controls</h3></summary>
     <p class="sub">Press ▶ on any P25 or DMR row (here, or in the Frequencies table) and the dashboard stops the sweep, writes the SDRTrunk playlist with that channel auto-starting, launches SDRTrunk and lets it decode: the audio comes out of the Mac, calls are listed by talkgroup name (TFS Disp 1, EMS A3 SW SB…) in the SDRTrunk window that opens. ■ Stop (or the space bar) closes SDRTrunk and the sweep resumes. SDRTrunk needs 10-20 s to start - the status line counts it down.</p>
     <div class="btns"><button class="ghost" id="takeback">Stop SDRTrunk, take the dongle back</button><button class="ghost" id="buildpl">Rebuild playlist only</button><span class="sv" id="sdrtstat"></span></div>
     <p class="sub">Playlist: <span id="plinfo">…</span>. <span id="plpath"></span></p>
     <p class="sub" id="plpath"></p>
-   </div>
+   </details>
   </div>
  </section>
  <section id="tab-debug" style="display:none"><div class="toolbar"><button onclick="loadDebug()">Refresh</button><button onclick="appRestart(0)" title="restarts the dashboard program once nobody is listening; the sweep keeps running">Restart app (when idle)</button><button onclick="appRestart(1)" class="stopb" title="restarts right now, even mid-listen">Restart now</button><span id="dbgsum" class="sub" style="color:var(--mute)"></span></div><pre id="dbgout">loading…</pre></section>
@@ -2440,22 +2482,27 @@ const DIGSYS=[
  ['Universities (U of T, TMU, York, Humber, George Brown)','DMR / NXDN','454.3625, 454.2000, 460.1625...','Hearable in SDRTrunk'],
  ['Bearcom customers (CN Tower)','DMR','463.3125','Hearable in SDRTrunk if unencrypted'],
 ];
-async function loadDigital(){$('#digsys').innerHTML=DIGSYS.map(r=>`<tr><td><b>${r[0]}</b></td><td class="sv">${r[1]}</td><td class="sv">${r[2]}</td><td class="sv">${r[3]}</td></tr>`).join('');
+async function loadDigital(){
  try{const r=await (await fetch('/api/digital')).json();const heard=new Set(r.cc.map(c=>c.mhz.toFixed(5)));
-  $('#digsites').innerHTML=r.sites.map(s=>{const n=s.cc.filter(f=>heard.has(f.toFixed(5))).length;return `<tr><td><button class="play" data-mhz="${s.cc[0]}" data-mode="digital" data-target="p25:${esc(s.site)}" data-name="${esc(s.label||('Toronto Fire + Paramedics - '+s.site))}" title="decode this site with SDRTrunk">▶</button></td><td><b>${esc(s.site)}</b>${s.label&&s.label.indexOf('Metrolinx')===0?'<div class="sv">Metrolinx / GO Transit P25 - Willowbrook yard, Lakeshore West, UP Express, bus ops (Transit Safety encrypted)</div>':''}</td><td class="f">${s.cc.map(f=>f.toFixed(5)).join('  ')}${(s.voice||[]).length?'<div class="sv" style="font-family:inherit">+ voice channels of the same system: '+s.voice.map(v=>v.mhz.toFixed(4)).join(', ')+' - one dongle decodes the ones within 2.4 MHz of the control channel it follows; they are one system, not separate DMR channels</div>':''}</td><td class="sv">${n?'✓ '+n+' control channel(s) heard':'not yet'}</td></tr>`}).join('');
   const heardU=new Set((S.hits||[]).filter(h=>h.mhz>=400&&h.mhz<=520).map(h=>h.mhz));const hu=f=>[...heardU].some(m=>Math.abs(m-f)<0.0063);
-  const TG=r.tgs||{};const tgsum=g=>{const hs=g.mhz.filter(m=>TG[m.toFixed(4)]);return hs.length?' · <b style="color:var(--acc)">decoded: '+hs.map(m=>m.toFixed(4)+' '+TG[m.toFixed(4)].tgs.map(x=>'TG '+esc(x[0])).join('/')).join(', ')+'</b>':'';};
-  const dgSaid=g=>g.mhz.filter(m=>TG[m.toFixed(4)]).map(m=>{const t=TG[m.toFixed(4)];return t.tgs.map(x=>(t.names||{})[x[0]]||('TG '+x[0])).join(', ');}).join(' · ');
-  const dgRows=[];
-  (r.nxdn||[]).forEach(t=>dgRows.push({n:t.mhz.filter(hu).length,said:'',name:t.name,sub:t.mhz.length+' channels',btn:t.ready?`<button class="play" data-mhz="${t.mhz[0]}" data-mode="digital" data-target="nxdng:${t.mhz.map(f=>f.toFixed(4)).join(',')}" data-name="${esc(t.name)}" title="decode with SDRTrunk (nightly)">▶</button>`:'<span class="tag sdr">needs nightly</span>'}));
-  (r.dmr_trunked||[]).forEach(t=>dgRows.push({n:t.mhz.filter(hu).length,said:'',name:t.name,sub:'trunked system',btn:`<button class="play" data-mhz="${t.cc}" data-mode="digital" data-target="dmrt:${t.cc.toFixed(4)}" data-name="${esc(t.name)}" title="decode this trunked DMR system with SDRTrunk">▶</button>`}));
-  (r.dmr_groups||[]).forEach(g=>dgRows.push({n:g.mhz.filter(hu).length,said:dgSaid(g),name:g.name,sub:g.mhz.length+' channels · '+g.mhz[0].toFixed(3)+(g.mhz.length>1?' - '+g.mhz[g.mhz.length-1].toFixed(3):'')+' MHz',btn:`<button class="play" data-mhz="${g.mhz[0]}" data-mode="digital" data-target="dmrg:${g.mhz.map(f=>f.toFixed(4)).join(',')}" data-name="DMR group: ${esc(g.name)}" title="${esc(g.names.join(' · '))}">▶</button>`}));
-  dgRows.forEach(x=>x.score=(x.said?20:0)+x.n+(/^ROADS/.test(x.name)?1000:0));dgRows.sort((p,q)=>q.score-p.score);
-  $('#digdmrg').innerHTML=dgRows.map((x,i)=>`<tr class="${/^ROADS/.test(x.name)?'dg-roads':(i===0&&x.score>0?'dg-best':'')}"><td>${x.btn}</td><td><div class="dg-name">${esc(x.name)}</div><div class="sv">${esc(x.sub)}</div></td><td class="dg-st">${x.said?'<span class="dg-said">'+esc(x.said)+'</span>':(x.n?'<span class="dg-heard">✓ heard</span>':'<span class="sv">-</span>')}</td></tr>`).join('');
+  const TG=r.tgs||{};
+  const pb=(mhz,target,name)=>`<button class="play" data-mhz="${mhz}" data-mode="digital" data-target="${esc(target)}" data-name="${esc(name)}" title="decode with SDRTrunk">▶</button>`;
+  const fq=(f,target,name,note)=>`<div class="dgf">${pb(f,target,name)}<span class="f">${(+f).toFixed(f>700?5:4)}</span><span class="sv">${note||''}</span></div>`;
   const tgcell=m=>{const t=TG[m.toFixed(4)];return t?`<span class="tag" style="border-color:var(--acc);color:var(--acc)">heard</span> ${t.tgs.map(x=>`<button class="ghost tgname" data-m="${m}" data-tg="${esc(x[0])}" data-n="${esc((t.names||{})[x[0]]||'')}" title="tap to name this talkgroup (it goes into the SDRTrunk playlist)" style="padding:1px 7px;font-size:.85em">${(t.names||{})[x[0]]?'<b>'+esc(t.names[x[0]])+'</b> <span class=sv>TG '+esc(x[0])+'</span>':'TG '+esc(x[0])} ×${x[1]}</button>`).join(' ')} <span class="sv">· last ${esc(t.last)}</span>`:'';};
-  $('#digdmr').innerHTML=(r.dmr||[]).map(d=>`<tr><td><button class="play" data-mhz="${d.mhz}" data-mode="digital" data-name="${esc(d.name)} (DMR)" title="decode with SDRTrunk">▶</button></td><td class="f">${d.mhz.toFixed(4)}</td><td class="sv">${esc(d.name)}</td><td class="sv">${tgcell(d.mhz)}</td></tr>`).join('');P.paint();
-  $$('#digdmr button.tgname').forEach(b=>b.onclick=async()=>{const n=prompt('Name for talkgroup '+b.dataset.tg+' on '+(+b.dataset.m).toFixed(4)+' MHz (empty = forget):',b.dataset.n||'');if(n===null)return;const r=await (await fetch('/api/dmr/alias?mhz='+b.dataset.m+'&tg='+b.dataset.tg+'&name='+encodeURIComponent(n))).json();if(r.error)toast(r.error);else{toast(n?'named - SDRTrunk uses it from its next start':'forgotten');loadDigital();}});
-  $('#digcc').innerHTML=r.cc.length?r.cc.map(c=>`<tr><td class="f">${c.mhz.toFixed(5)}</td><td class="sv">${c.snr} dB</td><td class="sv">${c.busy}%</td><td class="sv">${esc(c.likely)}</td></tr>`).join(''):'<tr><td colspan="4" class="empty">nothing yet - click the Digital chip to sweep 700/800 MHz (the known control channels above are already in the playlist)</td></tr>';
+  const row=(k,btn,name,tag,st,body,cls)=>`<details class="dgx ${cls||''}" data-k="${esc(k)}"><summary>${btn}<span class="dgn">${esc(name)}</span><span class="tag">${esc(tag)}</span><span class="dgs">${st||''}</span></summary><div class="dgb">${body}</div></details>`;
+  const dgSaid=g=>g.mhz.filter(m=>TG[m.toFixed(4)]).map(m=>{const t=TG[m.toFixed(4)];return t.tgs.map(x=>(t.names||{})[x[0]]||('TG '+x[0])).join(', ');}).join(' · ');
+  let h='<div class="dgh">Fire, paramedics and transit · P25</div>';
+  h+=r.sites.map(s=>{const n=s.cc.filter(f=>heard.has(f.toFixed(5))).length;const name=s.label||('Toronto Fire + Paramedics - '+s.site);const direct=s.cc.length===1;
+   const body='<div class="sv">'+(direct?'One voice channel, listened to directly - no control channel needed.':'SDRTrunk follows the control channel and the calls it hands out. ▶ on a single frequency tries just that one as the control channel.')+'</div>'+s.cc.map(f=>fq(f,direct?('p25:'+s.site):('probe:'+f.toFixed(4)),name+' '+f.toFixed(5),heard.has(f.toFixed(5))?'✓ heard by the sweep':'')).join('')+((s.voice||[]).length?'<div class="sv" style="margin-top:6px">Voice channels of the same system: '+s.voice.map(v=>v.mhz.toFixed(4)).join(', ')+'</div>':'');
+   return row('p25:'+s.site,pb(s.cc[0],'p25:'+s.site,name),s.site,direct?'P25 direct':'P25 trunked · '+s.cc.length+' freq',n?'✓ heard':'',body);}).join('');
+  h+='<div class="dgh">Trunked DMR systems</div>'+(r.dmr_trunked||[]).map(t=>row('dmrt:'+t.cc,pb(t.cc,'dmrt:'+t.cc.toFixed(4),t.name),t.name,'DMR trunked · '+t.mhz.length+' freq',t.mhz.filter(hu).length?'✓ heard':'','<div class="sv">Control channel first, then the voice channels. ▶ on a single frequency decodes just that channel.</div>'+[t.cc].concat(t.mhz.filter(f=>f!==t.cc)).map((f,i)=>fq(f,'dmr:'+f.toFixed(4),t.name+' '+f.toFixed(4),i===0?'control channel':'')).join(''),/^ROADS/.test(t.name)?'dg-roads':'')).join('');
+  if((r.nxdn||[]).length)h+='<div class="dgh">GO Transit rail · NXDN</div>'+r.nxdn.map(t=>row('nxdn',t.ready?pb(t.mhz[0],'nxdng:'+t.mhz.map(f=>f.toFixed(4)).join(','),t.name):'<span class="tag sdr">needs nightly</span>',t.name,'NXDN · '+t.mhz.length+' ch',t.mhz.filter(hu).length?'✓ heard':'',t.mhz.map((f,i)=>t.ready?fq(f,'nxdng:'+f.toFixed(4),(t.names||[])[i]||t.name,esc((t.names||[])[i]||'')):`<div class="dgf"><span class="f">${f.toFixed(4)}</span><span class="sv">${esc((t.names||[])[i]||'')}</span></div>`).join(''))).join('');
+  const grows=(r.dmr_groups||[]).map(g=>({g,said:dgSaid(g),n:g.mhz.filter(hu).length}));grows.sort((x,y)=>((y.said?20:0)+y.n)-((x.said?20:0)+x.n));
+  h+='<div class="dgh">DMR channels · '+(r.dmr||[]).length+' channels in '+grows.length+' groups</div>'+grows.map(x=>{const g=x.g;return row('dmrg:'+g.mhz[0],pb(g.mhz[0],'dmrg:'+g.mhz.map(f=>f.toFixed(4)).join(','),'DMR group: '+g.name),g.name,g.mhz.length+' ch · '+g.mhz[0].toFixed(3)+(g.mhz.length>1?'-'+g.mhz[g.mhz.length-1].toFixed(3):''),x.said?'<b class="dg-said">'+esc(x.said)+'</b>':(x.n?'✓ heard':''),'<div class="sv">▶ on the group decodes every channel in it at once; ▶ on a line decodes only that one.</div>'+g.mhz.map((f,i)=>`<div class="dgf">${pb(f,'dmr:'+f.toFixed(4),((g.names||[])[i]||'DMR')+' (DMR)')}<span class="f">${f.toFixed(4)}</span><span class="sv">${esc((g.names||[])[i]||'')}</span><span class="sv">${tgcell(f)}</span></div>`).join(''));}).join('');
+  h+='<div class="dgh">Found by the sweep · 700 / 800 MHz</div>'+(r.cc.length?row('cc','','Always-on carriers',r.cc.length+' found','','<div class="sv">Carriers that never drop are usually control channels. ▶ tries a P25 decode on that frequency.</div>'+r.cc.map(c=>fq(c.mhz,'probe:'+c.mhz.toFixed(4),c.mhz.toFixed(5)+' MHz',c.snr+' dB · on air '+c.busy+'% · '+esc(c.likely))).join('')):'<div class="sv">nothing yet - the Digital chip sweeps 764-776 and 851-870 MHz</div>');
+  h+='<div class="dgh">Reference</div>'+row('about','','What can and cannot be decoded','info','','<table class="alist"><thead><tr><th>System</th><th>Technology</th><th>Where</th><th>Status</th></tr></thead><tbody>'+DIGSYS.map(q=>`<tr><td><b>${q[0]}</b></td><td class="sv">${q[1]}</td><td class="sv">${q[2]}</td><td class="sv">${q[3]}</td></tr>`).join('')+'</tbody></table>');
+  const wasOpen=new Set($$('#dglist details[open]').map(d=>d.dataset.k));$('#dglist').innerHTML=h;$$('#dglist details').forEach(d=>{if(wasOpen.has(d.dataset.k))d.open=true;});P.paint();
+  $$('#dglist button.tgname').forEach(b=>b.onclick=async()=>{const n=prompt('Name for talkgroup '+b.dataset.tg+' on '+(+b.dataset.m).toFixed(4)+' MHz (empty = forget):',b.dataset.n||'');if(n===null)return;const r2=await (await fetch('/api/dmr/alias?mhz='+b.dataset.m+'&tg='+b.dataset.tg+'&name='+encodeURIComponent(n))).json();if(r2.error)toast(r2.error);else{toast(n?'named - SDRTrunk uses it from its next start':'forgotten');loadDigital();}});
   const p=r.playlist;$('#plinfo').textContent=`${p.fire} Fire + ${p.ems} Paramedics talkgroups, ${r.sites.length} P25 sites, ${p.dmr} DMR channels`;
   $('#plpath').textContent='Playlist file: '+p.path+(p.in_sdrtrunk?'  (copied into ~/SDRTrunk/playlist)':'  (not yet copied - press Give or Rebuild)');
   $('#sdrtstat').textContent=r.sdrtrunk&&!r.sdrtrunk.installed?'SDRTrunk is not installed yet - run Install SDRTrunk.command':(r.handed?'dongle is with SDRTrunk - sweep paused':'');}catch(e){}}
@@ -2556,7 +2603,7 @@ const P={cur:null,abort:null,bytes:0,nextT:0,seq:0,err:'',sdrtOn:false,
   const dead=setTimeout(()=>{if(seq===this.seq&&this.abort)this.abort.abort();},12000);
   try{const r=await fetch('/stream?raw=1&mhz='+mhz+'&mode='+md+'&sq='+sqArg()+'&voice='+($('#voice').checked?1:0)+'&name='+encodeURIComponent(name)+(md==='monitor'?monitorQuery():'')+'&t='+Date.now(),{signal:this.abort.signal});
    clearTimeout(slow);clearTimeout(dead);
-   if(!r.ok){stat.textContent='player error: HTTP '+r.status;return;}
+   if(!r.ok){stat.textContent=r.status===409?await r.text():('player error: HTTP '+r.status);return;}
    const rd=r.body.getReader();let carry=new Uint8Array(0);
    while(true){const {value,done}=await rd.read();if(done)break;if(seq!==this.seq)break;this.bytes+=value.length;let buf=new Uint8Array(carry.length+value.length);buf.set(carry);buf.set(value,carry.length);
     const n=Math.floor(buf.length/2);if(n<1200){carry=buf;continue;}const pcm=new Int16Array(buf.buffer,0,n);carry=buf.slice(n*2);
@@ -2569,7 +2616,7 @@ const P={cur:null,abort:null,bytes:0,nextT:0,seq:0,err:'',sdrtOn:false,
    if(b.id==='dplay')b.textContent=pl?'■ Stop':'▶ Listen';else if(b.classList.contains('rbtn')){b.classList.toggle('on',pl);}else b.textContent=pl?'■':'▶';b.title=pl?'stop':'listen';
    const tr=b.closest('tr');if(tr)tr.classList.toggle('playing',pl);const tile=b.closest('.tile');if(tile)tile.classList.toggle('playing',pl);});}
 };
-document.addEventListener('click',e=>{const b=e.target.closest('button.play');if(!b||!b.dataset.mhz)return;e.stopPropagation();if(b.dataset.mode==='digital'){if(P.sdrtOn&&P.isPlaying(+b.dataset.mhz)){P.stop();return;}digitalListen(b.dataset.name,b.dataset.mhz,b.dataset.target||'');return;}if(P.isPlaying(+b.dataset.mhz)&&Date.now()-(P.t0||0)>1500)P.stop();else P.play(+b.dataset.mhz,b.dataset.mode||'fm',b.dataset.name||'');});
+document.addEventListener('click',e=>{const b=e.target.closest('button.play');if(!b||!b.dataset.mhz)return;e.stopPropagation();if(b.closest('summary'))e.preventDefault();if(Date.now()-(window.CMD_T||0)<900){toast('one command at a time - the dongle is still switching');return;}window.CMD_T=Date.now();if(b.dataset.mode==='digital'){if(P.sdrtOn&&P.isPlaying(+b.dataset.mhz)){P.stop();return;}digitalListen(b.dataset.name,b.dataset.mhz,b.dataset.target||'');return;}if(P.isPlaying(+b.dataset.mhz)&&Date.now()-(P.t0||0)>1500)P.stop();else P.play(+b.dataset.mhz,b.dataset.mode||'fm',b.dataset.name||'');});
 async function digitalListen(name,mhz,tgt){let target=tgt||'p25:West Simulcast';const m=+mhz;if(tgt){P.sdrt(target,name,mhz);return;}
  const r=await (await fetch('/api/digital')).json();let hit=false;for(const st of r.sites)if(st.cc.some(f=>Math.abs(f-m)<0.0001)){target='p25:'+st.site;hit=true;}   // (v149) a P25 site first - Metrolinx Central's control channels are UHF and used to be treated as DMR
  if(!hit){if(m>=400&&m<=520)target='dmr:'+m.toFixed(4);else if((m>=764&&m<=776)||(m>=851&&m<=870))target='probe:'+m.toFixed(4);}

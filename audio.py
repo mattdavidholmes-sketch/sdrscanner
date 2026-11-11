@@ -75,19 +75,33 @@ class ZcrSquelch:
         self.ema = None
         # adaptive: learn this channel's own idle-noise ZCR (FM ~0.60-0.67, AM ~0.48) and open on anything clearly below it.
         # Much more sensitive than a fixed 0.35 on FM, still no static: the gap to the noise is fixed, not the threshold.
-        self.noise = None; self.margin = 0.07 if mode != "am" else 0.06      # auto = as open as possible without static (measured hiss ZCR 0.50-0.67, voice 0.10-0.35)
-        self.wide = False; self.hang_blocks = 15                            # set_wide(): a known / expected voice channel opens on weaker audio and hangs longer
+        self.noise = None; self.margin = 0.07 if mode != "am" else 0.05      # (v178: AM 0.06 -> 0.05, weak aircraft were closing between words)
+        self._m0 = self.margin                                              # auto = as open as possible without static (measured hiss ZCR 0.50-0.67, voice 0.10-0.35)
+        self.wide = False; self.hang_blocks = 30 if mode == "am" else 15    # (v178) airband: 3 s hang - a pilot/controller exchange stays in one piece; set_wide(): a known / expected voice channel opens on weaker audio and hangs longer
         self.always = (manual == 0) or mode == "wbfm"
         self.hist = []; self.data = False; self.data_blocks = 0; self.mute_data = True; self.data_latched = False
         self.detect_data = True      # False on known voice channels (repeaters, airport, FRS): a repeater tail / courtesy tone is NOT data
         self.open_levels = []; self.gap = 1; self.voice_cv = 0.0; self.open_blocks = 0      # syllable-rhythm detector across bursts
         self.hx = 0.0; self.hy = 0.0; self.hp = mode != "wbfm"           # high-pass state (not for broadcast FM: sox handles it)
+        # (v178) look-ahead for AM: the output runs 2 blocks (0.2 s) behind the decision, so when the squelch opens the 0.2 s it
+        # needed to make up its mind is played too instead of being lost (the first syllable of every airband call was clipped).
+        self.look_n = 2 if mode == "am" else 0; self.look = []; self._aud = b""; self._closed = False
     def set_wide(self, on=True):
         """Known or expected transmissions (directory channels, confirmed voice, a channel the user marked 'open more'):
         threshold 0.03 closer to the hiss (opens on weaker, noisier speech) and a 2.5 s hang so the reply is not clipped."""
-        self.wide = bool(on); self.margin = (0.04 if self.mode != "am" else 0.03) if on else (0.07 if self.mode != "am" else 0.06)
-        self.hang_blocks = 25 if on else 15
+        self.wide = bool(on); self.margin = (0.04 if self.mode != "am" else 0.03) if on else self._m0
+        self.hang_blocks = (40 if on else 30) if self.mode == "am" else (25 if on else 15)
     def process(self, b):
+        out = self._proc(b)
+        if not self.look_n or self.always or len(b) < 4: return out
+        self.look.append([out, self._aud, self._closed])
+        if self.open:                                                   # just opened (or still open): release what was held back while closed
+            for e in self.look:
+                if e[2]: e[0] = e[1]; e[2] = False
+        if len(self.look) <= self.look_n: return bytes(len(b))
+        return self.look.pop(0)[0]
+    def _proc(self, b):
+        self._closed = False
         a = array.array("h", b); n = len(a)
         if n < 2: return b
         self.n += 1
@@ -163,6 +177,7 @@ class ZcrSquelch:
             # discriminator output jumps to full-scale noise (~7400 rms) - that burst is the loud "ksssh" tail: mute it.
             ref = (sum(x[0] for x in self.open_levels) / len(self.open_levels)) if self.open_levels else 0
             if ref <= 0 or self.level > 2.5 * ref: return bytes(len(b))
+        self._aud = b; self._closed = not self.open
         return b if self.open else bytes(len(b))
 
 DCS_CODES = [23,25,26,31,32,36,43,47,51,53,54,65,71,72,73,74,114,115,116,122,125,131,132,134,143,145,152,155,156,162,165,172,174,205,212,223,
@@ -303,7 +318,7 @@ class Session:
                 out = self.gate.process(b)
                 if self.rawf: self.rawf.write(b)
                 if self.gate.open and self.mode == "fm": self.tones.feed(b)
-                if self.gate.open: out = DENOISE.process(out, self.denoise_rate)   # additive: runs on top of the existing sox chain, not instead of it
+                if self.gate.open and self.mode != "am": out = DENOISE.process(out, self.denoise_rate)   # (v178) not on AM: on weak airband the suppressor ate quiet speech along with the hiss; additive: runs on top of the existing sox chain, not instead of it
                 self.sox.stdin.write(out); self.sox.stdin.flush()
         except Exception as e:
             if self.alive: self.err = repr(e); self.alive = False     # let the watchdog see it at once
