@@ -65,6 +65,22 @@ def to16k(path):
                        capture_output=True)
     return (tmp, tmp) if r.returncode == 0 else (path, None)
 
+def load16k(path):
+    """The clip as 16 kHz mono float32, read here. faster-whisper would decode the file itself through PyAV, and its 1.2 release
+    asks PyAV for an option this Mac's PyAV does not know ("open() got an unexpected keyword argument 'metadata_errors'" - every
+    clip failed on the day the engine was installed, 11 Nov). A WAV needs no decoder."""
+    import numpy as np
+    with wave.open(path, "rb") as w:
+        sr, ch, sw = w.getframerate(), w.getnchannels(), w.getsampwidth(); raw = w.readframes(w.getnframes())
+    if sw != 2: raise ValueError(f"16-bit WAV expected, got {8 * sw}-bit")
+    a = np.frombuffer(raw[:len(raw) - len(raw) % (2 * ch)], dtype="<i2").astype(np.float32) / 32768.0
+    if ch > 1: a = a.reshape(-1, ch).mean(axis=1)
+    if sr != 16000:
+        from math import gcd
+        from scipy.signal import resample_poly
+        g = gcd(16000, sr); a = resample_poly(a, 16000 // g, sr // g).astype(np.float32)
+    return a
+
 def main(files):
     from faster_whisper import WhisperModel
     model = WhisperModel(MODEL, device="cpu", compute_type="int8", cpu_threads=max(2, (os.cpu_count() or 4) // 2))
@@ -73,7 +89,7 @@ def main(files):
     for f in files:
         t0 = time.time(); p, tmp = to16k(f)
         try:
-            segs, info = model.transcribe(p, language="en", beam_size=5, temperature=0.0, initial_prompt=prompt,
+            segs, info = model.transcribe(load16k(p), language="en", beam_size=5, temperature=0.0, initial_prompt=prompt,
                                           condition_on_previous_text=False, vad_filter=True,
                                           vad_parameters=dict(min_silence_duration_ms=400), no_speech_threshold=0.6)
             text = " ".join(s.text.strip() for s in segs).strip()
