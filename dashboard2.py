@@ -1540,6 +1540,29 @@ def aircraft_routes(planes, budget=8):
     for p in planes:
         if not p.get("route"): p["route"] = _AC["routes"].get(p["callsign"], (0, ""))[1]
 
+_AV = {"t": 0.0, "data": {}}
+def airband_voice():
+    """(v182) Minutes since speech was last CONFIRMED on each airband channel, e.g. {"124.475": 3.2}, read from the end of
+    monitor_opens.log: the channelizer writes one line per squelch opening and marks the ones that passed its speech test (the sweep
+    and Monitor both go through it). The bank's last_heard cannot answer this - the sweep stamps it for any carrier, speech or not."""
+    now = time.time()
+    if now - _AV["t"] < 10: return _AV["data"]
+    out = {}
+    try:
+        with open(os.path.join(HERE, "monitor_opens.log"), "rb") as f:
+            f.seek(0, 2); cut = f.tell() > 150000; f.seek(-150000 if cut else 0, 2 if cut else 0)
+            lines = f.read().decode("utf-8", "ignore").splitlines()[1 if cut else 0:]                # a tail starts mid-line: drop that piece
+        today = dt.datetime.now()
+        for ln in lines:
+            m = re.match(r"(\d\d)-(\d\d) (\d\d):(\d\d):(\d\d) .* (\d{3}\.\d{4}) am \S+ max_mod \S+ mean_snr \S+ voice yes$", ln)
+            if not m: continue
+            mo, dd, hh, mi, ss = (int(m.group(i)) for i in range(1, 6))
+            try: age = (now - today.replace(month=mo, day=dd, hour=hh, minute=mi, second=ss, microsecond=0).timestamp()) / 60
+            except ValueError: continue
+            if 0 <= age <= 60: out[f"{float(m.group(6)):.3f}"] = round(age, 1)          # later lines overwrite earlier ones: the newest wins
+    except OSError: pass
+    _AV.update(t=now, data=out); return out
+
 def aircraft_now(max_age=10):
     """Aircraft around Toronto right now (first source in aircraft_sources() that answers, cached 10 s): callsign, registration,
     type, route, altitude, speed, heading, distance/bearing from home, emergency squawks, and the spoken form of each callsign for
@@ -1840,7 +1863,7 @@ class H2(v1.H):
             except Exception: pass
             return self.send(json.dumps(out), "application/json")
         if u.path == "/api/aircraft":
-            return self.send(json.dumps(aircraft_now()), "application/json")
+            return self.send(json.dumps(dict(aircraft_now(), voice=airband_voice())), "application/json")   # (v182) + when speech was last confirmed per airband channel
         if u.path == "/api/aircraft/today":
             return self.send(json.dumps(air_passes_today()), "application/json")
         if u.path == "/api/spectrum":
