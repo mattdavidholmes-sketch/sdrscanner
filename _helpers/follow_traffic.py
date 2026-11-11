@@ -12,10 +12,10 @@ same ones the Aircraft tab draws (monitor_panel.html freqs()):
   on the ground                     -> Ground North / South + Apron;  Billy Bishop -> 118.200;  low and local -> 133.400
 Channel roles as published (canairradio.ca/yyz.html, Wikipedia "Toronto Area Control Centre"): tower 118.700 is North (runway 05/23) and
 118.350 South (06L/24R, 06R/24L); 134.175 is the ILS monitor, not a working arrival channel, so it is no longer a candidate. The names are
-the bank's own (sdr_scan.py REFERENCE), which are older than these roles. Runway ends are from OurAirports (public domain)."""
+the bank's own (sdr_scan.py REFERENCE). Runway ends are from OurAirports (public domain)."""
 import math, sys, time
 YYZ = (43.6777, -79.6248); YTZ = (43.6275, -79.3962)
-CH = {"twrN": (118.700, "YYZ TWR E"), "twrS": (118.350, "YYZ TWR W"), "arr": [(132.800, "YYZ ARR 3"), (124.475, "YYZ ARR 1"), (125.400, "YYZ ARR 2")],
+CH = {"twrN": (118.700, "YYZ TWR N"), "twrS": (118.350, "YYZ TWR S"), "arr": [(132.800, "YYZ ARR 3"), (124.475, "YYZ ARR 1"), (125.400, "YYZ ARR 2")],
       "depN": (127.575, "YYZ DEP 1"), "depS": (128.800, "YYZ DEP 2"), "gndN": (121.650, "YYZ GND N"), "gndS": (121.900, "YYZ GND S"), "apron": (122.825, "YYZ APRON"),
       "ytzTwr": (118.200, "YTZ TWR"), "ytzGnd": (121.700, "YTZ GND"), "vfr": (133.400, "TOR VFR")}
 RW = [("05", 43.67390, -79.66390, "23", 43.69470, -79.63330), ("06L", 43.66105, -79.62343, "24R", 43.67898, -79.59737), ("06R", 43.65830, -79.62193, "24L", 43.67529, -79.59724),
@@ -49,7 +49,8 @@ def phase(x):
     if not (to_ytz or from_ytz):
         if to_yyz and alt < 12000 and vr <= 100 and dz < 60: return "arriving YYZ"
         if from_yyz and alt < 12000 and vr > 100 and dz < 45: return "departing YYZ"
-        if not (to_yyz or from_yyz):
+        light = _fam(x.get("type")) in ("ga", "heli") or x.get("category") == "A7"
+        if not (to_yyz or from_yyz) and not light:                         # (v183) a Cessna or a helicopter with no Pearson route is not Pearson traffic
             if dz < 45 and alt < 9000 and vr <= 0 and az < 50: return "arriving YYZ"
             if dz < 35 and alt < 9000 and vr > 200 and az > 110: return "departing YYZ"
     if _small(x.get("type")) or to_ytz or from_ytz:
@@ -59,9 +60,9 @@ def phase(x):
 
 # aircraft families by ICAO type code - the same table the Aircraft tab draws its silhouettes from (monitor_panel.html T)
 _FAM = [(r"^(R22|R44|R66|EC\d|H1\d|H60|UH1|AS\d|A109|A119|A139|AW\d|B06|B407|B412|B429|B47|S76|S92|MD5|MD6|EH10|H135|H145|H155|BK17|NH90|CH47)", "heli"),
-        (r"^(B74|A38|A34|A124|AN12|C5M|IL96|IL86|B52|E3|E6|C17|KC13)", "quad"),
-        (r"^(B76|B77|B78|A3[01]|A33|A35|MD11|DC10|IL76|KC10|L101|C17|A400)", "wide"),
-        (r"^(DH8|DHC|AT[47]|SF34|D328|B190|C208|PC12|PC24|TBM|BE[1-9]|BE20|B350|PA3[1-9]|PA46|C130|L410|AN2|AN26|CN35|C295|E120|SW[34]|F50|JS[34]|ATP|SB20|P3|C27J|DH[CT])", "prop"),
+        (r"^(B74|A38|A34|A124|AN12|C5M|IL96|IL86|B52|E3[CT]F|E6$|C17$|KC13)", "quad"),     # (v183) C17$ / E3.F / E6$: "C172" and "E35L" used to match here
+        (r"^(B76|B77|B78|A3[01]|A33|A35|MD11|DC10|IL76|KC10|L101|A400)", "wide"),
+        (r"^(DH8|DHC|AT[47]|SF34|D328|B190|C208|PC12|PC24|TBM|BE[1-9]|BE20|B350|PA3[1-9]|PA46|C130|L410|AN2|AN26|CN35|C295|E120|SW[34]|F50|JS[34]|ATP|SB20|P3$|C27J|DH[CT])", "prop"),
         (r"^(CRJ|E13|E14|ERJ|MD8|MD9|DC9|B712|B717|F100|F70|GLF|GL[0-9]|GLEX|CL[36]|C25|C5[0-9]|C68|C75|LJ|FA[5-9]|F2TH|F900|H25|HA4T|E35L|E50P|E55P|E545|E550|PRM1|BE40|ASTR|G150|G280|WW24|SBR|YK4)", "rear"),
         (r"^(C1[05-9]|C2[0-1]|C3[0-9]|P28|PA2|PA3[0-4]|PA44|SR2|DA4|DA6|BE3|BE5|BE9|M20|RV|GLID|AA5|AC|BL8|C7|CH7|DV20|P2|EVOT|ULAC|HXB|LNC)", "ga")]
 def _fam(t):

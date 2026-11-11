@@ -146,6 +146,7 @@ def hist_hourly(mhz, days=7):
 
 BANK = os.path.join(HERE, "bank.json")
 _bank = {"loaded": False, "data": {}, "saved": 0}
+NAME_FIX = {"YYZ TWR W": "YYZ TWR S", "YYZ TWR E": "YYZ TWR N"}        # (v183) Pearson's towers are South (118.350) and North (118.700), not West and East
 def bank_load():
     """Load the bank. A failed read (iCloud half-synced file, truncated JSON) must NEVER start an empty bank that then overwrites the real one:
     retry, compare with the rolling backups (.bak every 15 min, .bak2 every 6 h) and take the fullest one if the main file lost more than half
@@ -165,6 +166,8 @@ def bank_load():
             if data is None or len(data) < len(best) * 0.5: data = best
         if data is None:
             data = {}; _bank["ok"] = not os.path.exists(BANK) or os.path.getsize(BANK) == 0      # unreadable real file: do not overwrite it
+        for e in data.values():                                               # (v183) channels banked under a name that has since been corrected
+            if isinstance(e, dict) and e.get("name") in NAME_FIX: e["name"] = NAME_FIX[e["name"]]
         _bank["data"] = data; _bank["loaded"] = True; _bank["n0"] = len(data)
     return _bank["data"]
 def bank_mark_data(keys):
@@ -217,6 +220,7 @@ def bank_merge(live):
     data = bank_load(); now = dt.datetime.now(); changed = False
     live_by = {}
     for h in live:
+        h["name"] = NAME_FIX.get(h.get("name"), h.get("name"))                 # a sweep row written before the rename must not put the old name back
         k = f"{h['mhz']:.4f}"; live_by[k] = h
         e = data.get(k)
         heard = _heard_ts(h.get("last"), now) if h.get("last") else 0
@@ -1478,7 +1482,7 @@ def aircraft_sources():
     return srcs
 
 YYZ_LL = (43.6777, -79.6248); YTZ_LL = (43.6275, -79.3962)
-AIR_CH = {"twrE": (118.700, "YYZ TWR E"), "twrW": (118.350, "YYZ TWR W"), "gndN": (121.650, "YYZ GND N"), "gndS": (121.900, "YYZ GND S"),
+AIR_CH = {"twrE": (118.700, "YYZ TWR N"), "twrW": (118.350, "YYZ TWR S"), "gndN": (121.650, "YYZ GND N"), "gndS": (121.900, "YYZ GND S"),
           "apron": (122.825, "YYZ APRON"), "clnc": (121.300, "YYZ CLNC"), "atis": (120.825, "YYZ ATIS"), "ytzTwr": (118.200, "YTZ TWR"),
           "ytzGnd": (121.700, "YTZ GND"), "vfr": (133.400, "TOR VFR"), "guard": (121.500, "AIR GUARD"),
           "arr": [(132.800, "YYZ ARR 3"), (124.475, "YYZ ARR 1"), (125.400, "YYZ ARR 2")],      # (v181) main arrival channel first; 134.175 is the ILS monitor
@@ -1742,6 +1746,9 @@ class H2(v1.H):
         if u.path == "/playmac" and is_remote(self): return self.send("Mac speakers are not available remotely - set Output to 'this device'.", "text/plain", 403)
         if u.path in ("/playmac", "/stream") and (sdrt_running() or os.path.exists(SDRT_FLAG)):
             sdrt_stop(handback=False)                    # an analog listen takes the dongle from SDRTrunk first (the sweep stays paused), and waits until Java has let go
+        if u.path in ICON_FILES:                                            # (v183) the program's icon: browser tab, iPhone / iPad home screen, installed web app
+            try: return self.send(open(os.path.join(HERE, "icons", ICON_FILES[u.path][0]), "rb").read(), ICON_FILES[u.path][1])
+            except OSError: return self.send("no icon", "text/plain", 404)
         if u.path == "/m":                                                  # (v157) the phone-first screen
             try: return self.send(open(os.path.join(HERE, "mobile_page_v7.html"), encoding="utf-8").read())
             except OSError: return self.send("mobile page missing", "text/plain", 404)
@@ -2058,7 +2065,9 @@ class H2(v1.H):
             return self.send(json.dumps(out), "application/json")
         return super().do_GET()                     # /stream /playmac /stop /mode /meter /info /debug /rec/ /delrec
 
-APP = r"""<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+ICON_FILES = {"/favicon.ico": ("favicon.ico", "image/x-icon"), "/apple-touch-icon.png": ("apple-touch-icon.png", "image/png"), "/apple-touch-icon-precomposed.png": ("apple-touch-icon.png", "image/png"),
+              "/icon-192.png": ("icon-192.png", "image/png"), "/icon-512.png": ("icon-512.png", "image/png"), "/manifest.webmanifest": ("manifest.webmanifest", "application/manifest+json")}
+APP = r"""<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"><link rel="icon" href="/favicon.ico" sizes="any"><link rel="icon" type="image/png" sizes="192x192" href="/icon-192.png"><link rel="apple-touch-icon" href="/apple-touch-icon.png"><link rel="manifest" href="/manifest.webmanifest">
 <meta name="theme-color" content="#0b0e13"><meta name="apple-mobile-web-app-capable" content="yes"><meta name="apple-mobile-web-app-status-bar-style" content="black-translucent"><title>SDR Scanner</title>
 <style>
 :root{--bg:#0b0e13;--bg2:#10151d;--card:#151b25;--card2:#1b2330;--line:#242d3b;--ink:#e6ebf2;--mute:#8a95a6;--dim:#5b6676;--acc:#3ddc84;--acc2:#5aa9ff;--warn:#f0b429;--red:#ff5c5c;--mono:ui-monospace,"SF Mono",Menlo,Consolas,monospace}

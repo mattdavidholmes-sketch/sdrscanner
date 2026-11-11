@@ -123,8 +123,8 @@
  // ---- channels: [MHz, the name in the app's bank (what the player and the recordings call it), what the channel is]
  // Roles as published (canairradio.ca/yyz.html, Wikipedia "Toronto Area Control Centre"): 132.800 is the main arrival channel, 124.475 and
  // 125.400 the second and third; 134.175 is the ILS monitor, not a working arrival channel; 128.800 is South (main) Departure, 127.575 North
- // Departure; tower 118.700 is North (runway 05/23) and 118.350 South (06L/24R, 06R/24L). The bank's own names (TWR E/W, ARR 1-3) are older.
- const CH={twrN:[118.700,'YYZ TWR E','Tower North'],twrS:[118.350,'YYZ TWR W','Tower South'],
+ // Departure; tower 118.700 is North (runway 05/23) and 118.350 South (06L/24R, 06R/24L). The bank numbers the arrival channels in its own order.
+ const CH={twrN:[118.700,'YYZ TWR N','Tower North'],twrS:[118.350,'YYZ TWR S','Tower South'],
   arr:[[132.800,'YYZ ARR 3','Arrival'],[124.475,'YYZ ARR 1','Arrival 2'],[125.400,'YYZ ARR 2','Arrival 3']],
   depN:[127.575,'YYZ DEP 1','Departure North'],depS:[128.800,'YYZ DEP 2','Departure South'],
   gndN:[121.650,'YYZ GND N','Ground North'],gndS:[121.900,'YYZ GND S','Ground South'],apron:[122.825,'YYZ APRON','Apron'],
@@ -162,9 +162,9 @@
   ga:'M32 8c1.8 0 2.8 3 2.8 6v30l2.6 4v2.4l-2.6-.8V53h-5.6v-3.4l-2.6.8v-2.4l2.6-4V14c0-3 1-6 2.8-6zM32 2.5a4.5 4.5 0 1 0 .01 0zM6 22h52v5.5H6zM23 47l9-2 9 2v2.6l-9-1.3-9 1.3z',
   heli:'M32 14a6.5 11 0 1 0 .01 0zM30.8 34h2.4v22h-2.4zM33 53l9-2.6v2.4L33 56zM12 11l40 40-2.2 2.2L9.8 13.2zM52 11 12 51l2.2 2.2L54.2 13.2zM32 30.5a1.8 1.8 0 1 0 .01 0z'};
  const T=[[/^(R22|R44|R66|EC\d|H1\d|H60|UH1|AS\d|A109|A119|A139|AW\d|B06|B407|B412|B429|B47|S76|S92|MD5|MD6|EH10|H135|H145|H155|BK17|NH90|CH47)/,'heli'],
-  [/^(B74|A38|A34|A124|AN12|C5M|IL96|IL86|B52|E3|E6|C17|KC13)/,'quad'],
-  [/^(B76|B77|B78|A3[01]|A33|A35|MD11|DC10|IL76|KC10|L101|C17|A400)/,'wide'],
-  [/^(DH8|DHC|AT[47]|SF34|D328|B190|C208|PC12|PC24|TBM|BE[1-9]|BE20|B350|PA3[1-9]|PA46|C130|L410|AN2|AN26|CN35|C295|E120|SW[34]|F50|JS[34]|ATP|SB20|P3|C27J|DH[CT])/,'prop'],
+  [/^(B74|A38|A34|A124|AN12|C5M|IL96|IL86|B52|E3[CT]F|E6$|C17$|KC13)/,'quad'],          // C17$ / E3.F / E6$: "C172" and "E35L" used to match here
+  [/^(B76|B77|B78|A3[01]|A33|A35|MD11|DC10|IL76|KC10|L101|A400)/,'wide'],
+  [/^(DH8|DHC|AT[47]|SF34|D328|B190|C208|PC12|PC24|TBM|BE[1-9]|BE20|B350|PA3[1-9]|PA46|C130|L410|AN2|AN26|CN35|C295|E120|SW[34]|F50|JS[34]|ATP|SB20|P3$|C27J|DH[CT])/,'prop'],
   [/^(CRJ|E13|E14|ERJ|MD8|MD9|DC9|B712|B717|F100|F70|GLF|GL[0-9]|GLEX|CL[36]|C25|C5[0-9]|C68|C75|LJ|FA[5-9]|F2TH|F900|H25|HA4T|E35L|E50P|E55P|E545|E550|PRM1|BE40|ASTR|G150|G280|WW24|SBR|YK4)/,'rear'],
   [/^(C1[05-9]|C2[0-1]|C3[0-9]|P28|PA2|PA3[0-4]|PA44|SR2|DA4|DA6|BE3|BE5|BE9|M20|RV|GLID|AA5|AC|BL8|C7|CH7|DV20|P2|EVOT|ULAC|HXB|LNC)/,'ga']];
  const fam=t=>{t=(t||'').toUpperCase();for(const [re,f] of T)if(re.test(t))return f;return 'narrow';};
@@ -177,7 +177,7 @@
    const brg=(Math.atan2(y,xx)/D2R+360)%360;return [d,Math.abs((tr-brg+540)%360-180)];};
   const [dz,az]=geo(YYZ),[dt,at]=geo(YTZ);
   if(!toYTZ&&!fromYTZ){if(toYYZ&&alt<12000&&vr<=100&&dz<60)return 'arriving YYZ';if(fromYYZ&&alt<12000&&vr>100&&dz<45)return 'departing YYZ';
-   if(!toYYZ&&!fromYYZ){if(dz<45&&alt<9000&&vr<=0&&az<50)return 'arriving YYZ';if(dz<35&&alt<9000&&vr>200&&az>110)return 'departing YYZ';}}
+   if(!toYYZ&&!fromYYZ&&!(f==='ga'||f==='heli'||x.category==='A7')){if(dz<45&&alt<9000&&vr<=0&&az<50)return 'arriving YYZ';if(dz<35&&alt<9000&&vr>200&&az>110)return 'departing YYZ';}}
   if(small||toYTZ||fromYTZ){if((toYTZ||(!fromYTZ&&vr<=0&&at<55))&&dt<28&&alt<6000)return 'arriving YTZ';if((fromYTZ||(vr>200&&at>110))&&dt<20&&alt<6000)return 'departing YTZ';}
   return vr>300?'climbing':(vr<-300?'descending':'level');}
  const ph=p=>/arriving/.test(p||'')?'arr':(/departing/.test(p||'')?'dep':'');

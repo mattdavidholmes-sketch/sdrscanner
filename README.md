@@ -56,3 +56,11 @@ Runtime data (channel bank, history, recordings, logs, scan folders) stays local
 - Encrypted talkgroups (police, most of the "other" traffic on the Toronto system) cannot be decoded. They show as silent calls.
 - Listening rules differ by country. In Canada, receiving is generally permitted; divulging or using what you hear is restricted under the Radiocommunication Act. Check the rules where you live.
 - `licences_gta.csv` is an extract of ISED Canada's public spectrum licence data.
+
+## Start it from the Dock (macOS)
+
+`Etobicoke Ops.app` in this folder starts the scanner in its Terminal window, or opens the dashboard if the scanner is already running. Drag it to the Dock. The first time after downloading, right-click it and choose Open (macOS asks once for apps that do not come from the App Store). Keep the app inside this folder.
+
+The same picture is the browser tab icon, and the home-screen icon when you add the dashboard to an iPhone or iPad home screen. The files are in `icons/`.
+
+`Reset everything.command` stops every radio process, clears the request flags, checks the dongle and starts one fresh dashboard. No data is deleted.

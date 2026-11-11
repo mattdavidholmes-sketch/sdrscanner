@@ -1,0 +1,13 @@
+#!/bin/bash
+# Etobicoke Ops (SDR Scanner) launcher. If the scanner is running, open its dashboard in the browser. If it is not, start it in
+# its one Terminal window (Dashboard.command), which opens the dashboard itself once it is up.
+# The app lives in the scanner's own folder; if it was copied somewhere else it looks in ~/SDRScanner.
+DIR="$(cd "$(dirname "$0")/../../.." && pwd)"
+[ -f "$DIR/Dashboard.command" ] || DIR="$HOME/SDRScanner"
+if curl -s -m 2 -o /dev/null http://127.0.0.1:8765/meter; then
+  open "http://localhost:8765/"
+elif [ -f "$DIR/Dashboard.command" ]; then
+  open -a Terminal "$DIR/Dashboard.command"
+else
+  osascript -e 'display alert "Etobicoke Ops" message "Dashboard.command was not found. Keep this app inside the SDR Scanner folder."' >/dev/null 2>&1
+fi
