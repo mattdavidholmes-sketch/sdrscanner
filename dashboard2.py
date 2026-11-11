@@ -223,6 +223,21 @@ def heard_stamp(mhz, name, secs, tones, count=True):
     except Exception: pass
 v1.monitor_heard = heard_stamp                # Monitor, Follow traffic and the voice check call this by name at the end of every confirmed opening
 
+def _bank_saver():
+    """(v202) Writes the bank to disk within 20 s of a change, whether or not a page is open.
+    v191 put the "heard just now" stamp into the bank this module keeps in memory - but the only thing that wrote that bank to
+    disk was the page asking for its state. With no browser open nothing was saved: on 11 Nov the voice check heard Pearson
+    arrivals at 06:26 and bank.json was still the file of 03:03, and each of the six restarts in between threw away what had
+    been heard since. A save that fails (the bank changed while it was being written) is tried again on the next round."""
+    while True:
+        time.sleep(20)
+        try:
+            if _bank.get("loaded") and _bank.get("dirty"):
+                before = _bank.get("saved", 0); _bank["dirty"] = False; bank_save()
+                if _bank.get("saved", 0) == before: _bank["dirty"] = True
+        except Exception: pass
+__import__("threading").Thread(target=_bank_saver, daemon=True, name="bank-saver").start()
+
 def digital_stamp(mhz, name, tg, calls=1, enc=False):
     """(v193) SDRTrunk decoded a call on this channel (or, for a trunked system, on the system this control channel belongs to):
     stamp the bank the page reads, as DIGITAL - never as analog voice. dashboard.digital_heard wrote bank.json on disk, where this
