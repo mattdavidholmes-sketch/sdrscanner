@@ -2251,6 +2251,20 @@ main{padding-bottom:270px!important}
 #chips{display:flex;flex-wrap:wrap;gap:6px}.chip{white-space:nowrap}
 /* (v178) Digital tab: one list of systems, each row opens to its frequencies */
 .dgh{font:600 .74rem/1 var(--mono);letter-spacing:.1em;text-transform:uppercase;color:var(--mute);margin:16px 2px 6px}
+/* (v187) spectrum panel: data fields (small caption, large value) over a plot with real scales; numbered flags + a legend, no text on the trace */
+.specbox{margin:0 0 10px;border:1px solid var(--line);border-radius:12px;background:var(--card);padding:8px 10px;position:relative}
+.specbar{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:6px;margin-bottom:6px}
+.sf{background:var(--bg2);border:1px solid var(--line);border-radius:8px;padding:5px 10px 6px;min-width:0}
+.sf i{display:block;font:600 .64rem/1.3 var(--mono);letter-spacing:.12em;color:var(--mute);font-style:normal;text-transform:uppercase}
+.sf b{display:block;font:700 1.3rem/1.15 var(--mono);color:var(--ink);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.sf span{display:block;font-size:.8rem;line-height:1.25;color:var(--mute);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.sf.cur b{color:var(--acc)}
+#spec{width:100%;height:230px;display:block;cursor:crosshair;touch-action:pan-y}
+.speclegend{display:flex;flex-wrap:wrap;gap:5px;margin-top:6px}
+.sl{display:inline-flex;align-items:center;gap:6px;padding:3px 10px 3px 4px;border-radius:999px;font-size:.84rem;background:transparent;max-width:100%;min-height:0}
+.sl i{display:inline-flex;align-items:center;justify-content:center;width:21px;height:21px;border-radius:50%;background:var(--ink);color:#0b0e13;font:700 .74rem var(--mono);font-style:normal;flex:0 0 auto}
+.sl.cc i{background:#ffb050}.sl b{font-family:var(--mono)}.sl span{color:var(--mute);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:230px}.sl u{text-decoration:none;color:var(--acc);font-family:var(--mono)}
+@media(max-width:760px){.specbar{grid-template-columns:repeat(2,minmax(0,1fr))}.sf b{font-size:1.08rem}#spec{height:190px}.speclegend{flex-wrap:nowrap;overflow-x:auto;-webkit-overflow-scrolling:touch}.sl{flex:0 0 auto}}
 .dgsec>summary{cursor:pointer;list-style:none;padding:8px 2px}.dgsec>summary::-webkit-details-marker{display:none}.dgsec>summary:before{content:'▸ '}.dgsec[open]>summary:before{content:'▾ '}.dgsec>summary .sv{text-transform:none;letter-spacing:0;font-family:inherit}.dgsec[open]>summary .sv{display:none}
 .dgx{border:1px solid var(--line);border-radius:12px;margin:6px 0;background:rgba(255,255,255,.02)}
 .dgx[open]{border-color:var(--acc)}
@@ -2290,9 +2304,16 @@ details.card[open]>summary{margin-bottom:10px}
   <div class="sub" id="hu-lockouts"></div></div>
  <div class="tiles" id="tiles"></div>
  <div class="bands" id="bands"></div>
- <div id="specwrap" style="margin:0 0 10px;border:1px solid var(--line);border-radius:12px;background:var(--card);padding:6px 8px 2px;position:relative">
-  <div class="sub" style="display:flex;justify-content:space-between;align-items:center"><span id="spectitle">spectrum</span><span id="specread" style="font-family:var(--mono)"></span></div>
-  <canvas id="spec" style="width:100%;height:280px;display:block;cursor:crosshair"></canvas>
+ <div id="specwrap" class="specbox">
+  <div class="specbar">
+   <div class="sf"><i>Band</i><b id="sfband">—</b><span id="sfrange"></span></div>
+   <div class="sf"><i>Strongest</i><b id="sfpeak">—</b><span id="sfpeakn"></span></div>
+   <div class="sf"><i>Noise floor</i><b id="sffloor">—</b><span id="sfwhen"></span></div>
+   <div class="sf cur"><i>Cursor</i><b id="sfcur">—</b><span id="specread">point at the trace</span></div>
+  </div>
+  <canvas id="spec"></canvas>
+  <div id="speclegend" class="speclegend"></div>
+  <div class="sub" id="spectitle" style="margin-top:4px"></div>
  </div>
  <div class="tabs"><button class="on" data-t="freq">Frequencies</button><button data-t="dir">Directory</button><button data-t="radio">FM Radio</button><button data-t="recs">Recordings <span id="reccount" class="tag"></span></button><button data-t="digital">Digital</button><button data-t="map">Map</button><button data-t="air">Aircraft</button><button data-t="debug">Debug</button></div>
  <section id="tab-freq">
@@ -2439,13 +2460,53 @@ $('#vol').addEventListener('input',()=>{if(DIGA)DIGA.volume=+$('#vol').value;});
 function specVis(){const w=$('#specwrap');if(!w)return;const live=!!SPEC.data&&(Date.now()-SPEC.t<150000)&&!(typeof P!=='undefined'&&P.sdrtOn);w.style.display=live?'':'none';}
 setInterval(specVis,1500);setTimeout(specVis,300);
 async function loadSpec(){if(!SPEC.key)return;try{const d=await (await fetch('/api/spectrum?band='+SPEC.key,{cache:'no-store'})).json();if(d.error){$('#spectitle').textContent=SPEC.key+': '+d.error;return;}SPEC.data=d;SPEC.t=Date.now();drawSpec();}catch(e){}}
-function drawSpec(){const d=SPEC.data;if(!d)return;const c=$('#spec');const W=c.clientWidth||800,H=280;c.width=W*devicePixelRatio;c.height=H*devicePixelRatio;const g=c.getContext('2d');g.scale(devicePixelRatio,devicePixelRatio);g.clearRect(0,0,W,H);
- const lo=d.lo,hi=d.hi,span=hi-lo||1;const ymin=d.floor-6,ymax=Math.max(...d.y,d.floor+30);const X=m=>(m-lo)/span*W,Y=v=>H-8-(Math.max(ymin,Math.min(ymax,v))-ymin)/(ymax-ymin)*(H-26);
- g.strokeStyle='rgba(120,160,200,.25)';g.lineWidth=1;const ticks=8;g.fillStyle='#8a97a8';g.font='12px system-ui';for(let i=0;i<=ticks;i++){const m=lo+span*i/ticks;const x=X(m);g.beginPath();g.moveTo(x,0);g.lineTo(x,H-8);g.stroke();g.fillText(m.toFixed(3),Math.min(W-40,x+2),H-1);}
- let lastLx=-99;[...d.labels].sort((p,q)=>p.mhz-q.mhz).forEach(l=>{const x=X(l.mhz);if(x-lastLx<17&&l.kind!=='cc')return;lastLx=x;g.strokeStyle=l.kind==='cc'?'rgba(255,160,60,.55)':'rgba(255,255,255,.22)';g.beginPath();g.moveTo(x,10);g.lineTo(x,H-8);g.stroke();g.save();g.translate(x+5,14);g.rotate(Math.PI/2);g.fillStyle=l.kind==='cc'?'#ffb050':'#aab4c2';g.font='bold 15px system-ui';g.fillText(l.name.slice(0,30),0,0);g.restore();});
- g.beginPath();d.x.forEach((m,i)=>{const x=X(m),y=Y(d.y[i]);i?g.lineTo(x,y):g.moveTo(x,y);});g.lineTo(X(d.x[d.x.length-1]),H-8);g.lineTo(X(d.x[0]),H-8);g.closePath();g.fillStyle='rgba(61,220,132,.35)';g.fill();g.beginPath();d.x.forEach((m,i)=>{const x=X(m),y=Y(d.y[i]);i?g.lineTo(x,y):g.moveTo(x,y);});g.strokeStyle='#3ddc84';g.lineWidth=1.2;g.stroke();
- $('#spectitle').textContent=`${d.key.toUpperCase()} ${lo.toFixed(3)}-${hi.toFixed(3)} MHz · floor ${d.floor} dB · ${d.when||''}${SPEC.pin?' · pinned (click the sweeping band to follow)':''}`;}
-(function(){const c=$('#spec');c.onmousemove=e=>{const d=SPEC.data;if(!d)return;const r=c.getBoundingClientRect();const m=d.lo+(e.clientX-r.left)/r.width*(d.hi-d.lo);let bi=0,bd=1e9;d.x.forEach((x,i)=>{const dd=Math.abs(x-m);if(dd<bd){bd=dd;bi=i;}});const lab=d.labels.find(l=>Math.abs(l.mhz-m)<(d.hi-d.lo)/120);$('#specread').textContent=m.toFixed(4)+' MHz  '+d.y[bi]+' dB'+(lab?'  '+lab.name:'');};c.onclick=e=>{const d=SPEC.data;if(!d)return;const r=c.getBoundingClientRect();let m=d.lo+(e.clientX-r.left)/r.width*(d.hi-d.lo);const lab=d.labels.find(l=>Math.abs(l.mhz-m)<(d.hi-d.lo)/120);if(lab)m=lab.mhz;else m=Math.round(m/0.0125)*0.0125;const md=m<137?'am':'fm';P.play(+m.toFixed(4),md,lab?lab.name:m.toFixed(4));};window.addEventListener('resize',drawSpec);setInterval(()=>{if(SPEC.key&&Date.now()-SPEC.t>12000)loadSpec();},4000);})();
+// (v187) The strongest signals in the sweep, at most n and never closer together than minSep MHz, each matched to the known channel at
+// that frequency when there is one. They get a numbered flag on the plot and a line in the legend under it.
+function specPeaks(d,n,minSep){const c=[],w=Math.max(8,Math.round(d.y.length/60));
+ for(let i=1;i<d.y.length-1;i++){const v=d.y[i];if(v-d.floor<8||v<d.y[i-1]||v<=d.y[i+1])continue;
+  const nb=d.y.slice(Math.max(0,i-w),i-2).concat(d.y.slice(i+3,i+w+1)).sort((p,q)=>p-q);            // it has to stand 8 dB clear of its own neighbourhood too:
+  if(nb.length&&v-nb[nb.length>>1]<8)continue;c.push({mhz:d.x[i],db:v});}                              // a hump in the receiver's passband is not a signal
+ c.sort((p,q)=>q.db-p.db);const out=[],tol=Math.max(0.0065,(d.hi-d.lo)/400);
+ for(const p of c){if(out.length>=n)break;if(out.some(o=>Math.abs(o.at-p.mhz)<minSep))continue;
+  let best=null;d.labels.forEach(l=>{const dd=Math.abs(l.mhz-p.mhz);if(dd<=tol&&(!best||dd<Math.abs(best.mhz-p.mhz)))best=l;});
+  const hit=best?null:((typeof S!=='undefined'&&S.hits)||[]).find(h=>Math.abs(h.mhz-p.mhz)<=tol);       // not a labelled channel: the bank may still know it
+  out.push({at:p.mhz,mhz:best?best.mhz:(hit?hit.mhz:p.mhz),db:p.db,name:best?best.name:(hit?hit.name:''),cc:!!(best&&best.kind==='cc')||!!(hit&&hit.cat==='Digital')});}
+ return out.sort((p,q)=>p.at-q.at);}
+function drawSpec(){const d=SPEC.data;if(!d)return;const c=$('#spec');const W=c.clientWidth||800,H=c.clientHeight||230,dpr=window.devicePixelRatio||1;c.width=W*dpr;c.height=H*dpr;const g=c.getContext('2d');g.scale(dpr,dpr);g.clearRect(0,0,W,H);
+ const lo=d.lo,hi=d.hi,span=hi-lo||1,PL=40,PR=8,PT=24,PB=20;                 // plot box: dB scale on the left, MHz underneath, flags along the top
+ const top=Math.max(...d.y),ymin=d.floor-4,ymax=Math.max(top+3,d.floor+30);
+ const X=m=>PL+(m-lo)/span*(W-PL-PR),Y=v=>H-PB-(Math.max(ymin,Math.min(ymax,v))-ymin)/(ymax-ymin)*(H-PT-PB);
+ g.lineWidth=1;g.font='12px ui-monospace,Menlo,monospace';
+ // horizontal lines every 10 dB above the noise floor
+ g.textBaseline='middle';g.textAlign='right';for(let v=0;d.floor+v<=ymax;v+=10){const y=Math.round(Y(d.floor+v))+.5;g.strokeStyle=v?'rgba(140,165,200,.15)':'rgba(140,165,200,.45)';g.beginPath();g.moveTo(PL,y);g.lineTo(W-PR,y);g.stroke();g.fillStyle='#8a97a8';g.fillText(v?'+'+v:'floor',PL-5,y);}
+ // vertical lines at a round MHz step (1 - 2 - 2.5 - 5), as many as fit without the numbers touching
+ const raw=span/Math.max(3,Math.floor((W-PL-PR)/95)),p10=Math.pow(10,Math.floor(Math.log10(raw))),step=[1,2,2.5,5,10].map(k=>k*p10).find(v=>v>=raw)||raw,dec=step>=1?0:(step>=0.1?1:(step>=0.01?2:3));
+ g.textBaseline='alphabetic';for(let m=Math.ceil(lo/step-1e-9)*step;m<=hi+1e-9;m+=step){const x=Math.round(X(m))+.5;g.strokeStyle='rgba(140,165,200,.15)';g.beginPath();g.moveTo(x,PT);g.lineTo(x,H-PB);g.stroke();g.fillStyle='#aab4c2';g.textAlign=x<PL+20?'left':(x>W-PR-20?'right':'center');g.fillText(m.toFixed(dec),x,H-5);}
+ // every known channel is a short tick on the baseline; its name shows in the Cursor field, never as text over the trace
+ d.labels.forEach(l=>{const x=Math.round(X(l.mhz))+.5;g.strokeStyle=l.kind==='cc'?'rgba(255,176,80,.8)':'rgba(170,180,194,.6)';g.beginPath();g.moveTo(x,H-PB);g.lineTo(x,H-PB-5);g.stroke();});
+ // the trace
+ const path=()=>{g.beginPath();d.x.forEach((m,i)=>{const x=X(m),y=Y(d.y[i]);i?g.lineTo(x,y):g.moveTo(x,y);});};
+ path();g.lineTo(X(d.x[d.x.length-1]),H-PB);g.lineTo(X(d.x[0]),H-PB);g.closePath();const gr=g.createLinearGradient(0,PT,0,H-PB);gr.addColorStop(0,'rgba(61,220,132,.55)');gr.addColorStop(1,'rgba(61,220,132,.10)');g.fillStyle=gr;g.fill();
+ path();g.strokeStyle='#3ddc84';g.lineWidth=1.3;g.stroke();g.lineWidth=1;
+ // numbered flags on the strongest signals
+ const pk=specPeaks(d,Math.max(3,Math.min(9,Math.floor((W-PL-PR)/105))),span*19/(W-PL-PR));SPEC.peaks=pk;
+ g.textAlign='center';g.textBaseline='middle';g.font='bold 11px ui-monospace,Menlo,monospace';
+ pk.forEach((p,i)=>{const x=X(p.at),y=Y(p.db);g.strokeStyle='rgba(230,235,242,.45)';g.beginPath();g.moveTo(x,Math.max(PT-2,y-3));g.lineTo(x,PT-3);g.stroke();
+  g.fillStyle=p.cc?'#ffb050':'#e6ebf2';g.beginPath();g.arc(x,11,9,0,7);g.fill();g.fillStyle='#0b0e13';g.fillText(String(i+1),x,11.5);});
+ // data fields and legend
+ const best=pk.slice().sort((p,q)=>q.db-p.db)[0];
+ $('#sfband').textContent=d.key.toUpperCase();$('#sfrange').textContent=lo.toFixed(3)+' - '+hi.toFixed(3)+' MHz';
+ $('#sfpeak').textContent=best?best.mhz.toFixed(4):'—';$('#sfpeakn').textContent=best?('+'+Math.round(best.db-d.floor)+' dB'+(best.name?' · '+best.name:'')):'nothing 8 dB above the floor';
+ $('#sffloor').textContent=d.floor+' dB';$('#sfwhen').textContent='sweep '+String(d.when||'').split(' ').pop();
+ $('#speclegend').innerHTML=pk.map((p,i)=>`<button class="ghost sl${p.cc?' cc':''}" data-m="${p.mhz}" data-cc="${p.cc?1:0}" data-n="${esc(p.name)}" title="${p.cc?'digital - opens the Digital tab':'listen'}"><i>${i+1}</i><b>${p.mhz.toFixed(4)}</b><span>${esc(p.name||'not in the bank')}</span><u>+${Math.round(p.db-d.floor)} dB</u></button>`).join('');
+ $('#spectitle').textContent=SPEC.pin?'pinned to this band - click the sweeping band to follow the sweep again':'';}
+(function(){const c=$('#spec');
+ const at=e=>{const d=SPEC.data;if(!d)return null;const r=c.getBoundingClientRect(),PL=40,PR=8;const m=d.lo+Math.max(0,Math.min(1,(e.clientX-r.left-PL)/(r.width-PL-PR)))*(d.hi-d.lo);let bi=0,bd=1e9;d.x.forEach((x,i)=>{const dd=Math.abs(x-m);if(dd<bd){bd=dd;bi=i;}});
+  const lab=d.labels.find(l=>Math.abs(l.mhz-m)<(d.hi-d.lo)/120);return {d,m,bi,lab};};
+ c.onpointermove=e=>{const q=at(e);if(!q)return;$('#sfcur').textContent=q.m.toFixed(4);$('#specread').textContent=(q.d.y[q.bi]-q.d.floor>=0?'+':'')+Math.round(q.d.y[q.bi]-q.d.floor)+' dB over the floor'+(q.lab?' · '+q.lab.name:'');};
+ c.onclick=e=>{const q=at(e);if(!q)return;let m=q.lab?q.lab.mhz:Math.round(q.m/0.0125)*0.0125;const md=m<137?'am':'fm';P.play(+m.toFixed(4),md,q.lab?q.lab.name:m.toFixed(4));};
+ $('#speclegend').onclick=e=>{const b=e.target.closest('button.sl');if(!b)return;if(b.dataset.cc==='1'){const t=$('.tabs button[data-t="digital"]');if(t)t.click();toast('digital channel - play it from the Digital tab');return;}const m=+b.dataset.m;P.play(+m.toFixed(4),m<137?'am':'fm',b.dataset.n||m.toFixed(4));};
+ window.addEventListener('resize',drawSpec);setInterval(()=>{if(SPEC.key&&Date.now()-SPEC.t>12000)loadSpec();},4000);})();
 function toast(m){const t=$('#toast');t.textContent=m;t.classList.add('show');setTimeout(()=>t.classList.remove('show'),2200);}
 function fmt(m){return Number(m).toFixed(4);}
 // (v136) no list is longer than 20 items unless you ask: hide the rest and put a "show 20 more" button after the container.

@@ -15,9 +15,19 @@ CTCSS = [67.0,69.3,71.9,74.4,77.0,79.7,82.5,85.4,88.5,91.5,94.8,97.4,100.0,103.5
 SOX_VOICE = ["highpass", "300", "highpass", "300", "lowpass", "2800", "lowpass", "2800", "compand", "0.05,0.3", "-70,-70,-45,-22,-25,-13,0,-9", "0", "-70", "0.1"]
 SOX_WFM   = ["lowpass", "11000", "lowpass", "11000", "lowpass", "11000", "rate", "-q", "24000", "compand", "0.1,0.5", "-70,-70,-40,-22,-15,-11,0,-7", "0", "-70", "0.2"]
 
+def am_bw():
+    """(v186) Pre-detection bandwidth for single-channel AM in Hz. rtl_fm's AM output at -s 24000 carries noise from a +-12 kHz slice
+    of spectrum although airband speech needs about +-3 kHz; a narrower slice gives the envelope detector a better signal-to-noise
+    ratio on weak carriers. Off by default: write 12000 or 16000 into _state/am_bw.txt to use it (the audio stays at RATE)."""
+    try: v = int(open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "_state", "am_bw.txt")).read().strip())
+    except (OSError, ValueError): return RATE
+    return v if v in (8000, 12000, 16000) else RATE
+
 def rtl_cmd(mhz, mode, gain):
     if mode == "wbfm": return ["rtl_fm", "-f", f"{mhz:.4f}M", "-M", "wbfm", "-s", "200k", "-r", "48000", "-g", str(gain), "-"]
-    if mode == "am":   return ["rtl_fm", "-f", f"{mhz:.4f}M", "-M", "am", "-s", str(RATE), "-g", str(gain), "-l", "0", "-E", "dc", "-F", "9", "-"]   # -E dc: no zero-IF spike in the AM envelope; -F 9: low-leakage channel filter (less adjacent-channel splatter)
+    if mode == "am":                                       # (v186) -s is the pre-detection bandwidth; _state/am_bw.txt can narrow it (see am_bw)
+        bw = am_bw()
+        return ["rtl_fm", "-f", f"{mhz:.4f}M", "-M", "am", "-s", str(bw)] + (["-r", str(RATE)] if bw != RATE else []) + ["-g", str(gain), "-l", "0", "-E", "dc", "-F", "9", "-"]   # -E dc: no zero-IF spike in the AM envelope; -F 9: low-leakage channel filter (less adjacent-channel splatter)
     return ["rtl_fm", "-f", f"{mhz:.4f}M", "-M", "fm", "-s", str(RATE), "-g", str(gain), "-l", "0", "-"]
 
 def sox_cmd(mode, voice=True):
