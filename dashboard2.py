@@ -855,6 +855,17 @@ def dmr_tgs():
         tgs = sorted(((t, n) for t, n in e.items() if not t.startswith("_")), key=lambda x: -x[1])
         out[k] = {"last": e.get("_last", ""), "last_tg": e.get("_last_tg", ""), "tgs": tgs[:6], "names": names.get(k, {})}
     return out
+def call_label(c):
+    """(v192) A decoded call as the page should show it: the talkgroup's current name and what it is. {"label", "desc", "listed"}.
+    Metrolinx talkgroups come from the table in sdrtrunk_playlist.py (name corrected by id, so old log lines read right too)."""
+    to = c.get("to") or ""; m = re.search(r"\((\d+)\)\s*$", to); tid = m.group(1) if m else ""
+    nm = re.sub(r"\s*\(\d+\)\s*$", "", to).strip("[] ")
+    try:
+        import sdrtrunk_playlist as SP
+        info = SP.metrolinx_info(tid, nm, c.get("sys", "")) if tid else None
+    except Exception: info = None
+    if info: return {"label": f"{info['name']} ({tid})", "desc": info["desc"], "listed": info["listed"], "sys": "Metrolinx"}
+    return {"label": to, "desc": "", "listed": True, "sys": ""}
 def calls_log_update():
     """Persist every decoded call (deduped) so the Digital tab shows what the system carried, even after SDRTrunk stops."""
     try:
@@ -1269,6 +1280,7 @@ def _sdrt_calls(n=12):
         for f in files:
             if os.path.getmtime(f) < SDRT["started"] - 5: continue
             mf = re.search(r"_(\d{8,10})_Hz_", os.path.basename(f)); fmhz = round(int(mf.group(1)) / 1e6, 4) if mf else None   # (v143) which channel the log is for
+            sysn = "Metrolinx" if "Metrolinx" in os.path.basename(f) else ""                # (v192) which system the log belongs to
             with open(f, errors="ignore") as fh: lines = fh.readlines()[-80:]
             for r in csv.reader(l for l in lines if l.startswith('"')):
                 if len(r) < 10: continue
@@ -1279,7 +1291,7 @@ def _sdrt_calls(n=12):
                 try: fm = round(float(r[7]) / 1e6, 4) if r[7] else fmhz
                 except ValueError: fm = fmhz
                 out.append({"t": r[0][-8:] if len(r[0]) >= 8 else r[0], "ev": ev, "to": to, "from": r[4], "dur": dur, "det": r[9][:60], "enc": enc, "mhz": fm or fmhz,
-                            "ts": r[6] if len(r) > 6 else ""})
+                            "ts": r[6] if len(r) > 6 else "", "sys": sysn})
         # SDRTrunk re-logs a call as it grows: keep the last line per (start time, talkgroup, from)
         last = {}
         for c in out: last[(c["t"], c["to"], c["from"])] = c
@@ -1333,7 +1345,7 @@ def sdrt_state():
         return None
     note = "starting SDRTrunk (a few seconds)" if el < 6 else ("decoding - calls show by talkgroup in the SDRTrunk window; audio comes out of the Mac" if alive else "SDRTrunk closed")
     stream_live = icecast_live() if el > 8 else False
-    return {"engine": "sdrtrunk", "target": SDRT["target"], "name": SDRT["name"], "secs": el, "alive": alive, "stream": stream_live, "note": note, "calls": sdrt_calls(), "problem": (tuner_problem(SDRT["started"]) if el > 3 else None)}
+    return {"engine": "sdrtrunk", "target": SDRT["target"], "name": SDRT["name"], "secs": el, "alive": alive, "stream": stream_live, "note": note, "calls": [dict(c, **call_label(c)) for c in sdrt_calls()], "problem": (tuner_problem(SDRT["started"]) if el > 3 else None)}
 
 def talkgroups():
     """Every talkgroup heard on the P25 system, rolled up from the call log: who, how many calls, talk time, last heard,
@@ -1344,11 +1356,13 @@ def talkgroups():
     for c in log:
         to = c.get("to") or ""; m = re.search(r"\((\d+)\)\s*$", to); tid = m.group(1) if m else ""
         nm = re.sub(r"\s*\(\d+\)\s*$", "", to).strip("[] ") or ("talkgroup " + tid)
-        if c.get("enc") or nm.lower().startswith("police"): grp = "Police"
+        lab = call_label(c)
+        if lab["sys"] == "Metrolinx": grp = "Metrolinx"; nm = lab["label"].rsplit(" (", 1)[0]
+        elif c.get("enc") or nm.lower().startswith("police"): grp = "Police"
         elif re.search(r"\bEMS\b|paramedic|medic", nm, re.I): grp = "Paramedics"
         elif re.search(r"TFS|fire|rescue|tac \d", nm, re.I): grp = "Fire"
         else: grp = "Other"
-        a = agg.setdefault(tid or nm, {"id": tid, "name": nm if grp != "Police" else "Police (encrypted)", "group": grp, "calls": 0, "secs": 0.0, "last": "", "enc": bool(c.get("enc")), "strip": [0] * 12, "units": set(), "solo": (solo_load()["tg"] == int(tid)) if tid.isdigit() else False})
+        a = agg.setdefault(tid or nm, {"id": tid, "name": nm if grp != "Police" else "Police (encrypted)", "group": grp, "calls": 0, "secs": 0.0, "last": "", "enc": bool(c.get("enc")), "desc": lab["desc"], "listed": lab["listed"], "strip": [0] * 12, "units": set(), "solo": (solo_load()["tg"] == int(tid)) if tid.isdigit() else False})
         a["calls"] += 1
         try: a["secs"] += float(c.get("dur") or 0) / 1000
         except ValueError: pass
@@ -1365,7 +1379,7 @@ def talkgroups():
     out = []
     for a in agg.values():
         a["units"] = len(a["units"]); a["secs"] = round(a["secs"], 1); a["clip"] = clips.get(str(a.get("id") or ""), ""); out.append(a)
-    order = {"Fire": 0, "Paramedics": 1, "Police": 2, "Other": 3}
+    order = {"Fire": 0, "Paramedics": 1, "Metrolinx": 2, "Police": 3, "Other": 4}
     return sorted(out, key=lambda a: (order[a["group"]], -a["calls"]))
 
 _UNITS = {"t": 0, "sig": None, "data": []}
@@ -1850,7 +1864,7 @@ class H2(v1.H):
         if u.path == "/api/sdrt/calls":
             try: log = json.load(open(CALLS_FILE))
             except Exception: log = []
-            return self.send(json.dumps(list(reversed(log[-200:]))), "application/json")
+            return self.send(json.dumps([dict(c, **call_label(c)) for c in reversed(log[-200:])]), "application/json")
         if u.path == "/info":
             try:
                 m = float(parse_qs(u.query).get("mhz", ["0"])[0])
@@ -2309,6 +2323,7 @@ main{padding-bottom:270px!important}
 #chips{display:flex;flex-wrap:wrap;gap:6px}.chip{white-space:nowrap}
 /* (v178) Digital tab: one list of systems, each row opens to its frequencies */
 .dgh{font:600 .74rem/1 var(--mono);letter-spacing:.1em;text-transform:uppercase;color:var(--mute);margin:16px 2px 6px}
+.tgdesc{font-size:.78rem;line-height:1.3;white-space:normal;max-width:520px}
 /* (v188) ham nets: a status line above the spectrum (on air / next) and the Nets tab */
 .netbar{display:flex;flex-wrap:wrap;gap:8px;align-items:stretch;margin:0 0 10px}
 .nb{display:flex;align-items:center;gap:9px;min-width:0;max-width:100%;padding:5px 12px;border:1px solid var(--line);border-radius:10px;background:var(--card);font-size:.86rem;color:var(--ink);text-align:left;min-height:44px}
@@ -2774,7 +2789,7 @@ async function loadMap(){try{await loadLeaflet();}catch(e){$('#mapinfo').textCon
  d.landmarks.forEach(m=>{const km=Math.round(MAP.distance(h,[m.lat,m.lon])/100)/10;MAPL.push(L.circleMarker([m.lat,m.lon],{radius:7,color:'#2f81f7'}).addTo(MAP).bindPopup(m.name+'<br>'+km+' km from home'));});
  $('#mapinfo').textContent=d.landmarks.map(m=>m.name.split(' - ')[0]+' '+(Math.round(MAP.distance(h,[m.lat,m.lon])/100)/10)+' km').join(' · ')+(d.home.set?'':' · home is a default - tap the map on your house');
  setTimeout(()=>MAP.invalidateSize(),200);}
-let TGF='all';async function loadTG(){try{const t=await (await fetch('/api/sdrt/talkgroups')).json();const g=['all','Fire','Paramedics','Police','Other'];$('#tgchips').innerHTML=g.map(x=>`<button class="chip${TGF===x?' on':''}" data-g="${x}">${x==='all'?'All':x} ${x==='all'?t.length:t.filter(a=>a.group===x).length}</button>`).join('');$('#tgchips').querySelectorAll('button').forEach(b=>b.onclick=()=>{TGF=b.dataset.g;loadTG();});const bar=a=>{const m=Math.max(1,...a);return a.map(v=>'▁▂▃▄▅▆▇█'[v?Math.min(7,Math.ceil(v/m*7)):0]).join('');};const rows=t.filter(a=>TGF==='all'||a.group===TGF);$('#tgrows').innerHTML=rows.length?rows.map(a=>`<tr style="${a.enc?'opacity:.6':''}"><td class="sv">${a.group}</td><td><b>${esc(a.name)}</b> <span class="sv">${esc(a.id)}</span>${a.enc?' <span class="sv">silent</span>':''}</td><td>${a.calls}</td><td class="sv">${a.secs} s</td><td class="sv" style="letter-spacing:1px">${bar(a.strip)}</td><td class="sv">${esc(a.last)}${a.clip?` <button class="ghost" data-clip="${esc(a.clip)}" title="play the last recorded call on this talkgroup">▶ last call</button>`:''}</td><td>${a.id?`<button class="ghost" data-tg="${esc(a.id)}" data-p="${a.solo?0:1}" title="${a.solo?'back to hearing everything':'hear only this talkgroup'}">${a.solo?'◉ hearing only this - hear everything':'🎯 hone in'}</button>`:''}</td></tr>`).join(''):'<tr><td colspan="7" class="empty">nothing decoded yet - press ▶ on a P25 site</td></tr>';$('#tgrows').querySelectorAll('button[data-clip]').forEach(b=>b.onclick=()=>{if(window._clipA){window._clipA.pause();}window._clipA=new Audio('/rec/'+encodeURIComponent(b.dataset.clip));window._clipA.play().catch(e=>toast('could not play: '+e.message));toast('playing '+b.dataset.clip);});$('#tgrows').querySelectorAll('button[data-tg]').forEach(b=>b.onclick=async()=>{if(!b.dataset.tg)return;const r=await (await fetch('/api/sdrt/solo?tg='+(b.dataset.p==='1'?b.dataset.tg:0))).json();toast(r.error||(b.dataset.p==='1'?'Hearing only that talkgroup':'Hearing everything again')+(r.restarted?' - SDRTrunk restarting (about 3 s)':' - applies the next time SDRTrunk starts'));loadTG();});}catch(e){}}
+let TGF='all';async function loadTG(){try{const t=await (await fetch('/api/sdrt/talkgroups')).json();const g=['all','Fire','Paramedics','Metrolinx','Police','Other'];$('#tgchips').innerHTML=g.map(x=>`<button class="chip${TGF===x?' on':''}" data-g="${x}">${x==='all'?'All':x} ${x==='all'?t.length:t.filter(a=>a.group===x).length}</button>`).join('');$('#tgchips').querySelectorAll('button').forEach(b=>b.onclick=()=>{TGF=b.dataset.g;loadTG();});const bar=a=>{const m=Math.max(1,...a);return a.map(v=>'▁▂▃▄▅▆▇█'[v?Math.min(7,Math.ceil(v/m*7)):0]).join('');};const rows=t.filter(a=>TGF==='all'||a.group===TGF);$('#tgrows').innerHTML=rows.length?rows.map(a=>`<tr style="${a.enc?'opacity:.6':''}"><td class="sv">${a.group}</td><td><b>${esc(a.name)}</b> <span class="sv">${esc(a.id)}</span>${a.enc?' <span class="sv">silent</span>':''}${a.listed===false?' <span class="tag sdr" title="heard on the air but not in the published talkgroup list">unlisted</span>':''}${a.desc?'<div class="sv tgdesc">'+esc(a.desc)+'</div>':''}</td><td>${a.calls}</td><td class="sv">${a.secs} s</td><td class="sv" style="letter-spacing:1px">${bar(a.strip)}</td><td class="sv">${esc(a.last)}${a.clip?` <button class="ghost" data-clip="${esc(a.clip)}" title="play the last recorded call on this talkgroup">▶ last call</button>`:''}</td><td>${a.id?`<button class="ghost" data-tg="${esc(a.id)}" data-p="${a.solo?0:1}" title="${a.solo?'back to hearing everything':'hear only this talkgroup'}">${a.solo?'◉ hearing only this - hear everything':'🎯 hone in'}</button>`:''}</td></tr>`).join(''):'<tr><td colspan="7" class="empty">nothing decoded yet - press ▶ on a P25 site</td></tr>';$('#tgrows').querySelectorAll('button[data-clip]').forEach(b=>b.onclick=()=>{if(window._clipA){window._clipA.pause();}window._clipA=new Audio('/rec/'+encodeURIComponent(b.dataset.clip));window._clipA.play().catch(e=>toast('could not play: '+e.message));toast('playing '+b.dataset.clip);});$('#tgrows').querySelectorAll('button[data-tg]').forEach(b=>b.onclick=async()=>{if(!b.dataset.tg)return;const r=await (await fetch('/api/sdrt/solo?tg='+(b.dataset.p==='1'?b.dataset.tg:0))).json();toast(r.error||(b.dataset.p==='1'?'Hearing only that talkgroup':'Hearing everything again')+(r.restarted?' - SDRTrunk restarting (about 3 s)':' - applies the next time SDRTrunk starts'));loadTG();});}catch(e){}}
 async function loadUnits(){try{const u=await (await fetch('/api/sdrt/units')).json();$('#unitrows').innerHTML=u.length?u.map(x=>`<tr style="${x.enc&&!x.tgs.length?'opacity:.6':''}"><td class="sv">${esc(x.system)}</td><td><b>${esc(x.unit)}</b></td><td>${esc(x.home||'—')}</td><td class="sv">${x.tgs.map(esc).join(' · ')||(x.enc?'encrypted only':'')}</td><td>${x.calls}${x.enc?' <span class="sv">('+x.enc+' enc.)</span>':''}</td><td class="sv">${esc(x.first)} / ${esc(x.last)}</td></tr>`).join(''):'<tr><td colspan="6" class="empty">nothing decoded yet</td></tr>';}catch(e){}}
 async function dmrscanPoll(){try{const r=await (await fetch('/api/sdrt/dmrscan',{cache:'no-store'})).json();const b=$('#dmrscanbtn'),b2=$('#p25scanbtn');b.textContent=(r.on&&r.kind!=='p25')?'■ Stop DMR scan':'▶ Scan all DMR';b.classList.toggle('stopb',!!r.on&&r.kind!=='p25');b2.textContent=(r.on&&r.kind==='p25')?'■ Stop P25 scan':'▶ Scan all P25 sites';b2.classList.toggle('stopb',!!r.on&&r.kind==='p25');b.style.display=(r.on&&r.kind==='p25')?'none':'';b2.style.display=(r.on&&r.kind!=='p25')?'none':'';$('#dmrscannext').style.display=r.on?'':'none';
  $('#dmrscanwin').textContent=r.windows?r.windows+' windows, '+r.channels+' channels':'—';
@@ -2784,7 +2799,7 @@ $('#p25scanbtn').onclick=async()=>{const on=$('#p25scanbtn').classList.contains(
 $('#dmrscannext').onclick=async()=>{await fetch('/api/sdrt/dmrscan?next=1');dmrscanPoll();};
 setInterval(()=>{if(tab==='digital'&&!document.hidden)dmrscanPoll();},4000);
 async function loadRotation(){dmrscanPoll();loadTG();loadUnits();try{const r=await (await fetch('/api/sdrt/rotation')).json();$('#roton').checked=!!r.on;$('#rotsite').value=(r.target||'p25:West Simulcast').split(':')[1]||'West Simulcast';$('#rotmin').value=r.minutes;$('#rotevery').value=r.every;$('#rotstat').textContent=r.on?('next slot '+(r.last?Math.max(0,Math.round((r.last+r.every*60-Date.now()/1000)/60))+' min':'now')):'off';}catch(e){}
- try{const h=await (await fetch('/api/sdrt/calls')).json();$('#dighist').innerHTML=h.length?h.slice(0,60).map(c=>`<tr style="${c.enc?'opacity:.5':''}"><td class="sv">${esc((c.day||'')+c.t)}</td><td><b>${esc(c.to||'—')}</b>${c.enc?' <span class="sv">silent</span>':''}</td><td class="sv">${esc(c.ev)}${c.dur?' · '+(c.dur/1000).toFixed(1)+' s':''}</td><td class="sv">${esc(c.from)}</td></tr>`).join(''):'<tr><td colspan="4" class="empty">nothing logged yet</td></tr>';}catch(e){}}
+ try{const h=await (await fetch('/api/sdrt/calls')).json();$('#dighist').innerHTML=h.length?h.slice(0,60).map(c=>`<tr style="${c.enc?'opacity:.5':''}"><td class="sv">${esc((c.day||'')+c.t)}</td><td><b>${esc(c.label||c.to||'—')}</b>${c.enc?' <span class="sv">silent</span>':''}${c.desc?'<div class="sv tgdesc">'+esc(c.desc)+'</div>':''}</td><td class="sv">${esc(c.ev)}${c.dur?' · '+(c.dur/1000).toFixed(1)+' s':''}</td><td class="sv">${esc(c.from)}</td></tr>`).join(''):'<tr><td colspan="4" class="empty">nothing logged yet</td></tr>';}catch(e){}}
 async function saveRotation(){const q='on='+($('#roton').checked?1:0)+'&target='+encodeURIComponent('p25:'+$('#rotsite').value)+'&minutes='+$('#rotmin').value+'&every='+$('#rotevery').value;const r=await (await fetch('/api/sdrt/rotation?'+q)).json();toast(r.on?('P25 slot: '+r.minutes+' min every '+r.every+' min - first one starts when the dongle is free'):'rotation off');loadRotation();}
 $('#sirenbtn').onclick=async()=>{toast('Sirens: searching the emergency channels…');let r=null,err='';for(let i=0;i<3&&!r;i++){try{const x=await fetch('/api/sirens',{cache:'no-store'});r=await x.json();}catch(e){err=e.message;await new Promise(q=>setTimeout(q,2500));}}if(!r){toast('Sirens: could not reach the scanner ('+err+') - tried 3 times');return;}toast(r.error||('Sirens logged - '+r.msg));sirenPoll();};
 async function sirenPoll(){try{const s=await (await fetch('/api/sirens/status')).json();const el=$('#sirenmsg');el.textContent=s.active?('🚨 '+s.msg+' · '+s.secs+' s'):(s.msg&&s.t0&&Date.now()/1000-s.t0<1200?'🚨 '+s.msg:'');}catch(e){}}
@@ -2898,7 +2913,7 @@ $('#monbtn').onclick=()=>{if(P.cur&&P.cur.mode==='monitor'){P.stop();return;}QUI
 $('#quickbtn').onclick=()=>{if(P.cur&&P.cur.mode==='monitor'&&QUICK){P.stop();return;}QUICK=true;MONCAT='';P.play(1,'monitor','Quick scan: everything heard today'+(filter==='All'||filter==='UV-32 only'?'':' - '+filter));};
 let QUICK=false,MONCAT='';function monitorQuery(){return '&cat='+encodeURIComponent(MONCAT||((filter==='UV-32 only'?'All':filter)+(QUICK?'|quick':'')));}
 /* meter: the server is the source of truth - if it stopped (dongle drop, another device took over) the UI follows */
-let peak=0,gone=0;async function meter(){try{const m0=await (await fetch('/meter')).json();if(m0.sdrtrunk&&!(Date.now()-(P.leftDig||0)<20000)){const st=m0.sdrtrunk;digAudio(st);if(!P.cur||P.cur.mode!=='digital'){P.cur={mhz:0,mode:'digital',name:st.name,where:'mac',target:st.target};P.sdrtOn=true;$('#pfreq').textContent='P25';$('#pname').textContent=st.name+' · SDRTrunk · Mac speakers';P.paint();}const c0=(st.calls||[]).find(c=>!c.enc)||(st.calls||[])[0];$('#pstat').innerHTML=(st.alive&&st.secs>=15?'<b style="color:var(--acc)">DECODING</b> · ':'')+(c0?'<b>'+esc(c0.to||c0.ev)+'</b> '+esc(c0.t)+' · ':'')+(st.problem?'<b style="color:var(--bad,#ff5a5f)">⚠ '+esc(st.problem)+'</b> · ':esc(st.note)+' · ')+st.secs+' s';if(st.problem&&P._tp!==st.problem){P._tp=st.problem;toast(st.problem);}if(!st.problem)P._tp=null;const cl=$('#digcalls');if(cl)cl.innerHTML=(st.calls||[]).map(c=>`<tr style="${c.enc?'opacity:.5':''}"><td class="sv">${esc(c.t)}</td><td><b>${esc(c.to||'—')}</b>${c.enc?' <span class="sv">silent</span>':''}</td><td class="sv">${esc(c.ev)}${c.dur?' · '+(c.dur/1000).toFixed(1)+' s':''}</td><td class="sv">${esc(c.from)}</td></tr>`).join('')||'<tr><td colspan="4" class="empty">no calls decoded yet</td></tr>';$('#lvl i').style.width=st.alive?'100%':'0';return;}else if(P.sdrtOn&&!m0.sdrtrunk){digAudio(null);P.sdrtOn=false;P.cur=null;$('#pname').textContent='Nothing playing';$('#pstat').textContent='SDRTrunk stopped';P.paint();}}catch(e){}
+let peak=0,gone=0;async function meter(){try{const m0=await (await fetch('/meter')).json();if(m0.sdrtrunk&&!(Date.now()-(P.leftDig||0)<20000)){const st=m0.sdrtrunk;digAudio(st);if(!P.cur||P.cur.mode!=='digital'){P.cur={mhz:0,mode:'digital',name:st.name,where:'mac',target:st.target};P.sdrtOn=true;$('#pfreq').textContent='P25';$('#pname').textContent=st.name+' · SDRTrunk · Mac speakers';P.paint();}const c0=(st.calls||[]).find(c=>!c.enc)||(st.calls||[])[0];$('#pstat').innerHTML=(st.alive&&st.secs>=15?'<b style="color:var(--acc)">DECODING</b> · ':'')+(c0?'<b title="'+esc(c0.desc||'')+'">'+esc(c0.label||c0.to||c0.ev)+'</b> '+esc(c0.t)+' · ':'')+(st.problem?'<b style="color:var(--bad,#ff5a5f)">⚠ '+esc(st.problem)+'</b> · ':esc(st.note)+' · ')+st.secs+' s';if(st.problem&&P._tp!==st.problem){P._tp=st.problem;toast(st.problem);}if(!st.problem)P._tp=null;const cl=$('#digcalls');if(cl)cl.innerHTML=(st.calls||[]).map(c=>`<tr style="${c.enc?'opacity:.5':''}"><td class="sv">${esc(c.t)}</td><td><b>${esc(c.label||c.to||'—')}</b>${c.enc?' <span class="sv">silent</span>':''}${c.desc?'<div class="sv tgdesc">'+esc(c.desc)+'</div>':''}</td><td class="sv">${esc(c.ev)}${c.dur?' · '+(c.dur/1000).toFixed(1)+' s':''}</td><td class="sv">${esc(c.from)}</td></tr>`).join('')||'<tr><td colspan="4" class="empty">no calls decoded yet</td></tr>';$('#lvl i').style.width=st.alive?'100%':'0';return;}else if(P.sdrtOn&&!m0.sdrtrunk){digAudio(null);P.sdrtOn=false;P.cur=null;$('#pname').textContent='Nothing playing';$('#pstat').textContent='SDRTrunk stopped';P.paint();}}catch(e){}
 try{const m=await (await fetch('/meter',{cache:'no-store'})).json();const l=$('#lvl');
  if(!m.playing&&P.cur&&P.cur.mirror&&++gone>2){P.cur=null;P.paint();}
  if(!m.playing&&!P.cur&&!P.sdrtOn&&$('#pname').textContent!=='Nothing playing'&&!$('#pstat').textContent.startsWith('Mac player error')){$('#pfreq').textContent='—';$('#pname').textContent='Nothing playing';$('#pstat').textContent='';$('#monbtn').textContent='Monitor all';$('#monbtn').classList.remove('stopb');$('#quickbtn').classList.remove('stopb');P.paint();}

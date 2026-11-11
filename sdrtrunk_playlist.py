@@ -53,17 +53,102 @@ GO_LAKESHORE_GROUPS = {
 }
 GO_LAKESHORE_TGS = {tg for s in GO_LAKESHORE_GROUPS.values() for tg in s}
 SITE_SYSTEM = {"Metrolinx Central": ("Metrolinx / GO Transit", "Metrolinx")}
-# Metrolinx talkgroups (RadioReference sid 4579, Mar 2025). Clear unless noted; (E) = encrypted, shown but silent.
-METROLINX = {240: "GO Dispatch 1", 241: "GO Dispatch 2", 243: "Loco Alarms 1", 244: "Loco Alarms 2", 245: "Willowbrook Yard 1", 247: "Willowbrook Yard 2",
-             248: "Willowbrook Grounds Escort", 250: "Lakeshore West", 251: "Lakeshore East", 252: "Kitchener", 253: "Stouffville", 254: "Richmond Hill",
-             255: "Barrie", 256: "Milton", 211: "Rail PA", 701: "UP Express 1", 702: "UP Express 2", 500: "USRC 1", 501: "USRC 2", 502: "USRC 3",
-             503: "USRC 4", 504: "USRC 5", 505: "USRC 6", 506: "USRC 7", 100: "Bus Ops 1", 101: "Bus Ops 2", 102: "Bus Ops 3", 103: "Bus Ops 4",
-             104: "Bus Ops 5", 105: "Bus Ops 6", 106: "Bus Ops 7", 107: "Bus Ops 8", 108: "Bus Ops 9", 109: "Bus Control 1", 110: "Bus Control 2",
-             111: "Union Station Bus Terminal", 113: "Bus Ops 13", 114: "Bus Ops 14", 300: "Transit Safety All-Call", 305: "Transit Safety Ops 5",
-             310: "Security", 601: "Facilities 1", 602: "Facilities 2", 603: "Facilities 3", 604: "Customer Care 1", 605: "Customer Care 2",
-             606: "Facilities 6", 607: "Facilities 7", 608: "Facilities 8", 609: "Facilities 9", 610: "Facilities 10", 611: "Facilities 11", 612: "Facilities 12",
-             1001: "Radio Techs 1", 1002: "Radio Techs 2", 1003: "Radio Techs 3", 242: "GO/UP Rail Secure (E)", 112: "Bus Ops Secure (E)",
-             301: "Transit Safety Ops 1 (E)", 302: "Transit Safety Ops 2 (E)", 303: "Transit Safety Ops 3 (E)", 304: "Transit Safety Ops 4 (E)"}
+# Metrolinx talkgroups: RadioReference sid 4579 as read on 11 Nov 2026 - id: (name shown, what it is). (E) = encrypted: shown, silent.
+# (v192) The March 2025 table that stood here had the USRC group shifted by one (501 was called "USRC 2"; it is USRC 1, 500 is the
+# all-call), placeholder names for the bus and facilities groups ("Bus Ops 13" = supervisors, "Facilities 1" = East Maintenance
+# Facility) and no Durham Region Transit, which shares the system.
+METROLINX_TG = {
+    100: ("Bus All Call", "GO bus operations: announcement to every bus radio"),
+    101: ("Bus Southwest", "GO bus operations, southwest region"),
+    102: ("Bus West", "GO bus operations, west region"),
+    103: ("Bus North", "GO bus operations, north region"),
+    104: ("Bus East", "GO bus operations, east region"),
+    105: ("Bus Events West", "GO bus: events west, specials, spare"),
+    106: ("Bus Events East", "GO bus: events east, Wonderland Express"),
+    107: ("Bus Fleet", "GO bus fleet and maintenance"),
+    108: ("Bus Northwest", "GO bus operations, northwest region"),
+    109: ("Bus Control West", "GO bus control, west"),
+    110: ("Bus Control East", "GO bus control, east"),
+    111: ("Union Station Bus Terminal", "Union Station Bus Terminal"),
+    112: ("Bus Ops Secure (E)", "GO bus operations, encrypted"),
+    113: ("Bus Supervisors", "GO bus supervisors and marshals"),
+    114: ("Emergency", "Emergency talkgroup"),
+    211: ("Rail PA", "On-board public-address announcements on GO trains"),
+    212: ("TTR Security York-Bay", "Security at Union Station, York and Bay side (Toronto Terminals Railway)"),
+    240: ("GO Dispatch 1", "Commuter train dispatch"),
+    241: ("GO Dispatch 2", "Commuter train dispatch"),
+    242: ("GO/UP Rail Secure (E)", "Rail operations, encrypted"),
+    243: ("Loco Alarms 1", "Locomotive Alarm Reporting System: automated alarm reports from locomotives"),
+    244: ("Loco Alarms 2", "Locomotive Alarm Reporting System: automated alarm reports from locomotives"),
+    245: ("Willowbrook Yard 1", "Willowbrook Yard, the GO rail yard and shops"),
+    247: ("Willowbrook Yard 2", "Willowbrook Yard, the GO rail yard and shops"),
+    248: ("Willowbrook Grounds Escort", "Willowbrook Yard: escorts on the yard grounds"),
+    250: ("Lakeshore West", "GO trains, Lakeshore West line"),
+    251: ("Lakeshore East", "GO trains, Lakeshore East line"),
+    252: ("Kitchener", "GO trains, Kitchener line"),
+    253: ("Stouffville", "GO trains, Stouffville line"),
+    254: ("Richmond Hill", "GO trains, Richmond Hill line"),
+    255: ("Barrie", "GO trains, Barrie line"),
+    256: ("Milton", "GO trains, Milton line"),
+    300: ("Transit Safety All Call", "Transit Safety: announcement to all officers"),
+    301: ("Transit Safety Ops 1 (E)", "Transit Safety operations 1, encrypted"),
+    302: ("Transit Safety Ops 2 (E)", "Transit Safety operations 2, encrypted"),
+    303: ("Transit Safety Ops 3 (E)", "Transit Safety operations 3, encrypted"),
+    304: ("Transit Safety Ops 4 (E)", "Transit Safety operations 4, encrypted"),
+    305: ("Transit Safety Ops 5", "Transit Safety operations 5"),
+    310: ("Security", "Security"),
+    500: ("USRC All Call", "Union Station Rail Corridor: announcement to every USRC radio"),
+    501: ("USRC 1", "Union Station Rail Corridor 1 - the group that maintains the tracks through and around Union Station"),
+    502: ("USRC 2", "Union Station Rail Corridor 2"),
+    503: ("USRC 3", "Union Station Rail Corridor 3 (not in the published list - name inferred from its neighbours)"),
+    504: ("USRC 4", "Union Station Rail Corridor 4 (not in the published list - name inferred from its neighbours)"),
+    505: ("USRC 5", "Union Station Rail Corridor 5"),
+    506: ("USRC 6", "Union Station Rail Corridor 6"),
+    30:  ("Facilities Ops", "Facilities operations"),
+    601: ("East Maintenance Facility", "East Maintenance Facility"),
+    602: ("Central Region Ops", "Central region operations"),
+    603: ("East Region Ops", "East region operations"),
+    604: ("Plant Services Union Stn", "Plant services, Union Station"),
+    605: ("Customer Care", "Customer care"),
+    606: ("Customer Care Union Stn", "Customer care, Union Station"),
+    607: ("West Maintenance Facility", "West Maintenance Facility"),
+    608: ("West Region Ops", "West region operations"),
+    609: ("Customer Care Platforms", "Customer care on the platforms"),
+    610: ("Station Ops East Events", "Station operations, east events"),
+    612: ("Station Ops West Events", "Station operations, west events"),
+    701: ("UP Express 1", "Union Pearson Express"),
+    702: ("UP Express 2", "Union Pearson Express"),
+    1:   ("Interop System (E)", "Interoperability with other agencies: system, encrypted"),
+    2:   ("Interop Enforcement (E)", "Interoperability: enforcement, encrypted"),
+    3:   ("Interop Maintenance of Way (E)", "Interoperability: track maintenance, encrypted"),
+    4:   ("Interop Mass Casualty (E)", "Interoperability: mass-casualty incidents, encrypted"),
+    400: ("DRT All Call", "Durham Region Transit: announcement to all"),
+    401: ("DRT Westney", "Durham Region Transit: Ajax and Pickering"),
+    402: ("DRT Raleigh", "Durham Region Transit: Oshawa and Clarington"),
+    403: ("DRT Whitby", "Durham Region Transit: Whitby"),
+    404: ("DRT Specialized", "Durham Region Transit: specialized services"),
+    405: ("DRT Pulse", "Durham Region Transit: Pulse, the Highway 2 rapid bus"),
+    406: ("DRT Supervisors", "Durham Region Transit: supervisors"),
+    407: ("DRT Events 1", "Durham Region Transit: events 1"),
+    408: ("DRT Events 2", "Durham Region Transit: events 2"),
+    409: ("DRT Private", "Durham Region Transit: private"),
+    411: ("DRT Emergency", "Durham Region Transit: emergency"),
+}
+METROLINX_TG.update({1000 + i: (f"Radio Service {i}", f"Radio technicians' service channel {i}") for i in range(1, 11)})
+METROLINX = {tg: name for tg, (name, _) in METROLINX_TG.items()}
+# names this table used before v192, by id - old lines in the call log still carry them
+METROLINX_OLD = {500: "USRC 1", 501: "USRC 2", 502: "USRC 3", 503: "USRC 4", 504: "USRC 5", 505: "USRC 6", 506: "USRC 7", 113: "Bus Ops 13", 114: "Bus Ops 14"}
+def metrolinx_info(tid, logged_name="", system=""):
+    """(v192) What a talkgroup id on the Metrolinx system is: {"name", "desc", "listed"} - or None when the call is not Metrolinx.
+    A call is taken as Metrolinx when its log says so (system), or when the name SDRTrunk logged for it is one this table gave it."""
+    try: t = int(tid)
+    except (TypeError, ValueError): return None
+    nm = (logged_name or "").strip("[] ")
+    known = METROLINX_TG.get(t)
+    mine = system == "Metrolinx" or (known is not None and (nm == known[0] or nm == METROLINX_OLD.get(t) or nm.startswith(("Bus Ops", "Facilities", "Radio Techs", "Customer Care"))))
+    if not mine: return None
+    if known: return {"name": known[0], "desc": known[1], "listed": True}
+    return {"name": "Unlisted talkgroup", "desc": "Heard on the Metrolinx system but not in the published talkgroup list", "listed": False}
 FIRE = {1401: "TFS Disp 1", 1251: "TFS S Ops", 1253: "TFS S TAC 1", 1255: "TFS S TAC 2", 1257: "TFS S TAC 3", 1259: "TFS S TAC 4", 1261: "TFS S TAC 5",
         1263: "TFS S TAC 6", 1265: "TFS S Str 1", 1267: "TFS S Str 2", 1269: "TFS S Prev", 1271: "TFS E Ops", 1273: "TFS E TAC 1", 1275: "TFS E TAC 2",
         1277: "TFS E TAC 3", 1279: "TFS E TAC 4", 1281: "TFS E TAC 5", 1283: "TFS E TAC 6", 1285: "TFS E Str 1", 1287: "TFS E Str 2", 1289: "TFS E Prev",
