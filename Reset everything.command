@@ -23,6 +23,7 @@ echo "=== Starting the dashboard ==="
 ok=0; for i in $(seq 1 60); do curl -s -m 2 -o /dev/null http://127.0.0.1:8765/meter && { ok=1; break; }; sleep 1; done
 [ "$ok" = 1 ] && echo "$(date '+%H:%M:%S') Done. Dashboard: http://localhost:8765" || echo "The dashboard did not answer within a minute - look at its Terminal window."
 # the windows of the loop that was just stopped, and of any log-follower, are finished: close those (and only those), so ONE window is left
-perl -e 'alarm 6; exec @ARGV' osascript -e 'tell application "Terminal"' -e 'repeat with w in (every window)' -e 'try' -e 'set t to selected tab of w' \
-  -e 'if (busy of t is false) and ((contents of t contains "dashboard stopped (stop_loop)") or (contents of t contains "this one follows the log")) then close w' -e 'end try' -e 'end repeat' -e 'end tell' >/dev/null 2>&1
+perl -e 'alarm 8; exec @ARGV' osascript -e 'tell application "Terminal"' -e 'repeat with i from (count of windows) to 1 by -1' -e 'try' -e 'set w to window i' -e 'set t to selected tab of w' \
+  -e 'if (busy of t is false) and (((history of t) contains "dashboard stopped (stop_loop)") or ((history of t) contains "this one follows the log")) then close w' \
+  -e 'end try' -e 'end repeat' -e 'end tell' >/dev/null 2>&1
 exit 0
