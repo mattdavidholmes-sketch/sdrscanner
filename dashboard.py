@@ -101,7 +101,8 @@ def take_dongle():
         subprocess.call(["pkill", "-x", "rtl_fm"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         subprocess.call(["pkill", "-f", "fastscan.py"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)     # the sweep's engine (it closes its rtl_tcp)
         subprocess.call(["pkill", "-x", "rtl_tcp"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)          # (v169) a live user request always wins over a background
-        if i >= 3: subprocess.call(["pkill", "-9", "-x", "rtl_tcp"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)  # sweep - no reason to wait before taking it back (was i>=4/i>=8 on a 0.2s step, ~7s worst case; now ~2s)
+        if i >= 12: subprocess.call(["pkill", "-9", "-x", "rtl_tcp"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)  # sweep. (v180) SIGKILL only after 1.2 s: v169 used it after 0.3 s, which can cut rtl_tcp off
+                                                                                                                         # before it has released the USB device - the kind of hand-off that leaves the dongle unclaimable
         time.sleep(0.1)
         if not dongle_holders(): break
     time.sleep(0.4 if killed else 0.15)                   # let libusb release the device (v131: 0.4 s - rtl_fm/rtl_power exit cleanly on SIGINT; make_session_retry covers the rare miss)

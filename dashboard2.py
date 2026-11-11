@@ -697,10 +697,26 @@ def dg_what(u):
 def dg_enter(what):
     now = time.time()
     with DG_LOCK:
-        if DG["busy"] and now - DG["t0"] < 45: return False, DG["what"]      # 45 s: a command that never finished cannot lock the dongle for good
+        if DG["busy"] and now - DG["t0"] < 10: return False, DG["what"]      # 10 s (v179, was 45): a command that never finished cannot lock the dongle for long
         DG.update(busy=True, what=what, t0=now); return True, ""
 def dg_exit():
     with DG_LOCK: DG["busy"] = False
+_NUMW = {"zero": "0", "oh": "0", "one": "1", "two": "2", "three": "3", "tree": "3", "four": "4", "five": "5", "fife": "5", "six": "6", "seven": "7", "eight": "8",
+         "nine": "9", "niner": "9", "ten": "10", "eleven": "11", "twelve": "12", "thirteen": "13", "fourteen": "14", "fifteen": "15", "sixteen": "16",
+         "seventeen": "17", "eighteen": "18", "nineteen": "19"}
+_TENS = {"twenty": "2", "thirty": "3", "forty": "4", "fifty": "5", "sixty": "6", "seventy": "7", "eighty": "8", "ninety": "9"}
+def _say_norm(txt):
+    """(v180) Transcript text with spoken numbers as digits and runs of digits joined, so a callsign can be matched whole:
+    'Jazz two six two', 'jazz 2-6-2' and 'Jazz twenty-six two' all become 'jazz 262'."""
+    w = re.findall(r"[a-z]+|\d+", txt.lower()); out = []; i = 0
+    while i < len(w):
+        t = w[i]
+        if t in _TENS:
+            nx = w[i + 1] if i + 1 < len(w) else ""
+            if nx in _NUMW and len(_NUMW[nx]) == 1 and nx not in ("zero", "oh"): out.append(_TENS[t] + _NUMW[nx]); i += 2; continue
+            out.append(_TENS[t] + "0"); i += 1; continue
+        out.append(_NUMW.get(t, t)); i += 1
+    return re.sub(r"(?<=\d) (?=\d)", "", " ".join(out)).lstrip()
 _LAST_UREQ = {"target": None, "t": 0.0}
 def sdrt_user_start(target):
     # (v173/v177) a double tap (or two devices) used to launch SDRTrunk twice 2 s apart - the second start killed the first. v173 compared
@@ -1809,10 +1825,14 @@ class H2(v1.H):
                     txt = open(f, errors="ignore").read().lower()
                     if not txt: continue
                     stamp = dt.datetime.fromtimestamp(os.path.getmtime(f)).strftime("%H:%M")
+                    if time.time() - os.path.getmtime(f) > 900: continue                 # (v180) only the last 15 min says where a plane is NOW
+                    norm = _say_norm(txt)
                     for cs, sp in spoken.items():
                         if cs in out: continue
-                        words = sp.split(); key = " ".join(words[:3])                      # "air canada one two" is specific enough
-                        if key and key in txt: out[cs] = f"{stamp} on {mhz:.3f}"
+                        m = re.match(r"([A-Z]{3})(\d+)", cs)                               # (v180) the WHOLE flight number has to be heard: the old test
+                        if not m or sp == cs.lower(): continue                             # ("air canada two") matched every Air Canada 2xx on the air
+                        tel = _say_norm(sp.rsplit(" ", len(m.group(2)))[0]) if len(sp.split()) > len(m.group(2)) else ""
+                        if tel and re.search(r"\b" + re.escape(tel) + r" ?" + m.group(2).lstrip("0") + r"(?!\d)", norm): out[cs] = f"{stamp} on {mhz:.3f}"
             except Exception: pass
             return self.send(json.dumps(out), "application/json")
         if u.path == "/api/aircraft":

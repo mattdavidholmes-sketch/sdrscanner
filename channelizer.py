@@ -100,7 +100,7 @@ class Channel:
                 snr = self.pow_db - self.floor_db
                 # (v178) once speech is confirmed the carrier may sag to 0.3 dB over the floor before the channel is called closed (was 0.8 dB:
                 # a weak aircraft fluttering around the threshold was chopped into pieces)
-                self.am_open = self.nblk > 5 and (snr > self.carrier_margin or (self.am_open and snr > self.carrier_margin - (1.2 if self.voice_ok else 0.7))); self.carrier = self.am_open
+                self.am_open = self.nblk > 5 and (snr > self.carrier_margin or (self.am_open and snr > self.carrier_margin - 0.7)); self.carrier = self.am_open
                 # audio = envelope minus the carrier, normalised by the carrier (so a weak carrier and a strong one sound the same).
                 # The carrier estimate is smoothed across blocks: using each block's own median put a DC step (a click) at every edge.
                 self.car = med if self.car is None else 0.85 * self.car + 0.15 * med
@@ -147,9 +147,11 @@ class Channel:
             # (v178) monitor_opens.log, 8-10 Nov: 94% of 3,312 airband opens were cut at 0.6 s and half of them re-opened within 3 s - weak calls
             # (carrier ~2 dB up, modulation ~0.14) were played in 0.6 s pieces. A carrier 3+ dB up with some modulation, or one that simply
             # lasts 0.8 s at 2.5+ dB, is a transmission too (noise blips do neither); weak carriers get 1.0 s to prove themselves instead of 0.6.
-            if self.am_open and (self.voice_mod > 0.3 or snr_now >= 8.0 or (snr_now >= 3.0 and self.voice_mod > 0.18) or (self.am_blocks >= 8 and snr_now >= 2.5)):
-                self.voice_ok = True; self.confirmed = True
-            carrier_ok = self.am_open and (self.voice_ok or self.am_blocks <= (12 if snr_now >= 4.0 else (10 if snr_now >= 2.5 else 6)))
+            # (v180) The v178 rule above was wrong and is gone. Live test 10 Nov 21:52-21:55: the opens it let through (133.4, carrier ~3 dB up,
+            # modulation 0.05-0.23, up to 11.7 s) all came back from the transcriber empty - weak carriers with no speech, played as hiss. The
+            # short 0.6 s opens it was meant to rescue were unconfirmed noise blips that were never played in the first place.
+            if self.am_open and (self.voice_mod > 0.3 or snr_now >= 8.0): self.voice_ok = True; self.confirmed = True
+            carrier_ok = self.am_open and (self.voice_ok or self.am_blocks <= (12 if snr_now >= 4.0 else 6))
             if carrier_ok and self.voice_ok: self.am_hang = 4                          # confirmed speech: ride through 0.4 s of carrier flutter
             elif not self.am_open and self.am_hang > 0: self.am_hang -= 1
             g.open = g.n > AU.SETTLE and (carrier_ok or (self.am_hang > 0 and not self.am_open))
@@ -317,7 +319,7 @@ class Channelizer:
                     if round(ch.mhz, 4) in self.trusted: ch.gate.set_wide(True)
                 for ch in self.chans:                                  # known voice channels are never vetoed as 'data' (repeater tails)
                     if round(ch.mhz, 4) in self.trusted: ch.gate.detect_data = False
-                t0 = time.time(); last_any = None; opened = {}
+                t0 = time.time(); last_any = None; opened = {}; graced = {}; grace_until = 0.0
                 while self.alive:
                     iq = self.tcp.block(); tb = time.time(); t_cpu = time.perf_counter()
                     outs = []
@@ -334,17 +336,26 @@ class Channelizer:
                             for c in ams:
                                 if c.floor_db is not None and c.floor_db > med_am + 0.5: c.floor_db = med_am
                     for ch, out, is_open in results:
-                        if ch.carrier and ch.gate.n >= 2: last_any = tb                 # someone keyed up: lock the hop here while the audio gate settles
+                        # (v180) Only proven activity earns the 6 s HOLD: an FM channel whose audio gate is open, an AM channel whose speech is
+                        # confirmed. A carrier that has not proven itself gets 1.2 s from the moment it appears (enough to confirm), once per
+                        # visit for weak ones. Before, every block of any carrier reset the hold: 118.7's noise floor flickering 1.5 dB (62
+                        # times in 95 s on 10 Nov) pinned the scanner to that window and the other windows were not visited.
+                        proven = is_open and (ch.mode != "am" or ch.confirmed)
+                        if ch.carrier and ch.gate.n >= 2 and not proven:
+                            g0 = graced.get(ch.mhz)
+                            strong = ch.mode != "am" or (ch.floor_db is not None and ch.pow_db - ch.floor_db >= 4.0)
+                            if g0 is None or (strong and tb - g0[1] > 1.0): graced[ch.mhz] = [tb, tb]; grace_until = max(grace_until, tb + 1.2)
+                            else: g0[1] = tb
                         if is_open:
                             outs.append((ch.gate.level, ch, out))
                             if ch.mhz not in opened: opened[ch.mhz] = tb
-                            last_any = tb
+                        if proven: last_any = tb
                         elif ch.mhz in opened:
                             secs = round(tb - opened.pop(ch.mhz), 1)
                             if secs >= 0.5 and (ch.mode != "am" or ch.confirmed):            # (5 Nov) flickers and refused AM carriers stay out of the heard log
                                 self.heard.append({"mhz": ch.mhz, "name": ch.name, "when": dt.datetime.now().strftime("%H:%M:%S"), "secs": secs, "tones": ch.tones.summary()})
                                 self.heard = self.heard[-50:]; self.hotwin[self.gi] = time.time()
-                            if self.on_heard and secs >= 0.5:
+                            if self.on_heard and secs >= 0.5 and (ch.mode != "am" or ch.confirmed):     # (v180) refused AM carriers no longer count as "heard" in the bank
                                 try: self.on_heard(ch.mhz, ch.name, secs, ch.tones.summary())
                                 except Exception: pass
                     self.load = 0.8 * self.load + 0.2 * ((time.perf_counter() - t_cpu) / 0.1)
@@ -377,8 +388,8 @@ class Channelizer:
                     if self.skip_req: self.skip_req = False; break                      # SKIP: hop now, whoever is talking
                     if self.active is not None and round(self.active.mhz, 4) in self.lockout: self.active = None; break   # locked out mid-call: leave
                     if len(self.groups) > 1 and not self.hold:                           # HOLD: stay in this window until released
-                        if last_any is None and tb - t0 > self.DWELL: break
-                        if last_any is not None and tb - last_any > self.HOLD: break
+                        if last_any is None and tb - t0 > self.DWELL and tb >= grace_until: break
+                        if last_any is not None and tb - last_any > self.HOLD and tb >= grace_until: break
                 for ch in self.chans:
                     if ch.rec: ch.rec.close()
         except Exception as e:
