@@ -54,7 +54,9 @@
 <!-- Aircraft tab (v181): one panel - a live map beside the list of who is working Pearson / Billy Bishop and on which channel, ▶ to listen.
      The rules for "which channel" are written out at freqs() below; the same rules run server-side in _helpers/follow_traffic.py. -->
 <style>
-.leaflet-tile.darktiles,.darktiles .leaflet-tile{filter:invert(1) hue-rotate(190deg) brightness(.82) contrast(.92) saturate(.6)}
+/* base map = OpenStreetMap; the dark theme is the same tiles inverted and toned down so the aircraft stand out, the light theme is slightly muted */
+.airmapwrap[data-theme=dark] .leaflet-tile-pane{filter:invert(1) hue-rotate(180deg) brightness(.78) contrast(.84) saturate(.35)}
+.airmapwrap[data-theme=light] .leaflet-tile-pane{filter:saturate(.6) contrast(.95)}
 .leaflet-popup-content{font:13px/1.35 -apple-system,system-ui,sans-serif;color:#111}.leaflet-popup-content b{font-family:ui-monospace,Menlo,monospace}
 .airpanel{padding:12px}
 .airpanel .airhead{display:flex;flex-wrap:wrap;gap:8px 10px;align-items:center;margin-bottom:10px}
@@ -221,7 +223,7 @@
  const card=document.createElement('div');card.className='card airpanel';card.id='airpanel';
  card.innerHTML=`<div class="airhead"><h3>Aircraft <span id="apn" class="tag"></span><span id="aprw" class="tag rw" style="display:none" title="worked out from aircraft lined up with a runway right now (GPS position against the runway centreline)"></span></h3>
   <span class="sv" id="apsrc"></span><span class="airbtns" id="apbtns"><button class="ghost" id="apmon" title="Monitor on the whole Airport group: every YYZ/YTZ channel decoded at once">▶ All airport channels</button></span></div>
- <div class="airsplit"><div class="airmapwrap" id="airmapwrap" data-theme="dark"><div class="airmap" id="airmap"></div>
+ <div class="airsplit"><div class="airmapwrap" id="airmapwrap"><div class="airmap" id="airmap"></div>
    <div class="maptools"><button data-go="home" title="centre the map on home">Home</button><button data-go="yyz" title="centre the map on Pearson">Pearson</button><button data-go="all" title="fit every aircraft on the map">All</button>
     <button id="aplabels" title="which aircraft get a name tag on the map"></button><button id="aptheme" title="switch between the dark and the light map"></button><button id="apfull" title="full-screen map">⤢</button></div>
    <div class="maplegend"><span><i style="background:#3ddc84"></i>arriving</span><span><i style="background:#5aa9ff"></i>departing</span><span><i style="background:#ffd21f"></i>passing</span><span><i style="background:none;border:1px dashed #3ddc84"></i>heard on air</span><span style="color:#3ddc84">- - runway in use</span></div></div>
@@ -261,21 +263,17 @@
   if(b)b.textContent=on&&!FOLLOW?'■ Stop listening':'▶ All airport channels';if(f)f.textContent=on&&FOLLOW?'■ Stop following':'✈ Follow the traffic';},1000);
 
  // ---- map
- let MAP=null,BASE=null,layer=null,MK={},SEL=null,SELRING=null,STATIC=[],HOME=null,EMG=new Set(),RWSEEN={land:{},dep:{}},USE={},FIRST=false;
+ let MAP=null,layer=null,MK={},SEL=null,SELRING=null,STATIC=[],HOME=null,EMG=new Set(),RWSEEN={land:{},dep:{}},USE={},FIRST=false;
  let THEME=LS.get('airtheme','dark'),LBL=LS.get('airlbl','airport');
- const wrap=q('#airmapwrap'),mapEl=q('#airmap');
- const TILES={dark:['https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png',{subdomains:'abcd',maxZoom:19,attribution:'&copy; OpenStreetMap &copy; CARTO'}],
-  light:['https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png',{subdomains:'abcd',maxZoom:19,attribution:'&copy; OpenStreetMap &copy; CARTO'}]};
+ const wrap=q('#airmapwrap'),mapEl=q('#airmap');wrap.dataset.theme=THEME;
  function lib(){return new Promise((ok,no)=>{if(window.L)return ok();const c=document.createElement('link');c.rel='stylesheet';c.href='https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css';document.head.appendChild(c);
   const j=document.createElement('script');j.src='https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js';j.onload=ok;j.onerror=no;document.head.appendChild(j);});}
- // base map: CARTO's clean dark / light tiles; if they cannot be reached, plain OpenStreetMap (darkened for the dark theme) takes over
- function setBase(){if(BASE)MAP.removeLayer(BASE);const t=TILES[THEME]||TILES.dark;let good=0,bad=0;const mine=BASE=L.tileLayer(t[0],t[1]);
-  mine.on('tileload',()=>good++);mine.on('tileerror',()=>{if(++bad>=4&&!good&&BASE===mine){MAP.removeLayer(mine);BASE=L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png',{maxZoom:18,attribution:'&copy; OpenStreetMap',className:THEME==='dark'?'darktiles':''}).addTo(MAP);BASE.bringToBack();}});
-  mine.addTo(MAP);mine.bringToBack();wrap.dataset.theme=THEME;q('#aptheme').textContent=THEME==='dark'?'☀ Light':'☾ Dark';paintStatic();}
+ // dark / light: one set of OpenStreetMap tiles, restyled by a CSS filter on the tile pane (see the style block)
+ function setTheme(){wrap.dataset.theme=THEME;q('#aptheme').textContent=THEME==='dark'?'☀ Light':'☾ Dark';paintStatic();}
  const lbl=(ll,text,cls)=>L.marker(ll,{interactive:false,keyboard:false,icon:L.divIcon({className:'maplbl '+(cls||''),html:'<span>'+text+'</span>',iconSize:[0,0]})});
  function paintStatic(){const dark=THEME==='dark';STATIC.forEach(s=>s.setStyle&&s.setStyle(s._st(dark)));}
  function initMap(a){HOME=(a.home&&a.home.length)?a.home:[43.6532,-79.3832];
-  MAP=L.map(mapEl,{zoomControl:true,zoomSnap:.5,attributionControl:true});MAP.attributionControl.setPrefix(false);
+  MAP=L.map(mapEl,{zoomControl:true,attributionControl:true});MAP.attributionControl.setPrefix(false);
   MAP.fitBounds(L.latLngBounds([HOME,YYZ,YTZ]).pad(.55));FIRST=true;
   const add=(l,st)=>{if(st){l._st=st;STATIC.push(l);}return l.addTo(MAP);};
   // distance rings round home
@@ -288,7 +286,8 @@
    if(names[e.n]){e.tag=lbl(LL(e.t[0]-e.u[0]*20.3,e.t[1]-e.u[1]*20.3),names[e.n],'rw').addTo(MAP);}});
   lbl([YYZ[0]-.012,YYZ[1]+.03],'YYZ').addTo(MAP);lbl([YTZ[0]-.008,YTZ[1]],'YTZ').addTo(MAP);
   L.circleMarker(HOME,{radius:6,color:'#fff',weight:2,fillColor:'#ff5c5c',fillOpacity:1}).addTo(MAP).bindPopup('Home');lbl([HOME[0]-.006,HOME[1]],'Home').addTo(MAP);
-  layer=L.layerGroup().addTo(MAP);setBase();mapEl.classList.add('lbl-'+LBL);
+  L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png',{maxZoom:18,attribution:'&copy; OpenStreetMap contributors'}).addTo(MAP);
+  layer=L.layerGroup().addTo(MAP);setTheme();mapEl.classList.add('lbl-'+LBL);
   MAP.on('popupclose',()=>{SEL=null;markSel();});
   const far=()=>mapEl.classList.toggle('zfar',MAP.getZoom()<10);MAP.on('zoomend',far);far();   // zoomed out: only the runways in use keep their name
   // one click handler for everything inside a popup: listen links and "more"
@@ -307,7 +306,7 @@
  function drop(k){const o=MK[k];if(!o)return;layer.removeLayer(o.m);if(o.trail)layer.removeLayer(o.trail);if(o.ring)layer.removeLayer(o.ring);delete MK[k];}
  async function draw(a){
   if(!window.L){try{await lib();}catch(e){if(!mapEl.querySelector('.mapfail'))mapEl.innerHTML='<div class="mapfail">The map could not load on this device (no internet?). The list still works.</div>';return;}}
-  if(!MAP)initMap(a);
+  if(!MAP){if(!mapEl.offsetWidth||!mapEl.offsetHeight)return;initMap(a);}
   const seen=new Set(),use={},now=Date.now();
   (a.aircraft||[]).forEach(x=>{if(x.lat==null)return;seen.add(x.icao);const p=ph(phase(x)),ll=[x.lat,x.lon],col=x.emergency?'#ff5c5c':(p==='arr'?'#3ddc84':(p==='dep'?'#5aa9ff':'#8b949e'));
    let o=MK[x.icao];
@@ -332,14 +331,14 @@
  function markSel(){document.querySelectorAll('#airside [data-icao]').forEach(el=>el.classList.toggle('sel',el.dataset.icao===SEL));if(!SEL&&SELRING){MAP.removeLayer(SELRING);SELRING=null;}}
  // pick an aircraft: from the list (the map goes to it) or on the map (the list marks it)
  function select(icao,fromList){const o=MK[icao];if(!o||!MAP)return;
-  if(fromList){if(wrap.getBoundingClientRect().bottom<120||wrap.getBoundingClientRect().top>innerHeight-120)wrap.scrollIntoView({behavior:'smooth',block:'center'});MAP.setView(o.m.getLatLng(),Math.max(MAP.getZoom(),10.5),{animate:true});}
+  if(fromList){if(wrap.getBoundingClientRect().bottom<120||wrap.getBoundingClientRect().top>innerHeight-120)wrap.scrollIntoView({behavior:'smooth',block:'center'});MAP.setView(o.m.getLatLng(),Math.max(MAP.getZoom(),11),{animate:true});}
   o.m.openPopup();SEL=icao;if(SELRING)SELRING.setLatLng(o.m.getLatLng());else SELRING=L.circleMarker(o.m.getLatLng(),{radius:24,color:'#e6ebf2',weight:1.5,fill:false,interactive:false}).addTo(MAP);markSel();
   if(!fromList){const el=q('#airside [data-icao="'+icao+'"]');if(el&&innerWidth>=1000)el.scrollIntoView({block:'nearest',behavior:'smooth'});
    const pe=o.m.getPopup().getElement();if(pe){const a=pe.getBoundingClientRect(),b=mapEl.getBoundingClientRect(),dx=a.left<b.left+8?a.left-b.left-8:(a.right>b.right-8?a.right-b.right+8:0),dy=a.top<b.top+48?a.top-b.top-48:0;if(dx||dy)MAP.panBy([dx,dy],{animate:true});}}}
  // map tools
  const paintLbl=()=>{q('#aplabels').textContent='Tags: '+({airport:'airport',all:'all',off:'off'}[LBL]);};paintLbl();q('#aptheme').textContent=THEME==='dark'?'☀ Light':'☾ Dark';
  q('#aplabels').onclick=()=>{mapEl.classList.remove('lbl-'+LBL);LBL={airport:'all',all:'off',off:'airport'}[LBL];mapEl.classList.add('lbl-'+LBL);LS.set('airlbl',LBL);paintLbl();};
- q('#aptheme').onclick=()=>{THEME=THEME==='dark'?'light':'dark';LS.set('airtheme',THEME);if(MAP){setBase();paintRunways(USE);}};
+ q('#aptheme').onclick=()=>{THEME=THEME==='dark'?'light':'dark';LS.set('airtheme',THEME);if(MAP){setTheme();paintRunways(USE);}else wrap.dataset.theme=THEME;q('#aptheme').textContent=THEME==='dark'?'☀ Light':'☾ Dark';};
  function full(on){wrap.classList.toggle('full',on);q('#apfull').textContent=on?'✕ Close':'⤢';document.documentElement.style.overflow=on?'hidden':'';if(MAP)setTimeout(()=>MAP.invalidateSize(),60);}
  q('#apfull').onclick=()=>full(!wrap.classList.contains('full'));
  document.addEventListener('keydown',e=>{if(e.key==='Escape'&&wrap.classList.contains('full'))full(false);});
