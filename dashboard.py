@@ -1279,8 +1279,8 @@ WALKIES = [(m, "fm", n) for m, n in (
     (151.820, "MURS 1 (US radios; licensed LMR in Canada)"), (151.880, "MURS 2 (US radios; licensed LMR in Canada)"), (151.940, "MURS 3 (US radios; licensed LMR in Canada)"),
     (154.570, "MURS 4 / Blue dot (Walmart US ch)"), (154.600, "MURS 5 / Green dot (Walmart US ch)"),
     (151.625, "Red dot (business)"), (151.955, "Purple dot (business)"), (151.700, "Business itinerant"), (151.760, "Business itinerant"),
-    (464.500, "Blue dot UHF (business)"), (464.550, "Green dot UHF (business)"), (467.7625, "J dot (business)"), (467.8125, "K dot (business)"),
-    (467.850, "Silver star (business)"), (467.875, "Gold star (business)"), (467.900, "Red star (business)"), (467.925, "Purple star (business)"))]
+    (464.500, "Brown dot (business)"), (464.550, "Yellow dot (business)"), (467.7625, "J dot (business)"), (467.8125, "K dot (business)"),
+    (467.850, "Silver star (business)"), (467.875, "Gold star (business)"), (467.900, "Red star (business)"), (467.925, "Blue star (business)"))]
 
 # (v198) CB / GRS: 40 channels of AM voice between 26.965 and 27.405 MHz (SSB lives on 36-40 and is not demodulated here). All of
 # them fit in one 0.44 MHz window, so the dongle watches every channel at the same time. What the names say is convention, not

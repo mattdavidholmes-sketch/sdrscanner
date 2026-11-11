@@ -8,7 +8,7 @@ from build_nets import REPEATERS, SIMPLEX, NETS
 AIRPORTS = {
     "YYZ Pearson (~10 km - the one to listen to)": [
         ("ATIS", 120.825), ("Clearance", 121.300), ("Ground N", 121.650), ("Ground S", 121.900), ("Ground", 119.100),
-        ("Tower E (primary)", 118.700), ("Tower W", 118.350),
+        ("Tower N (primary)", 118.700), ("Tower S", 118.350),
         ("Arrival 1", 124.475), ("Arrival 2", 125.400), ("Arrival 3", 132.800), ("Arrival 4", 134.175),
         ("Departure 1", 127.575), ("Departure 2", 128.800),
         ("Apron", 122.825), ("Apron N", 122.275), ("Apron S", 122.075), ("Pad control", 131.175), ("VFR advisory", 119.300),
@@ -37,7 +37,9 @@ RETAIL = [
     ("Walmart UHF (some stores)", 463.7625), ("Walmart UHF (some stores)", 461.5875),
     ("Costco PL74.4", 464.500), ("Costco", 461.7625), ("Costco", 468.2125), ("Costco", 468.3625), ("Costco", 468.4125), ("Costco", 468.4625), ("Costco", 468.5625), ("Costco", 468.6125),
     ("Lowe's DMR (digital)", 464.5375), ("Lowe's DMR (digital)", 464.5625), ("Lowe's DMR (digital)", 462.7625), ("Lowe's DMR (digital)", 469.4875),
-    ("Dot: Blue (CLS default 1)", 464.550), ("Dot: Green", 464.500), ("Dot: Red", 151.625), ("Dot: Purple", 151.955), ("Dot: Yellow", 464.5125), ("Dot: Silver star", 467.8500), ("Dot: Gold star", 467.8750), ("Dot: Red star", 467.9000), ("Dot: Black star", 467.9250), ("Dot: Brown", 464.5125),
+    # (v199) the UHF colour names were mixed up: Brown dot is 464.500, Yellow dot 464.550, and 467.925 is the Blue star (en.wikipedia.org/wiki/Business_band).
+    # Blue dot and Green dot are the VHF pair 154.570 / 154.600 (listed above as Walmart's). 464.5125 has no colour - it is the itinerant channel below.
+    ("Dot: Yellow (CLS default 1)", 464.550), ("Dot: Brown", 464.500), ("Dot: Red", 151.625), ("Dot: Purple", 151.955), ("Dot: Silver star", 467.8500), ("Dot: Gold star", 467.8750), ("Dot: Red star", 467.9000), ("Dot: Blue star", 467.9250),
     ("Itinerant J", 467.7625), ("Itinerant K", 467.8125), ("Itinerant 464.4875", 464.4875), ("Itinerant 464.5125", 464.5125), ("Itinerant 469.4875", 469.4875), ("Itinerant 469.5125", 469.5125),
 ]
 MARINE = [("Marine 16 distress/calling", 156.800), ("Marine 9 pleasure calling", 156.450), ("Marine 68", 156.425), ("Marine 71", 156.575), ("Marine 72", 156.625), ("Prescott CG", 161.825)]

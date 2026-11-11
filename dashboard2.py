@@ -146,7 +146,7 @@ def hist_hourly(mhz, days=7):
 
 BANK = os.path.join(HERE, "bank.json")
 _bank = {"loaded": False, "data": {}, "saved": 0}
-NAME_FIX = {"YYZ TWR W": "YYZ TWR S", "YYZ TWR E": "YYZ TWR N",
+NAME_FIX = {"YYZ TWR W": "YYZ TWR S", "YYZ TWR E": "YYZ TWR N", "Dot: Black star": "Dot: Blue star", "Dot: Blue (CLS default 1": "Dot: Yellow (CLS default", "Dot: Yellow": "Itinerant 464.5125",       # (v199) see build_hub.RETAIL
             "City of Toronto P25 - Metrolinx Central CONTROL channel": "Metrolinx / GO Transit P25 - Metrolinx Central CONTROL channel"}        # (v183) Pearson's towers are South (118.350) and North (118.700), not West and East
 def bank_load():
     """Load the bank. A failed read (iCloud half-synced file, truncated JSON) must NEVER start an empty bank that then overwrites the real one:
@@ -2041,60 +2041,24 @@ class H2(v1.H):
             except OSError: pass
             return self.send(json.dumps(out), "application/json")
         if u.path == "/api/chirp":
-            # CHIRP file straight from the bank: every voice channel the UV-32 can tune, with heard tones (DCS too) and repeater offsets
-            import csv, io
-            S = v1.sdr_scan; bank = bank_load(); rows = []
-            for k, e in bank.items():
-                if e.get("ver") == "DATA": continue
-                m = float(e.get("mhz", k))
-                if not S.uv32_can_hear(m): continue
-                ref = S.reference_for(m); label, dup, off, _ = S.service_for(m)
-                name = (ref[0] if ref else e.get("name") or f"{m:.4f}")[:16]
-                tone = ""; dcs = ""
-                heard = e.get("tone", "") or ""
-                mm = re.search(r"CTCSS ([\d.]+)", heard); md = re.search(r"DCS (\d{3})", heard)
-                if mm: tone = mm.group(1)
-                elif md: dcs = md.group(1)
-                elif ref and ref[1]: tone = ref[1]
-                if ref and ref[2]: dup, off = ref[2], ref[3]
-                age = (time.time() - e.get("last_heard", 0)) / 86400 if e.get("last_heard") else 999
-                score = (2 if e.get("ver") == "VOICE" else 1 if e.get("ver") == "KNOWN" else 0) * 1000 + e.get("times", 0) * 10 - min(age, 90)
-                rows.append((score, m, name, dup, off, tone, dcs, e))
-            rows.sort(key=lambda r: -r[0])
-            # (v142) stable memory layout so "UV-32 ch N" means the same thing after every export: 0-19 Top 20 today, then the
-            # Walkies bank (FRS 1-14, GMRS 15-22, MURS 1-5, business dot/star), then the Pearson / Billy Bishop airband set, then
-            # everything else by score. A channel appears once, in the first bank it belongs to.
-            def fixed_rows():
-                by_m = {round(r[1], 4): r for r in rows}; used = set(); out = []
-                def take(m, name, mode_hint=None):
-                    k = round(m, 4)
-                    if k in used: return
-                    used.add(k)
-                    r = by_m.get(k)
-                    if r: out.append(r); return
-                    if not S.uv32_can_hear(m): return
-                    ref = S.reference_for(m); nm = (ref[0] if ref else name)[:16]
-                    out.append((0, m, nm, ref[2] if ref else "", ref[3] if ref else 0, ref[1] if ref else "", "", {"ver": "KNOWN", "cat": "bank"}))
-                for m, _, nm in v1.top_today(20): take(m, nm)
-                for m, _, nm in v1.WALKIES: take(m, nm)
-                for m, (nm, *_rest) in sorted(S.REFERENCE.items()):
-                    if 118 <= m < 137: take(m, nm)
-                for r in rows:
-                    if round(r[1], 4) not in used: used.add(round(r[1], 4)); out.append(r)
-                return out
-            try: rows = fixed_rows()
-            except Exception: pass
-            cols = ["Location","Name","Frequency","Duplex","Offset","Tone","rToneFreq","cToneFreq","DtcsCode","DtcsPolarity","RxDtcsCode","CrossMode","Mode","TStep","Skip","Power","Comment","URCALL","RPT1CALL","RPT2CALL","DVCODE"]
-            out = io.StringIO(); w = csv.writer(out); w.writerow(cols)
-            for loc, (score, m, name, dup, off, tone, dcs, e) in enumerate(rows[:200]):
-                tmode = "DTCS" if dcs else ("Tone" if tone else "")
-                heard_when = dt.datetime.fromtimestamp(e["last_heard"]).strftime("%b %d %H:%M") if e.get("last_heard") else ""
-                w.writerow([loc, name, f"{m:.6f}", dup or "", f"{(off or 0):.6f}", tmode, tone or "88.5", tone or "88.5", dcs or "023", "NN", dcs or "023", "Tone->Tone",
-                            "AM" if m < 137 else "NFM", "5.00", "", "10.0W", f"{e.get('ver') or 'unverified'} | heard {e.get('times', 0)}x last {heard_when} | {e.get('cat', '')}", "", "", "", ""])
-            data = out.getvalue().encode()
-            try: open(os.path.join(HERE, "chirp_bank.csv"), "wb").write(data)
-            except OSError: pass
-            self.send_response(200); self.send_header("Content-Type", "text/csv"); self.send_header("Content-Disposition", 'attachment; filename="chirp_bank.csv"'); self.send_header("Content-Length", str(len(data))); self.end_headers(); self.wfile.write(data); return
+            # (v199) The CHIRP files, built by chirp_export.py - the one layout for every export: ten banks by function (airband, ham 2 m,
+            # ham 70 cm, FRS / GMRS, stores and sites, rail and transit, marine, city and roads, heard here), memory numbers that never
+            # move once handed out. Every call rebuilds both files in the app folder:
+            #   /api/chirp            downloads everything the radio can tune (also kept as chirp_bank.csv - "UV-32 ch N" on the page reads it)
+            #   /api/chirp?set=car    downloads the part the car antenna is made for (chirp_car.csv)
+            #   /api/chirp?plan=1     the memory map of both as JSON
+            q = parse_qs(u.query)
+            try:
+                import chirp_export as CX
+                from build_hub import entries as hub_entries
+                tables = {"sites": v1.WALKIES, "rail": v1.UNION_STATION + v1.CP_ETOBICOKE, "transit": v1.TTC_ETOB, "city": v1.SOLID_WASTE + v1.GFL_ENV}
+                everything, car, plan = CX.export(HERE, hub_entries(), v1.sdr_scan.REFERENCE, tables, bank_load(), v1.digital_freq)
+            except Exception as e:
+                return self.send(json.dumps({"error": "the CHIRP files could not be built: " + repr(e)}), "application/json")
+            if "plan" in q: return self.send(json.dumps(plan), "application/json")
+            is_car = q.get("set", [""])[0] == "car"; data = (car if is_car else everything).encode()
+            fn = "UV-32 car antenna.csv" if is_car else "UV-32 everything.csv"
+            self.send_response(200); self.send_header("Content-Type", "text/csv"); self.send_header("Content-Disposition", f'attachment; filename="{fn}"'); self.send_header("Content-Length", str(len(data))); self.end_headers(); self.wfile.write(data); return
         if u.path == "/api/alerts":
             q = parse_qs(u.query); rules = v1.alerts_load()
             if "add" in q:
@@ -2425,7 +2389,7 @@ details.card[open]>summary{margin-bottom:10px}
 <header>
  <div><h1>SDR Scanner</h1><div class="sub" id="hdrsub">connecting…</div></div>
  <span class="pill" id="status"><i class="dot"></i><span>…</span></span><span class="pill" id="engine" title="what the dongle is doing right now"><i class="dot"></i><span>dongle: …</span></span>
- <a class="ghost btnlink" href="/api/chirp" title="download a CHIRP file of every voice channel in the bank, tones and offsets filled in (UV-32 range only)">⬇ CHIRP file</a><div class="seg" id="modeseg"><button data-m="scan" class="on">Scan</button><button data-m="listen">Listen</button></div>
+ <a class="ghost btnlink" href="/api/chirp" title="CHIRP file for the UV-32: everything it can tune and you can listen to, in ten banks by function. Memory numbers never change between exports.">⬇ CHIRP</a><a class="ghost btnlink" href="/api/chirp?set=car" style="margin-left:-6px" title="CHIRP file for the car antenna (Nagoya UT-72): the same file cut down to 144-148 and 430-470 MHz, what that antenna is made for. Same memory numbers as the full file.">⬇ car</a><div class="seg" id="modeseg"><button data-m="scan" class="on">Scan</button><button data-m="listen">Listen</button></div>
  <button id="sirenbtn" class="ghost" style="border-color:#e5484d;color:#e5484d;font-weight:600" title="Press when you hear sirens: goes straight to the Toronto Fire / Paramedic channels and searches the sites until it finds traffic">🚨 I hear sirens</button><span class="sv" id="sirenmsg"></span>
  <button class="ghost" id="popout" title="open the live player, spectrum and Monitor in a small window of their own - the main page stays for browsing">⧉ Live window</button>
  <span class="sub" style="margin-left:auto" id="phone"></span>
