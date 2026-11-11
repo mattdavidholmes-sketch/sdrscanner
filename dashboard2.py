@@ -2059,6 +2059,13 @@ class H2(v1.H):
         if u.path == "/api/history":
             q = parse_qs(u.query); m = float(q.get("mhz", ["0"])[0])
             return self.send(json.dumps({"series": hist_series(m, 24), "hourly": hist_hourly(m, 7)}), "application/json")
+        if u.path == "/api/nets":
+            # (v188) ham nets: on now / next / seven days / club dates, worked out from nets.json. Plain data - the page, the phone page and a
+            # later iPad / iPhone app read the same answer. "heard" comes from the bank: was a signal seen on the net's frequency since it began.
+            import ham_nets
+            try: hf = ham_nets.heard_lookup(bank_load())
+            except Exception: hf = None
+            return self.send(json.dumps(ham_nets.view(heard=hf)), "application/json")
         if u.path == "/api/directory":
             from build_hub import entries
             out = [{"mhz": e["mhz"], "name": e["name"], "cat": e["cat"], "group": e["group"], "mode": e["mode"], "tone": e.get("tone", ""), "duplex": e.get("duplex", ""), "offset": e.get("offset", 0), "note": e.get("note", ""), "nets": e.get("nets", ""), "uv32": e["uv32"]} for e in entries()]
@@ -2251,6 +2258,33 @@ main{padding-bottom:270px!important}
 #chips{display:flex;flex-wrap:wrap;gap:6px}.chip{white-space:nowrap}
 /* (v178) Digital tab: one list of systems, each row opens to its frequencies */
 .dgh{font:600 .74rem/1 var(--mono);letter-spacing:.1em;text-transform:uppercase;color:var(--mute);margin:16px 2px 6px}
+/* (v188) ham nets: a status line above the spectrum (on air / next) and the Nets tab */
+.netbar{display:flex;flex-wrap:wrap;gap:8px;align-items:stretch;margin:0 0 10px}
+.nb{display:flex;align-items:center;gap:9px;min-width:0;max-width:100%;padding:5px 12px;border:1px solid var(--line);border-radius:10px;background:var(--card);font-size:.86rem;color:var(--ink);text-align:left;min-height:44px}
+.nb i{font:700 .64rem/1.2 var(--mono);letter-spacing:.12em;font-style:normal;text-transform:uppercase;color:var(--mute);flex:0 0 auto;white-space:nowrap}
+.nb.on{border-color:#2d6b4a;background:linear-gradient(90deg,rgba(61,220,132,.10),var(--card) 60%)}.nb.on i{color:var(--acc)}
+.nb.on i::before{content:'';display:inline-block;width:8px;height:8px;border-radius:50%;background:var(--acc);margin-right:6px;animation:nbp 1.6s ease-in-out infinite}
+@keyframes nbp{50%{opacity:.25}}
+.nb .nbt{display:flex;align-items:baseline;gap:9px;min-width:0;flex:1 1 auto}
+.nb b{font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0}
+.nb u{text-decoration:none;font-family:var(--mono);color:var(--acc2);white-space:nowrap;flex:0 0 auto}
+.nb span{color:var(--mute);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0}.nb span u{margin:0 2px}
+.nb .play{flex:0 0 auto}.nb.next,.nb.go{cursor:pointer}.nb.go{color:var(--mute);margin-left:auto}.nb.warn{border-color:#6b5520;color:var(--warn)}
+body.live .netbar{display:none!important}
+tr.netnow .nm::after{content:'NET ON NOW';margin-left:6px;font:700 .62rem/1 var(--mono);letter-spacing:.08em;color:#04130a;background:var(--acc);border-radius:4px;padding:2px 5px;vertical-align:middle;white-space:nowrap}
+.netgrid{display:grid;grid-template-columns:minmax(0,3fr) minmax(0,2fr);gap:12px;margin-top:12px;align-items:start}.netgrid>div>.card+.card{margin-top:12px}
+.netcard{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:12px 14px;min-width:0}.netcard h3{margin:0 0 8px;font-size:.95rem}
+.nday{border-top:1px solid var(--line)}.nday:first-child{border-top:0}.nday>summary{cursor:pointer;padding:9px 2px;font-weight:600;list-style:none;display:flex;gap:8px;align-items:baseline}.nday>summary::-webkit-details-marker{display:none}
+.nday>summary::before{content:'▸';color:var(--mute);font-size:.8rem}.nday[open]>summary::before{content:'▾'}.nday>summary small{color:var(--mute);font-weight:400;margin-left:auto;white-space:nowrap}
+.nr{display:grid;grid-template-columns:74px 36px minmax(0,1fr) auto;gap:8px;align-items:center;padding:6px 2px;border-top:1px dashed var(--line)}
+.nr .nt{font-family:var(--mono);font-size:.84rem;white-space:nowrap;color:var(--ink)}.nr .nn{min-width:0}.nr .nn b{font-weight:600}.nr .nn small{display:block;color:var(--mute);font-size:.78rem;line-height:1.3}
+.nr .nf{font-family:var(--mono);font-size:.8rem;color:var(--acc2);white-space:nowrap;text-align:right}.nr.done{opacity:.45}.nr.on{background:rgba(61,220,132,.08);border-radius:8px}
+.nr.on .nt{color:var(--acc);font-weight:700}.nr .np{width:34px}.nr.ev{grid-template-columns:104px minmax(0,1fr)}.nr.ev .nt{white-space:normal;line-height:1.25}
+.nclub{padding:6px 2px;border-top:1px dashed var(--line);font-size:.86rem}.nclub:first-child{border-top:0}.nclub a{color:var(--acc2);font-weight:600;text-decoration:none}.nclub small{display:block;color:var(--mute);line-height:1.35}
+#nfoot a{color:var(--acc2)}
+@media(max-width:900px){.netgrid{grid-template-columns:minmax(0,1fr)}}
+@media(max-width:760px){.nb{flex:1 1 100%;padding:7px 12px}.nb .nbt{flex-direction:column;align-items:stretch;gap:1px}.nb b{white-space:normal}.nb span{white-space:normal;font-size:.8rem;line-height:1.3}.nb.go{margin-left:0}
+.nr{grid-template-columns:62px auto minmax(0,1fr);gap:10px}.nr .nf{grid-column:3;text-align:left}.nr .np{width:0}.nr.ev{grid-template-columns:86px minmax(0,1fr)}.netcard{padding:10px 10px}}
 /* (v187) spectrum panel: data fields (small caption, large value) over a plot with real scales; numbered flags + a legend, no text on the trace */
 .specbox{margin:0 0 10px;border:1px solid var(--line);border-radius:12px;background:var(--card);padding:8px 10px;position:relative}
 .specbar{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:6px;margin-bottom:6px}
@@ -2304,6 +2338,7 @@ details.card[open]>summary{margin-bottom:10px}
   <div class="sub" id="hu-lockouts"></div></div>
  <div class="tiles" id="tiles"></div>
  <div class="bands" id="bands"></div>
+ <div class="netbar" id="netbar" style="display:none"></div>
  <div id="specwrap" class="specbox">
   <div class="specbar">
    <div class="sf"><i>Band</i><b id="sfband">—</b><span id="sfrange"></span></div>
@@ -2315,13 +2350,21 @@ details.card[open]>summary{margin-bottom:10px}
   <div id="speclegend" class="speclegend"></div>
   <div class="sub" id="spectitle" style="margin-top:4px"></div>
  </div>
- <div class="tabs"><button class="on" data-t="freq">Frequencies</button><button data-t="dir">Directory</button><button data-t="radio">FM Radio</button><button data-t="recs">Recordings <span id="reccount" class="tag"></span></button><button data-t="digital">Digital</button><button data-t="map">Map</button><button data-t="air">Aircraft</button><button data-t="debug">Debug</button></div>
+ <div class="tabs"><button class="on" data-t="freq">Frequencies</button><button data-t="dir">Directory</button><button data-t="nets">Nets</button><button data-t="radio">FM Radio</button><button data-t="recs">Recordings <span id="reccount" class="tag"></span></button><button data-t="digital">Digital</button><button data-t="map">Map</button><button data-t="air">Aircraft</button><button data-t="debug">Debug</button></div>
  <section id="tab-freq">
   <div class="toolbar"><input id="q" type="search" placeholder="Search frequency, callsign, service…"><div id="chips"></div><button id="digtog" class="ghost" style="margin-left:auto;padding:4px 10px;font-size:.82rem;display:none" title="P25 and DMR channels are decoded by SDRTrunk - they play from the Digital tab. Tap to show or hide them in this list (a search always finds them)."></button><input id="hidecont" type="checkbox" checked hidden></div>
   <div class="tablewrap"><table><thead><tr><th style="cursor:default"></th><th data-k="rank" data-t="n">#</th><th data-k="mhz" data-t="n">MHz</th><th data-k="name" data-t="s">Name</th><th data-k="vrank" data-t="n">Voice</th><th data-k="cat" data-t="s">Category</th><th data-k="service" data-t="s">Service</th><th data-k="mode" data-t="s">Mode</th><th data-k="snr" data-t="n">Signal</th><th data-k="busy" data-t="n">Busy</th><th data-k="recent" data-t="n">Activity</th><th data-k="heard_ts" data-t="n" class="desc">Last heard</th><th data-k="tone" data-t="s">Tone</th><th data-k="uv32" data-t="n">Radio</th></tr></thead><tbody id="rows"></tbody></table><div class="empty" id="empty" style="display:none">Nothing above the noise floor yet - the first band takes a few minutes.</div><div id="morerow" style="display:none;text-align:center;padding:10px"><button class="ghost" id="morebtn">Show 20 more</button> <button class="ghost" id="allbtn">Show all</button> <span class="sv" id="morenote"></span></div></div>
  </section>
  <section id="tab-dir" style="display:none"><div class="toolbar"><input id="dq" type="search" placeholder="Search the directory: tower, VE3, GMRS, marine…"><span class="sub" style="color:var(--mute)">Every known channel - press ▶ to tune it whether or not the scan has heard it yet.</span></div>
   <div class="tablewrap"><table><thead><tr><th style="cursor:default"></th><th data-dk="mhz" data-dt="n">MHz</th><th data-dk="name" data-dt="s">Name</th><th data-dk="cat" data-dt="s">Category</th><th data-dk="mode" data-dt="s">Mode</th><th style="cursor:default">Program</th><th data-dk="snr" data-dt="n" class="desc">Heard in this scan</th><th style="cursor:default">Notes</th><th data-dk="uv32" data-dt="n">Radio</th></tr></thead><tbody id="dirrows"></tbody></table></div></section>
+ <section id="tab-nets" style="display:none">
+  <div class="card netcard"><h3>On the air</h3><div id="nnow"><div class="sub">loading the schedule…</div></div></div>
+  <div class="netgrid">
+   <div class="card netcard"><h3>Next seven days</h3><div id="nweek"></div></div>
+   <div><div class="card netcard"><h3>Club dates</h3><div id="nevents"></div></div><div class="card netcard"><h3>Clubs</h3><div id="nclubs"></div></div></div>
+  </div>
+  <p class="sub" id="nfoot" style="margin-top:10px"></p>
+ </section>
  <section id="tab-radio" style="display:none"><p class="sub" style="color:var(--mute);margin-top:0">Broadcast FM - the audio test. If a station plays, dongle, antenna and player are all good.</p><div class="radio" id="radio"></div></section>
  <section id="tab-recs" style="display:none">
   <div class="dig" style="margin-bottom:14px"><div class="card"><h3>Alerts <span class="sv">(Mac notification + log; phone too if you keep the dashboard open there)</span></h3>
@@ -2560,7 +2603,7 @@ function renderRows(){paintDig();const tb=$('#rows');const seen=new Set();
    if(d.recent!==h.recent||d.last!==h.last)tr.querySelector('.act').parentElement.innerHTML=spark(h.hours,h);if(d.heard_ts!==h.heard_ts||d.age_min!==h.age_min)tr.querySelector('.heard').innerHTML=heardCell(h);if(d.rank!==h.rank||d.live!==h.live)tr.querySelector('.rank').innerHTML=h.live?h.rank:'<span class="tag" title="not in the current sweep - last known values">banked</span>';}
   tr._d=h;tr._h=h;tr.classList.toggle('prev',!h.live);tr.classList.toggle('hot',h.age_min!=null&&h.age_min<=30);tr.style.display=visible(h)?'':'none';}
  for(const [k,tr] of rowsByMhz){if(!seen.has(k)){tr.remove();rowsByMhz.delete(k);}}
- applySort();$('#empty').style.display=S.hits.length?'none':'';P.paint();}
+ applySort();$('#empty').style.display=S.hits.length?'none':'';paintNetRows();P.paint();}
 let ROWCAP=20;                                                        // no list longer than 20 rows on screen (phone scrolling); 'Show 20 more' / 'Show all'
 function applySort(){const tb=$('#rows');const rows=[...tb.children];rows.sort((a,b)=>{let x=sortK==='rank'?a._h.rank:a._h[sortK],y=sortK==='rank'?b._h.rank:b._h[sortK];if(sortT==='n'){x=+x;y=+y;return (x-y)*sortDir;}return String(x).localeCompare(String(y))*sortDir;});rows.forEach(r=>tb.appendChild(r));
  let shown=0,hidden=0;rows.forEach(r=>{if(r.style.display==='none')return;if(shown>=ROWCAP){r.style.display='none';hidden++;}else shown++;});
@@ -2579,7 +2622,7 @@ $('#q').oninput=e=>{query=e.target.value.trim().toLowerCase();renderRows();};
 $('#morebtn').onclick=()=>{ROWCAP+=20;renderRows();};$('#allbtn').onclick=()=>{ROWCAP=100000;renderRows();};
 $('#hidecont').checked=hideCont;$('#hidecont').onchange=e=>{hideCont=e.target.checked;try{localStorage.setItem('hidecont',hideCont?'1':'0');}catch(x){}renderRows();};
 /* ---------- tabs ---------- */
-$$('.tabs button').forEach(b=>b.onclick=()=>{tab=b.dataset.t;$$('.tabs button').forEach(x=>x.classList.toggle('on',x===b));['freq','dir','radio','recs','digital','map','air','debug'].forEach(t=>$('#tab-'+t).style.display=t===tab?'':'none');if(tab==='air'){loadAir();loadAirToday();}if(tab==='digital'){loadDigital();loadRotation();}if(tab==='map')loadMap();if(tab==='dir')loadDir();if(tab==='recs')loadRecs();if(tab==='debug')loadDebug();if(tab==='radio')loadRadio();});
+$$('.tabs button').forEach(b=>b.onclick=()=>{tab=b.dataset.t;$$('.tabs button').forEach(x=>x.classList.toggle('on',x===b));['freq','dir','nets','radio','recs','digital','map','air','debug'].forEach(t=>$('#tab-'+t).style.display=t===tab?'':'none');if(tab==='nets'){renderNets();loadNets();}if(tab==='air'){loadAir();loadAirToday();}if(tab==='digital'){loadDigital();loadRotation();}if(tab==='map')loadMap();if(tab==='dir')loadDir();if(tab==='recs')loadRecs();if(tab==='debug')loadDebug();if(tab==='radio')loadRadio();});
 let dSortK='snr',dSortDir=-1,dSortT='n';
 $$('th[data-dk]').forEach(th=>th.onclick=()=>{if(dSortK===th.dataset.dk)dSortDir=-dSortDir;else{dSortK=th.dataset.dk;dSortT=th.dataset.dt;dSortDir=dSortT==='n'?-1:1;}$$('th[data-dk]').forEach(x=>{x.classList.remove('asc','desc');if(x.dataset.dk===dSortK)x.classList.add(dSortDir>0?'asc':'desc');});if(DIR)renderDir();});
 let DIR=null;async function loadDir(){if(!DIR)DIR=await (await fetch('/api/directory')).json();renderDir();}
@@ -2592,6 +2635,42 @@ function renderDir(){const q=($('#dq').value||'').trim().toLowerCase();let rows=
   const heard=h?`<span class="meter"><i style="width:${Math.min(100,h.snr*2.5)}%"></i></span><span class="sv">${h.snr} dB · busy ${h.busy}%</span>${h.tone?' <span class="tag tone">'+esc(h.tone)+'</span>':''}`:'<span class="tag" style="opacity:.6">not heard yet</span>';
   return `<tr class="row ${h?'':'quiet'}"><td>${e.cat==='Digital'&&!e.digital?'':`<button class="play" data-mhz="${e.mhz}" data-mode="${md}" data-name="${esc(e.name)}" title="${md==='digital'?'decode with SDRTrunk':'listen'}">▶</button>`}</td><td class="f">${fmt(e.mhz)}</td><td><span class="nm">${esc(e.name)}</span></td><td class="sv">${esc(e.cat)} · ${esc(e.group)}</td><td class="sv">${e.mode}</td><td class="sv" style="font-family:var(--mono)">${prog}</td><td>${heard}</td><td class="sv" style="white-space:normal;max-width:320px">${esc(e.note)}${e.nets?'<br><i>'+esc(e.nets)+'</i>':''}</td><td>${e.uv32?'<span class="tag uv">UV-32</span>':'<span class="tag sdr">SDR only</span>'}</td></tr>`;}).join('')||'<tr><td colspan="9" class="empty">no match</td></tr>';capList($('#dirrows').closest('table'),'tbody>tr','dir');P.paint();}
 $('#dq').oninput=()=>{if(DIR)renderDir();};
+/* ---------- (v188) ham nets: the clubs' schedule, worked out by the server (/api/nets) ---------- */
+let NETS=null;
+async function loadNets(){try{const r=await fetch('/api/nets',{cache:'no-store'});if(!r.ok)return;const j=await r.json();if(!j||!Array.isArray(j.now)||!Array.isArray(j.next))return;NETS=j;}catch(e){return;}renderNetbar();if(tab==='nets')renderNets();paintNetRows();}
+function netIn(min){return min<60?min+' min':Math.floor(min/60)+' h'+(min%60?' '+(min%60)+' min':'');}
+function netRank(o){return (o.home?0:1)+(o.conf==='old'?2:0);}
+function netHeard(o){if(o.kind!=='net'||!o.rx||o.state!=='on')return '';if(o.heard_in_window)return ' · signal heard '+(o.heard_ago_min<=1?'just now':o.heard_ago_min+' min ago');return ' · not heard here yet';}
+function netTags(o){return (o.home?'<span class="tag uv" title="your local club">local</span>':'')+(o.conf==='old'?'<span class="tag" title="from an older list - the club has not confirmed it">unconfirmed</span>':'')+(o.conf==='inferred'?'<span class="tag" title="worked out from the dates the club has published - check the club page">date not posted</span>':'')+(!o.rx&&o.mhz?'<span class="tag sdr" title="shortwave - outside what this receiver and antenna cover">HF</span>':'');}
+function netPlay(o){return o.rx?`<button class="play" data-mhz="${o.mhz}" data-mode="fm" data-name="${esc(o.name)}" title="listen on ${fmt(o.mhz)}">▶</button>`:'<span class="np"></span>';}
+function renderNetbar(){const el=$('#netbar');if(!NETS){el.style.display='none';return;}
+ const on=NETS.now.filter(o=>o.kind==='net'&&o.rx).sort((a,b)=>netRank(a)-netRank(b)),meet=NETS.now.filter(o=>o.kind!=='net');
+ const cand=NETS.next.filter(o=>o.rx||o.kind!=='net'),sure=cand.filter(o=>o.conf!=='old'),pool=sure.length?sure:cand;
+ const nx=pool.length?pool.filter(o=>o.start===pool[0].start).sort((a,b)=>netRank(a)-netRank(b))[0]:null;let h='';
+const few=window.matchMedia('(max-width:760px)').matches?1:2;
+ on.slice(0,few).forEach(o=>{h+=`<div class="nb on" title="${esc(o.note||'')}"><i>On air</i>${netPlay(o)}<div class="nbt"><b>${esc(o.name)}</b><span>${esc(o.club_name)} · <u>${fmt(o.mhz)}</u> · until ${o.until}${netHeard(o)}${o.conf==='old'?' · unconfirmed':''}</span></div></div>`;});
+ meet.forEach(o=>{h+=`<div class="nb"><i>Now</i><div class="nbt"><b>${esc(o.name)}</b><span>${esc(o.where)} · until ${o.until}</span></div></div>`;});
+ if(nx)h+=`<div class="nb next" data-go="nets" role="button" tabindex="0" title="open the schedule"><i>Next ${nx.time}</i><div class="nbt"><b>${esc(nx.name)}</b><span>${esc(nx.club_name)}${nx.rx?` · <u>${fmt(nx.mhz)}</u>`:''} · in ${netIn(nx.in_min)}</span></div></div>`;
+ if(NETS.stale)h+=`<div class="nb warn" data-go="nets" role="button" tabindex="0"><span>schedule not checked for ${NETS.age_days==null?'a while':NETS.age_days+' days'}</span></div>`;
+ if(!h){el.style.display='none';return;}
+ h+=`<div class="nb go" data-go="nets" role="button" tabindex="0" title="the week's nets and the clubs' dates"><span>${on.length>few?'+'+(on.length-few)+' more on air · ':''}Nets ›</span></div>`;el.innerHTML=h;el.style.display='';P.paint();}
+$('#netbar').addEventListener('click',e=>{if(e.target.closest('button'))return;const g=e.target.closest('[data-go]');if(g){const t=$('.tabs button[data-t="'+g.dataset.go+'"]');if(t){t.click();t.scrollIntoView({block:'nearest'});}}});
+function netRow(o){return `<div class="nr ${o.state}"><span class="nt">${o.time}</span>${netPlay(o)}<div class="nn"><b>${esc(o.name)}</b>${netTags(o)}<small>${esc(o.club_name)}${o.state==='on'?' · on now until '+o.until+netHeard(o):''}${o.note?' · '+esc(o.note):''}</small></div><span class="nf">${esc(o.prog||'')}</span></div>`;}
+function renderNets(){if(!NETS)return;const on=NETS.now.slice().sort((a,b)=>netRank(a)-netRank(b));
+ let h=on.map(netRow).join('');const nx=NETS.next.filter(o=>o.state==='later').slice(0,on.length?3:5);
+ if(!on.length)h='<div class="sub" style="margin-bottom:6px">Nothing is scheduled right now.</div>';
+ if(nx.length)h+='<div class="sub" style="margin:8px 0 2px">Coming up</div>'+nx.map(o=>netRow(o).replace('<span class="nt">'+o.time,'<span class="nt">'+o.time+'<br><small style="color:var(--mute)">in '+netIn(o.in_min)+'</small>')).join('');
+ $('#nnow').innerHTML=h;
+ const open=new Set($$('#nweek details[open]').map(d=>d.dataset.d)),first=!$('#nweek').children.length;
+ $('#nweek').innerHTML=NETS.week.map((d,i)=>{const nxt=d.items.find(o=>o.state==='later'),onn=d.items.filter(o=>o.state==='on').length;
+  return `<details class="nday" data-d="${d.date}"${(first?i===0:open.has(d.date))?' open':''}><summary>${esc(d.label)}<small>${d.items.length} net${d.items.length===1?'':'s'}${onn?' · '+onn+' on now':''}${i===0&&nxt?' · next '+nxt.time:(i>0&&nxt?' · from '+nxt.time:'')}</small></summary>${d.items.map(netRow).join('')||'<div class="sub">nothing listed</div>'}</details>`;}).join('');
+ $('#nevents').innerHTML=NETS.events.map(o=>{const dd=new Date(o.start*1000);const when=dd.toLocaleDateString([],{weekday:'short',month:'short',day:'numeric'});
+  return `<div class="nr ev ${o.state}"><span class="nt">${when}<br><small style="color:var(--mute)">${o.time}</small></span><div class="nn"><b>${esc(o.name)}</b>${netTags(o)}<small>${esc(o.where||o.prog||'')}${o.note?' · '+esc(o.note):''}</small></div></div>`;}).join('')||'<div class="sub">no dates listed</div>';
+ $('#nclubs').innerHTML=Object.values(NETS.clubs).filter(c=>c.about).map(c=>`<div class="nclub"><a href="${esc(c.url)}" target="_blank" rel="noopener">${esc(c.name)}</a> <span class="sub">${esc(c.area)}</span>${c.home?'<span class="tag uv">local</span>':''}<small>${esc(c.about)}</small></div>`).join('');
+ $('#nfoot').innerHTML='Schedule checked '+esc(NETS.checked||'never')+(NETS.age_days?' ('+NETS.age_days+' days ago)':'')+' against: '+Object.values(NETS.sources).map(x=>`<a href="${esc(x.url)}" target="_blank" rel="noopener">${esc(x.label)}</a>`).join(' · ')+'. Times are local. <b>unconfirmed</b> = from an older list the club has not confirmed; "not heard here yet" = no signal seen on that frequency since the net began (the sweep may not have looked yet, or it is out of range). ▶ tunes the repeater output.';
+ P.paint();}
+function paintNetRows(){const on=((NETS&&NETS.now)||[]).filter(o=>o.kind==='net'&&o.rx).map(o=>o.mhz);for(const [k,tr] of rowsByMhz)tr.classList.toggle('netnow',on.some(m=>Math.abs(m-(+k))<0.0061));}
+loadNets();setInterval(loadNets,60000);
 const DIGSYS=[
  ['Toronto Police','P25 Phase II - ENCRYPTED','700 MHz city system','Not hearable by anyone (all talkgroups encrypted)'],
  ['Toronto Fire','P25 Phase II - in the clear','City system, West/South simulcast sites (table below)','Hearable in SDRTrunk - in the playlist'],

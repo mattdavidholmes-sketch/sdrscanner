@@ -34,6 +34,12 @@ h2{font-size:.8rem;letter-spacing:.08em;color:var(--mu);margin:16px 2px 8px}
 .h button{min-height:44px;padding:0;border-radius:22px;width:44px;background:var(--ac);color:#001}
 .h .t{font-size:.95rem;word-break:break-word}.h .m{color:var(--mu);font-size:.75rem;margin-bottom:2px}
 .msg{color:var(--mu);font-size:.85rem;text-align:center;padding:8px;min-height:1.2em}
+/* (v188) ham nets: on air now / next, from /api/nets */
+.nets{display:flex;flex-direction:column;gap:8px;margin-bottom:12px}.nets:empty{display:none}
+.net{display:block;width:100%;text-align:left;background:var(--card);border-radius:14px;padding:10px 12px;border:2px solid transparent;font-weight:400;min-height:0}
+.net i{display:block;font-style:normal;font-size:.68rem;letter-spacing:.12em;color:var(--mu);font-weight:700}
+.net.on{border-color:rgba(61,220,132,.55)}.net.on i{color:var(--ok)}
+.net b{display:block;font-size:1rem;font-weight:700}.net span{display:block;color:var(--mu);font-size:.82rem;line-height:1.3}
 .go{display:block;width:100%;background:var(--ac);color:#001;font-size:1.1rem;margin-bottom:10px;min-height:58px}
 /* layout pass: tiles fill the width, less padding, two columns on wide screens */
 body{max-width:1180px;margin:0 auto}
@@ -47,8 +53,9 @@ body{max-width:1180px;margin:0 auto}
 body{display:grid;grid-template-columns:minmax(320px,420px) minmax(0,1fr);gap:0 18px;align-items:start}
 h1,.go{grid-column:1/-1}
 .now{grid-column:1;grid-row:3}
-#tiles{grid-column:2;grid-row:3/8;align-content:start}
-h2{grid-column:1;grid-row:4}#heard{grid-column:1;grid-row:5}#msg{grid-column:1;grid-row:6}
+#nets{grid-column:1;grid-row:4}
+#tiles{grid-column:2;grid-row:3/9;align-content:start}
+h2{grid-column:1;grid-row:5}#heard{grid-column:1;grid-row:6}#msg{grid-column:1;grid-row:7}
 }
 </style></head><body>
 <h1><span>📻 SDR Scanner</span><a href="/?desktop=1">full site</a></h1>
@@ -66,6 +73,8 @@ h2{grid-column:1;grid-row:4}#heard{grid-column:1;grid-row:5}#msg{grid-column:1;g
  </div>
  <div class="vol">🔈<input type="range" id="vol" min="0" max="1" step="0.05" value="1">🔊</div>
 </div>
+
+<div class="nets" id="nets"></div>
 
 <div class="grid" id="tiles"></div>
 
@@ -210,7 +219,26 @@ async function heard(){
   c.appendChild(m);c.appendChild(t);d.appendChild(b);d.appendChild(c);box.appendChild(d);
  });
 }
+/* ---------- (v188) ham nets: what the clubs have on the air now and what is next (the server works it out: /api/nets) ---------- */
+async function playNet(f,name){
+ if(Date.now()-startT<1500){say('one at a time - the radio is still switching');return;}startT=Date.now();
+ ensure();stopAudio();var my=seq;cur={i:null,name:name};paintTiles();say('starting '+name+'…');
+ await j('/api/sdrt/dmrscan?on=0');await j('/api/sdrt/stop');
+ pcm('/stream?raw=1&mhz='+f+'&mode=fm&sq=auto&voice=1&name='+encodeURIComponent(name)+'&t='+Date.now(),my);say('');refresh();
+}
+function netEl(tag,cls,label,name,sub){var e=document.createElement(tag);e.className=cls;var i=document.createElement('i');i.textContent=label;var b=document.createElement('b');b.textContent=name;var s=document.createElement('span');s.textContent=sub;e.appendChild(i);e.appendChild(b);e.appendChild(s);return e;}
+async function nets(){
+ var v=await j('/api/nets'),box=$('#nets');if(!v||v.error||!Array.isArray(v.now)||!Array.isArray(v.next))return;
+ var rk=function(o){return (o.home?0:1)+(o.conf==='old'?2:0);};
+ var on=v.now.filter(function(o){return o.kind==='net'&&o.rx;}).sort(function(a,b){return rk(a)-rk(b);});
+ var up=v.next.filter(function(o){return o.rx;}),sure=up.filter(function(o){return o.conf!=='old';}),nx=(sure.length?sure:up)[0];
+ box.textContent='';
+ if(on.length){var o=on[0];var e=netEl('button','net on','ON AIR · TAP TO LISTEN',o.name,o.club_name+' · '+(+o.mhz).toFixed(4)+' · until '+o.until+(o.heard_in_window?' · signal heard':'')+(on.length>1?' · +'+(on.length-1)+' more on air':''));
+  e.onclick=function(){playNet(o.mhz,o.name);};box.appendChild(e);}
+ if(nx)box.appendChild(netEl('div','net','NEXT '+String(nx.time).toUpperCase(),nx.name,nx.club_name+' · '+(+nx.mhz).toFixed(4)+(nx.in_min<120?' · in '+nx.in_min+' min':'')));
+}
+nets();setInterval(nets,60000);
 paintTiles();refresh();heard();
 setInterval(refresh,1500);setInterval(heard,20000);
-document.addEventListener('visibilitychange',function(){if(!document.hidden){refresh();heard();}});
+document.addEventListener('visibilitychange',function(){if(!document.hidden){refresh();heard();nets();}});
 </script></body></html>

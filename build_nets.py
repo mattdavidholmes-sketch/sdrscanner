@@ -116,6 +116,33 @@ NETS = [
 ]
 DAY_ORDER = ["Daily", "Mon-Sat", "Mon/Wed/Fri", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
 
+def _from_schedule():
+    """(v188) nets.json is the schedule the dashboard works from (ham_nets.py). When it is there, the table above is rebuilt from it,
+    so the Directory notes, 'GTA Nets.html' and the CHIRP file all say the same thing. Any problem and the table above stays."""
+    import json, os
+    d = json.load(open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "nets.json"), encoding="utf-8"))
+    keys = {}
+    for k, v in list(SIMPLEX.items()) + list(REPEATERS.items()):
+        keys.setdefault(round(v[0], 4), k)
+    names = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
+    groups = {tuple(range(7)): ["Daily"], tuple(range(6)): ["Mon-Sat"], (0, 2, 4): ["Mon/Wed/Fri"]}
+    out = []
+    for n in d["nets"]:
+        k = keys.get(round(float(n.get("mhz") or 0), 4))
+        if not k or n.get("rx") is False: continue
+        h, m = (int(x) for x in n["start"].split(":"))
+        t = f"{h % 12 or 12}:{m:02d} {'am' if h < 12 else 'pm'}"
+        note = n.get("note", "")
+        if n.get("conf") == "old": note = (note + " - " if note else "") + "unconfirmed"
+        for day in groups.get(tuple(sorted(n.get("days", []))), [names[i] for i in sorted(n.get("days", []))]):
+            out.append((day, t, n["name"], k, note))
+    return out
+try:
+    _sched = _from_schedule()
+    if len(_sched) >= 10: NETS = _sched
+except Exception:
+    pass
+
 def freq_of(key):
     if key in REPEATERS:
         f, d, o, t, w = REPEATERS[key]; return f, d, o, t, w

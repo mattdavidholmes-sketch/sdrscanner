@@ -1,0 +1,933 @@
+{
+ "version": 1,
+ "checked": "2026-11-11",
+ "timezone": "America/Toronto",
+ "about": "GTA amateur radio nets, club meetings and dated events. Edited by hand or by the weekly schedule check; the dashboard works out what is on now.",
+ "clubs": {
+  "skywide": {
+   "name": "Skywide ARC",
+   "area": "Etobicoke",
+   "url": "https://www.skywide.ca/",
+   "home": true,
+   "about": "The Etobicoke club. Repeater VE3SKY 146.985 (near Dufferin and Eglinton), FM and Fusion, linked to EchoLink and AllStar."
+  },
+  "tarc": {
+   "name": "Toronto ARC",
+   "area": "North York",
+   "url": "https://torarc.ca/",
+   "about": "Toronto Amateur Radio Club, callsign VE3TNC (repeater 147.270). Publishes meetings, no nets of its own. Coming up per their site: November AGM and elections, December Christmas pot-luck - dates not posted yet."
+  },
+  "sarc": {
+   "name": "Scarborough ARC",
+   "area": "Scarborough",
+   "url": "https://ve3we.org/",
+   "about": "Nets on VE3TOR 146.940."
+  },
+  "yrarc": {
+   "name": "York Region ARC",
+   "area": "York Region",
+   "url": "https://yrarc.org/",
+   "about": "VE3YRA 145.350, linked to VE3YRC 444.225."
+  },
+  "peel": {
+   "name": "Peel ARC",
+   "area": "Brampton",
+   "url": "https://www.rac.ca/Nets/",
+   "about": "VE3PRC 146.880 and 443.550."
+  },
+  "ctarc": {
+   "name": "Central Toronto ARC",
+   "area": "Toronto",
+   "url": "https://www.rac.ca/Nets/",
+   "about": "VA3ATL 444.775, downtown."
+  },
+  "nortown": {
+   "name": "Nortown ARC",
+   "area": "Toronto",
+   "url": "https://www.skywide.ca/radio-nets-current/",
+   "about": "VE3NOR 443.650."
+  },
+  "ares": {
+   "name": "Toronto ARES",
+   "area": "Toronto",
+   "url": "https://www.qsl.net/va3ldm/local-nets.html",
+   "about": "Emergency communications group. Schedule from an older list - not confirmed."
+  },
+  "other": {
+   "name": "Other GTA",
+   "area": "GTA",
+   "url": "https://www.qsl.net/va3ldm/local-nets.html",
+   "about": ""
+  }
+ },
+ "sources": {
+  "skywide": {
+   "label": "skywide.ca - Radio Nets, Repeaters, Club Meetings",
+   "url": "https://www.skywide.ca/radio-nets-current/"
+  },
+  "tarc": {
+   "label": "torarc.ca - home page and Meeting Schedule",
+   "url": "https://torarc.ca/"
+  },
+  "sarc": {
+   "label": "ve3we.org - home page",
+   "url": "https://ve3we.org/"
+  },
+  "yrarc": {
+   "label": "yrarc.org - nets page",
+   "url": "https://yrarc.org/?p=4057"
+  },
+  "rac": {
+   "label": "Radio Amateurs of Canada - Nets (page dated 2026-05-25)",
+   "url": "https://www.rac.ca/Nets/"
+  },
+  "old": {
+   "label": "VA3LDM list of local nets (undated, older)",
+   "url": "https://www.qsl.net/va3ldm/local-nets.html"
+  }
+ },
+ "nets": [
+  {
+   "id": "sky-hamchat",
+   "name": "Hamchat",
+   "club": "skywide",
+   "days": [
+    0,
+    1,
+    2,
+    3,
+    4,
+    5,
+    6
+   ],
+   "start": "11:00",
+   "mins": 60,
+   "mhz": 146.985,
+   "mode": "fm",
+   "rpt": "VE3SKY",
+   "duplex": "-",
+   "offset": 0.6,
+   "tone": "103.5",
+   "conf": "site",
+   "src": "skywide",
+   "checked": "2026-11-11",
+   "note": "daily morning round-table"
+  },
+  {
+   "id": "sky-hamchat-mon",
+   "name": "Hamchat (evening)",
+   "club": "skywide",
+   "days": [
+    0
+   ],
+   "start": "20:00",
+   "mins": 60,
+   "mhz": 146.985,
+   "mode": "fm",
+   "rpt": "VE3SKY",
+   "duplex": "-",
+   "offset": 0.6,
+   "tone": "103.5",
+   "conf": "site",
+   "src": "skywide",
+   "checked": "2026-11-11",
+   "note": ""
+  },
+  {
+   "id": "sky-nostalgia",
+   "name": "Nostalgia Net",
+   "club": "skywide",
+   "days": [
+    1
+   ],
+   "start": "19:00",
+   "mins": 120,
+   "mhz": 146.985,
+   "mode": "fm",
+   "rpt": "VE3SKY",
+   "duplex": "-",
+   "offset": 0.6,
+   "tone": "103.5",
+   "conf": "site",
+   "src": "skywide",
+   "checked": "2026-11-11",
+   "note": "7 to 9 pm"
+  },
+  {
+   "id": "sky-skynet",
+   "name": "SkyNet - club weekly net",
+   "club": "skywide",
+   "days": [
+    4
+   ],
+   "start": "20:00",
+   "mins": 60,
+   "mhz": 146.985,
+   "mode": "fm",
+   "rpt": "VE3SKY",
+   "duplex": "-",
+   "offset": 0.6,
+   "tone": "103.5",
+   "conf": "site",
+   "src": "skywide",
+   "checked": "2026-11-11",
+   "note": "club news, then a round-table on the questions of the week"
+  },
+  {
+   "id": "sky-simplex",
+   "name": "Skywide Simplex Net",
+   "club": "skywide",
+   "days": [
+    5
+   ],
+   "start": "20:00",
+   "mins": 60,
+   "mhz": 146.54,
+   "mode": "fm",
+   "rpt": "simplex",
+   "duplex": "",
+   "offset": 0,
+   "tone": "",
+   "conf": "site",
+   "src": "skywide",
+   "checked": "2026-11-11",
+   "note": "also on 446.025 - simplex, so only nearby stations will be heard"
+  },
+  {
+   "id": "sky-science",
+   "name": "Science Net",
+   "club": "skywide",
+   "days": [
+    5
+   ],
+   "start": "21:00",
+   "mins": 60,
+   "mhz": 443.9,
+   "mode": "fm",
+   "rpt": "VE3WOO",
+   "duplex": "+",
+   "offset": 5.0,
+   "tone": "127.3",
+   "conf": "site",
+   "src": "skywide",
+   "checked": "2026-11-11",
+   "note": "linked across Canada; VE3SKY 146.985 is the backup"
+  },
+  {
+   "id": "sky-hf",
+   "name": "Skywide 40 m HF Net",
+   "club": "skywide",
+   "days": [
+    2
+   ],
+   "start": "19:30",
+   "mins": 60,
+   "mhz": 7.1,
+   "mode": "ssb",
+   "rpt": "",
+   "duplex": "",
+   "offset": 0,
+   "tone": "",
+   "conf": "site",
+   "src": "skywide",
+   "checked": "2026-11-11",
+   "note": "shortwave (SSB) - this receiver and antenna do not cover it",
+   "rx": false
+  },
+  {
+   "id": "yr-welfare",
+   "name": "Health and Welfare Net",
+   "club": "yrarc",
+   "days": [
+    0,
+    1,
+    2,
+    3,
+    4,
+    5,
+    6
+   ],
+   "start": "20:30",
+   "mins": 30,
+   "mhz": 145.35,
+   "mode": "fm",
+   "rpt": "VE3YRA",
+   "duplex": "-",
+   "offset": 0.6,
+   "tone": "103.5",
+   "conf": "site",
+   "src": "yrarc",
+   "checked": "2026-11-11",
+   "note": "nightly, except the club's meeting night (1st Tuesday, Sep to Jun); also on VE3YRC 444.225",
+   "skip": [
+    "1st Tue"
+   ]
+  },
+  {
+   "id": "yr-ragchew",
+   "name": "Ragchew Ramble",
+   "club": "yrarc",
+   "days": [
+    0,
+    2,
+    4
+   ],
+   "start": "16:00",
+   "mins": 60,
+   "mhz": 145.35,
+   "mode": "fm",
+   "rpt": "VE3YRA",
+   "duplex": "-",
+   "offset": 0.6,
+   "tone": "103.5",
+   "conf": "site",
+   "src": "yrarc",
+   "checked": "2026-11-11",
+   "note": "technical discussion, 4 to 5 pm"
+  },
+  {
+   "id": "sarc-thu",
+   "name": "Scarborough ARC Net",
+   "club": "sarc",
+   "days": [
+    3
+   ],
+   "start": "19:30",
+   "mins": 60,
+   "mhz": 146.94,
+   "mode": "fm",
+   "rpt": "VE3TOR",
+   "duplex": "-",
+   "offset": 0.6,
+   "tone": "103.5",
+   "conf": "site",
+   "src": "sarc",
+   "checked": "2026-11-11",
+   "note": ""
+  },
+  {
+   "id": "sarc-sun",
+   "name": "Scarborough ARC Net",
+   "club": "sarc",
+   "days": [
+    6
+   ],
+   "start": "10:30",
+   "mins": 60,
+   "mhz": 146.94,
+   "mode": "fm",
+   "rpt": "VE3TOR",
+   "duplex": "-",
+   "offset": 0.6,
+   "tone": "103.5",
+   "conf": "site",
+   "src": "sarc",
+   "checked": "2026-11-11",
+   "note": ""
+  },
+  {
+   "id": "peel-wed",
+   "name": "Peel ARC ARES Net",
+   "club": "peel",
+   "days": [
+    2
+   ],
+   "start": "20:00",
+   "mins": 60,
+   "mhz": 146.88,
+   "mode": "fm",
+   "rpt": "VE3PRC",
+   "duplex": "-",
+   "offset": 0.6,
+   "tone": "103.5",
+   "conf": "rac",
+   "src": "rac",
+   "checked": "2026-11-11",
+   "note": "also on 443.550"
+  },
+  {
+   "id": "peel-thu",
+   "name": "Peel ARC Morning Net",
+   "club": "peel",
+   "days": [
+    3
+   ],
+   "start": "10:00",
+   "mins": 60,
+   "mhz": 146.88,
+   "mode": "fm",
+   "rpt": "VE3PRC",
+   "duplex": "-",
+   "offset": 0.6,
+   "tone": "103.5",
+   "conf": "rac",
+   "src": "rac",
+   "checked": "2026-11-11",
+   "note": ""
+  },
+  {
+   "id": "peel-sstv",
+   "name": "Peel ARC SSTV Net",
+   "club": "peel",
+   "days": [
+    1
+   ],
+   "start": "20:00",
+   "mins": 60,
+   "mhz": 443.55,
+   "mode": "fm",
+   "rpt": "VE3PRC",
+   "duplex": "+",
+   "offset": 5.0,
+   "tone": "103.5",
+   "conf": "rac",
+   "src": "rac",
+   "checked": "2026-11-11",
+   "note": "pictures sent as audio tones"
+  },
+  {
+   "id": "ctarc-tue",
+   "name": "Central Toronto ARC Net",
+   "club": "ctarc",
+   "days": [
+    1
+   ],
+   "start": "19:30",
+   "mins": 60,
+   "mhz": 444.775,
+   "mode": "fm",
+   "rpt": "VA3ATL",
+   "duplex": "+",
+   "offset": 5.0,
+   "tone": "110.9",
+   "conf": "rac",
+   "src": "rac",
+   "checked": "2026-11-11",
+   "note": "not on the first Tuesday (club meeting night)",
+   "skip": [
+    "1st Tue"
+   ]
+  },
+  {
+   "id": "nortown",
+   "name": "Nortown Club Net",
+   "club": "nortown",
+   "days": [
+    1,
+    3
+   ],
+   "start": "20:00",
+   "mins": 60,
+   "mhz": 443.65,
+   "mode": "fm",
+   "rpt": "VE3NOR",
+   "duplex": "+",
+   "offset": 5.0,
+   "tone": "103.5",
+   "conf": "site",
+   "src": "skywide",
+   "checked": "2026-11-11",
+   "note": ""
+  },
+  {
+   "id": "procom",
+   "name": "Procom Net",
+   "club": "other",
+   "days": [
+    3,
+    6
+   ],
+   "start": "20:00",
+   "mins": 60,
+   "mhz": 443.05,
+   "mode": "fm",
+   "rpt": "VE3YYZ",
+   "duplex": "+",
+   "offset": 5.0,
+   "tone": "156.7",
+   "conf": "site",
+   "src": "skywide",
+   "checked": "2026-11-11",
+   "note": ""
+  },
+  {
+   "id": "fvl-simplex",
+   "name": "Thursday Night Simplex Net",
+   "club": "other",
+   "days": [
+    3
+   ],
+   "start": "20:00",
+   "mins": 60,
+   "mhz": 147.405,
+   "mode": "fm",
+   "rpt": "simplex",
+   "duplex": "",
+   "offset": 0,
+   "tone": "",
+   "conf": "site",
+   "src": "skywide",
+   "checked": "2026-11-11",
+   "note": "VA3FVL - simplex, so only nearby stations will be heard"
+  },
+  {
+   "id": "ares-morning",
+   "name": "Toronto ARES Morning Net",
+   "club": "ares",
+   "days": [
+    0,
+    1,
+    2,
+    3,
+    4
+   ],
+   "start": "11:00",
+   "mins": 30,
+   "mhz": 145.13,
+   "mode": "fm",
+   "rpt": "VA3GTU",
+   "duplex": "-",
+   "offset": 0.6,
+   "tone": "103.5",
+   "conf": "old",
+   "src": "old",
+   "checked": "2026-11-11",
+   "note": ""
+  },
+  {
+   "id": "ares-info-sat",
+   "name": "Toronto ARES Information Net",
+   "club": "ares",
+   "days": [
+    5
+   ],
+   "start": "11:00",
+   "mins": 30,
+   "mhz": 146.94,
+   "mode": "fm",
+   "rpt": "VE3TOR",
+   "duplex": "-",
+   "offset": 0.6,
+   "tone": "103.5",
+   "conf": "old",
+   "src": "old",
+   "checked": "2026-11-11",
+   "note": ""
+  },
+  {
+   "id": "ares-info-sun",
+   "name": "Toronto ARES Information Net",
+   "club": "ares",
+   "days": [
+    6
+   ],
+   "start": "11:00",
+   "mins": 30,
+   "mhz": 147.27,
+   "mode": "fm",
+   "rpt": "VE3TNC",
+   "duplex": "+",
+   "offset": 0.6,
+   "tone": "103.5",
+   "conf": "old",
+   "src": "old",
+   "checked": "2026-11-11",
+   "note": "on the Toronto ARC repeater"
+  },
+  {
+   "id": "ares-round",
+   "name": "Toronto ARES Roundtable",
+   "club": "ares",
+   "days": [
+    0,
+    1,
+    2,
+    3,
+    4,
+    5
+   ],
+   "start": "17:45",
+   "mins": 30,
+   "mhz": 145.13,
+   "mode": "fm",
+   "rpt": "VA3GTU",
+   "duplex": "-",
+   "offset": 0.6,
+   "tone": "103.5",
+   "conf": "old",
+   "src": "old",
+   "checked": "2026-11-11",
+   "note": ""
+  },
+  {
+   "id": "ares-8-mon",
+   "name": "Toronto ARES Net",
+   "club": "ares",
+   "days": [
+    0,
+    4
+   ],
+   "start": "20:00",
+   "mins": 30,
+   "mhz": 145.13,
+   "mode": "fm",
+   "rpt": "VA3GTU",
+   "duplex": "-",
+   "offset": 0.6,
+   "tone": "103.5",
+   "conf": "old",
+   "src": "old",
+   "checked": "2026-11-11",
+   "note": ""
+  },
+  {
+   "id": "ares-8-tue",
+   "name": "Toronto ARES Net (simplex)",
+   "club": "ares",
+   "days": [
+    1
+   ],
+   "start": "20:00",
+   "mins": 30,
+   "mhz": 146.46,
+   "mode": "fm",
+   "rpt": "simplex",
+   "duplex": "",
+   "offset": 0,
+   "tone": "",
+   "conf": "old",
+   "src": "old",
+   "checked": "2026-11-11",
+   "note": ""
+  },
+  {
+   "id": "ares-8-wed",
+   "name": "Toronto ARES Net (UHF)",
+   "club": "ares",
+   "days": [
+    2
+   ],
+   "start": "20:00",
+   "mins": 30,
+   "mhz": 442.375,
+   "mode": "fm",
+   "rpt": "VA3GTU",
+   "duplex": "+",
+   "offset": 5.0,
+   "tone": "103.5",
+   "conf": "old",
+   "src": "old",
+   "checked": "2026-11-11",
+   "note": ""
+  },
+  {
+   "id": "ares-8-thu",
+   "name": "Toronto ARES Net (UHF simplex)",
+   "club": "ares",
+   "days": [
+    3
+   ],
+   "start": "20:00",
+   "mins": 30,
+   "mhz": 446.025,
+   "mode": "fm",
+   "rpt": "simplex",
+   "duplex": "",
+   "offset": 0,
+   "tone": "",
+   "conf": "old",
+   "src": "old",
+   "checked": "2026-11-11",
+   "note": ""
+  },
+  {
+   "id": "ares-8-sat",
+   "name": "Toronto ARES Net",
+   "club": "ares",
+   "days": [
+    5
+   ],
+   "start": "20:00",
+   "mins": 30,
+   "mhz": 146.94,
+   "mode": "fm",
+   "rpt": "VE3TOR",
+   "duplex": "-",
+   "offset": 0.6,
+   "tone": "103.5",
+   "conf": "old",
+   "src": "old",
+   "checked": "2026-11-11",
+   "note": ""
+  },
+  {
+   "id": "ares-440-sun",
+   "name": "Toronto ARES 440 Simplex Net",
+   "club": "ares",
+   "days": [
+    6
+   ],
+   "start": "20:30",
+   "mins": 30,
+   "mhz": 446.025,
+   "mode": "fm",
+   "rpt": "simplex",
+   "duplex": "",
+   "offset": 0,
+   "tone": "",
+   "conf": "old",
+   "src": "old",
+   "checked": "2026-11-11",
+   "note": ""
+  },
+  {
+   "id": "spa-mon",
+   "name": "South Pickering ARC Net",
+   "club": "other",
+   "days": [
+    0
+   ],
+   "start": "19:30",
+   "mins": 60,
+   "mhz": 147.375,
+   "mode": "fm",
+   "rpt": "VE3SPA",
+   "duplex": "+",
+   "offset": 0.6,
+   "tone": "103.5",
+   "conf": "old",
+   "src": "old",
+   "checked": "2026-11-11",
+   "note": ""
+  },
+  {
+   "id": "spa-sun",
+   "name": "South Pickering ARC Net",
+   "club": "other",
+   "days": [
+    6
+   ],
+   "start": "19:30",
+   "mins": 60,
+   "mhz": 444.6,
+   "mode": "fm",
+   "rpt": "VE3DAX",
+   "duplex": "+",
+   "offset": 5.0,
+   "tone": "103.5",
+   "conf": "old",
+   "src": "old",
+   "checked": "2026-11-11",
+   "note": ""
+  },
+  {
+   "id": "cnib",
+   "name": "CNIB Net",
+   "club": "other",
+   "days": [
+    1
+   ],
+   "start": "19:00",
+   "mins": 60,
+   "mhz": 443.5,
+   "mode": "fm",
+   "rpt": "VE3NIB",
+   "duplex": "+",
+   "offset": 5.0,
+   "tone": "103.5",
+   "conf": "old",
+   "src": "old",
+   "checked": "2026-11-11",
+   "note": ""
+  },
+  {
+   "id": "halton",
+   "name": "Halton ARC Net",
+   "club": "other",
+   "days": [
+    1
+   ],
+   "start": "20:00",
+   "mins": 60,
+   "mhz": 147.135,
+   "mode": "fm",
+   "rpt": "VE3OD",
+   "duplex": "+",
+   "offset": 0.6,
+   "tone": "131.8",
+   "conf": "old",
+   "src": "old",
+   "checked": "2026-11-11",
+   "note": ""
+  },
+  {
+   "id": "marc-tue",
+   "name": "Mississauga ARC Net",
+   "club": "other",
+   "days": [
+    1
+   ],
+   "start": "20:30",
+   "mins": 60,
+   "mhz": 145.43,
+   "mode": "fm",
+   "rpt": "VE3MIS",
+   "duplex": "-",
+   "offset": 0.6,
+   "tone": "103.5",
+   "conf": "old",
+   "src": "old",
+   "checked": "2026-11-11",
+   "note": ""
+  },
+  {
+   "id": "marc-ares",
+   "name": "Mississauga ARES Net",
+   "club": "other",
+   "days": [
+    6
+   ],
+   "start": "20:15",
+   "mins": 30,
+   "mhz": 145.43,
+   "mode": "fm",
+   "rpt": "VE3MIS",
+   "duplex": "-",
+   "offset": 0.6,
+   "tone": "103.5",
+   "conf": "old",
+   "src": "old",
+   "checked": "2026-11-11",
+   "note": ""
+  },
+  {
+   "id": "northshore",
+   "name": "North Shore ARC Net",
+   "club": "other",
+   "days": [
+    2
+   ],
+   "start": "19:30",
+   "mins": 60,
+   "mhz": 147.12,
+   "mode": "fm",
+   "rpt": "VE3OSH",
+   "duplex": "+",
+   "offset": 0.6,
+   "tone": "156.7",
+   "conf": "old",
+   "src": "old",
+   "checked": "2026-11-11",
+   "note": ""
+  },
+  {
+   "id": "technet",
+   "name": "TechNet",
+   "club": "other",
+   "days": [
+    4
+   ],
+   "start": "20:00",
+   "mins": 120,
+   "mhz": 146.55,
+   "mode": "fm",
+   "rpt": "simplex",
+   "duplex": "",
+   "offset": 0,
+   "tone": "",
+   "conf": "old",
+   "src": "old",
+   "checked": "2026-11-11",
+   "note": "8 to 10 pm, also carried on several repeaters"
+  }
+ ],
+ "events": [
+  {
+   "id": "sky-remembrance",
+   "name": "Remembrance Day Net",
+   "club": "skywide",
+   "kind": "net",
+   "annual": "11-11",
+   "start": "10:30",
+   "mins": 60,
+   "mhz": 146.985,
+   "mode": "fm",
+   "rpt": "VE3SKY",
+   "duplex": "-",
+   "offset": 0.6,
+   "tone": "103.5",
+   "conf": "site",
+   "src": "skywide",
+   "checked": "2026-11-11",
+   "note": "special event net, 10:30 to 11:30 am; the page does not name the frequency - Skywide nets are held on VE3SKY"
+  },
+  {
+   "id": "sky-meeting",
+   "name": "Skywide club meeting",
+   "club": "skywide",
+   "kind": "meeting",
+   "rule": "2nd Mon",
+   "start": "19:00",
+   "mins": 150,
+   "where": "Etobicoke Civic Centre, 399 The West Mall, and online",
+   "conf": "site",
+   "src": "skywide",
+   "checked": "2026-11-11",
+   "note": "second Monday of the month; doors 6 pm (main doors lock after 6). A holiday can move it by a week - check the club page."
+  },
+  {
+   "id": "sky-campfire-2026",
+   "name": "Skywide Campfire Night",
+   "club": "skywide",
+   "kind": "social",
+   "date": "2026-11-14",
+   "start": "19:30",
+   "mins": 150,
+   "where": "Home Smith Park",
+   "conf": "site",
+   "src": "skywide",
+   "checked": "2026-11-11",
+   "note": "campfire, HF radio, astronomy if the sky is clear"
+  },
+  {
+   "id": "sky-dinner-2026",
+   "name": "Skywide Holiday Dinner",
+   "club": "skywide",
+   "kind": "social",
+   "date": "2026-12-05",
+   "start": "17:30",
+   "mins": 180,
+   "where": "Connaught Masonic Hall",
+   "conf": "site",
+   "src": "skywide",
+   "checked": "2026-11-11",
+   "note": "doors 5:30, dinner 6:00; RSVP on the club site"
+  },
+  {
+   "id": "tarc-meeting",
+   "name": "Toronto ARC meeting",
+   "club": "tarc",
+   "kind": "meeting",
+   "rule": "3rd Thu",
+   "start": "19:15",
+   "mins": 105,
+   "months": [
+    9,
+    10,
+    11,
+    12,
+    1,
+    2,
+    3,
+    4,
+    5,
+    6
+   ],
+   "where": "Edithvale Community Centre, 131 Finch Ave W, and online",
+   "conf": "inferred",
+   "src": "tarc",
+   "checked": "2026-11-11",
+   "note": "third Thursday is worked out from the club's last two published meetings (Sep 18 2025, Oct 15 2026) - check torarc.ca before going"
+  }
+ ]
+}
