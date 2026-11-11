@@ -423,6 +423,37 @@ def run_diag(mhz, mode, secs=6):
         give_dongle_back(0)
     json.dump(res, open(os.path.join(DIAG_DIR, "result.json"), "w"), indent=1)
 
+def run_cnr(mhz, secs=8, gains=("49.6", "44.5", "40.2", "36.4", "32.8", "28.0", "22.9")):
+    """(v197) How strong is one AM carrier at each tuner gain? The airband receiver's own figure (carrier-to-noise in a 6 kHz channel),
+    the median of `secs` seconds at each gain, written to diag/cnr.json. Asked for with  CNR <MHz> [seconds]  in diag_request.txt.
+    On a carrier that never stops (Pearson's ATIS, 120.825) this answers what no sweep can. If the figure gets BETTER with less
+    gain, the tuner is being overloaded by strong signals elsewhere (FM broadcast) and a filter in front of it will help. If it
+    only gets worse, the receiver is limited by noise, and what helps is more signal: antenna, height, a preamplifier at the antenna."""
+    import channelizer as CH, statistics
+    res = {"mhz": mhz, "started": dt.datetime.now().isoformat(timespec="seconds"), "gains": [], "note": ""}
+    if not CH.available() or CH.AB is None: res["note"] = "airband receiver not available"; json.dump(res, open(os.path.join(DIAG_DIR, "cnr.json"), "w"), indent=1); return
+    take_dongle(); BG_STATE["what"] = f"measuring the carrier on {mhz:.4f} at {len(gains)} gain settings"; BG_STATE["since"] = time.time()
+    try:
+        for g in gains:
+            ses = CH.Channelizer([(mhz, "am", "cnr")], None, True, g, None, FM_LOG); t0 = time.time(); rows = []
+            while time.time() - t0 < secs + 1.5 and not USER_WANTS.is_set():
+                if not ses.read(4800): break
+                try:
+                    rx = ses.chans[0].rx
+                    if rx is not None and time.time() - t0 > 1.5 and rx.n0 > 0: rows.append((rx.cnr_db, rx.line_db, rx.f_off, 10 * math.log10(rx.n0), 10 * math.log10(max(rx.c_pow, 1e-30))))
+                except Exception: pass
+            err = ses.err; ses.stop(); time.sleep(0.8); BG_STATE["since"] = time.time()
+            med = lambda i: round(statistics.median(r[i] for r in rows), 1) if rows else None
+            res["gains"].append({"gain_db": float(g), "blocks": len(rows), "cnr_db": med(0), "line_db": med(1), "offset_hz": med(2), "noise_density_db": med(3), "carrier_db": med(4), "err": err})
+            if USER_WANTS.is_set(): res["note"] = "stopped: a listen started"; break
+    except Exception as e:
+        res["note"] = repr(e)
+    finally:
+        BG_STATE["what"] = ""
+        with _lock: still = _player.get("session") is not None
+        if not still and not USER_WANTS.is_set(): give_dongle_back(0)
+    json.dump(res, open(os.path.join(DIAG_DIR, "cnr.json"), "w"), indent=1)
+
 TAP_DIR = os.path.join(DIAG_DIR, "iq")
 def run_tap(bank, secs):
     """(v195) Listen to a monitor bank with the channelizer - silently, nothing is played - and keep the baseband of every
@@ -613,6 +644,7 @@ def diag_watcher():
                 if listening or USER_WANTS.is_set() or time.time() - LAST_USER_PLAY[0] < 20 or os.path.exists(os.path.join(HERE, "SDRTRUNK_HAS_DONGLE")): continue       # diagnostics never take the dongle from the user
                 req = open(DIAG_REQ).read().split(); os.remove(DIAG_REQ)
                 if req and req[0] == "TAP" and len(req) >= 3: run_tap(" ".join(req[2:]), int(float(req[1])))
+                elif req and req[0] == "CNR" and len(req) >= 2: run_cnr(float(req[1]), int(float(req[2])) if len(req) > 2 else 8)
                 elif req and req[0] == "RATE" and len(req) >= 3: rate_test(float(req[1]), req[2])
                 elif req and req[0] == "GAIN": gain_test(*([float(req[1]), float(req[2])] if len(req) >= 3 else []))
                 elif len(req) >= 2: run_diag(float(req[0]), req[1], int(req[2]) if len(req) > 2 else 6)

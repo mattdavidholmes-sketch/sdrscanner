@@ -165,7 +165,8 @@ class Channel:
         self.nblk = 0                              # blocks processed since this channel object was made (retune)
         self.pinned = False                        # set when the carrier never dropped for 20 s: a beacon / ATIS / data, not a conversation
         self.pin_why = ""                          # (v193) why it was pinned, for the log line
-        self.rx = None; self.rx_was = False; self.rx_voice = 0     # (v196) airband.AmRx when this AM channel is listened to on its own; its squelch last block; blocks with speech on the carrier
+        self.rx = None; self.rx_was = False; self.rx_voice = 0     # (v196) airband.AmRx for this AM channel; its squelch last block; blocks with speech on the carrier
+        self.rx_scan = False                       # (v197) part of a scan: nothing is played until speech shows on the carrier, and a carrier that never stops is locked out
         self.cv_max = 0.0; self.data_end = False   # (v193) FM: the most speech-like the envelope got during this opening; the data detector ended it without any
         self.env_hist = []; self.voice_mod = 0.0; self.voice_ok = False; self.am_blocks = 0   # syllabic modulation detector (AM): speech ~0.5-1.0, steady noise/carrier < 0.15
         self.pending = []; self.pending_raw = []; self.live = b""; self.max_mod = 0.0; self.open_n = 0; self.snr_sum = 0.0; self.confirmed = True   # confirmed: the last AM open carried speech (FM: always)
@@ -339,7 +340,9 @@ class Channel:
         self.nblk += 1; g.n += 1
         self.pow_db = 10 * np.log10(float(np.mean(np.abs(x) ** 2)) + 1e-12)
         self.floor_db = self.pow_db - max(0.0, rx.cnr_db)                  # the meter's "dB over the noise" is the carrier-to-noise in a 6 kHz channel
-        self.carrier = rx.line_db >= rx.LINE_DB; self.am_open = bool(rx.open); self.voice_mod = rx.mod
+        # "carrier" for the scan = one the squelch would open on or stay open for. (A line far under the squelch - Pearson's ATIS
+        # arrives 6 dB below the noise here - is a carrier too, but the scan must not wait on it.)
+        self.carrier = rx.line_db >= rx.LINE_DB and rx.cnr_db >= rx.threshold - (rx.OPEN_DB - rx.CLOSE_DB); self.am_open = bool(rx.open); self.voice_mod = rx.mod
         if rx.open and not self.rx_was: self.rx_voice = 0; self.confirmed = False
         self.rx_was = bool(rx.open)
         # speech on the carrier, not only a carrier: three blocks whose sidebands stand well above what noise alone makes them
@@ -353,9 +356,20 @@ class Channel:
         if is_open:
             if self.open_since is None: self.open_since = t_block
             self.last_open = t_block
-            if self.rec: self.rec.feed(pcm, True)
             self.max_mod = max(self.max_mod, rx.mod); self.open_n += 1; self.snr_sum += rx.cnr_db
+            if self.rx_scan:
+                # (v197) In a scan a carrier alone does not get the loudspeaker: a transmitter left keyed or a spur would be played
+                # on every lap. What came in is held (1.2 s at most) and played from its first sample once speech shows on it.
+                # A carrier that stays up for 20 s without a break (ATIS, a stuck transmitter) is locked out for the session.
+                self.open_blocks += 1
+                if self.open_blocks >= 200: self.open_blocks = 0; self.pinned = True
+                if not self.confirmed:
+                    self.pending.append(pcm); self.pending = self.pending[-12:]
+                    return bytes(len(pcm)), True
+                if self.pending: pcm = b"".join(self.pending) + pcm; self.pending = []
+            if self.rec: self.rec.feed(pcm, True)
             return pcm, True
+        self.open_blocks = 0; self.pending = []
         if self.open_since is not None:
             self.secs_open += (self.last_open - self.open_since) + 0.1; self.open_since = None
             if self.open_n and OPEN_LOG:
@@ -428,8 +442,13 @@ class Channelizer:
             except Exception: self.tap = None
         self.sox = None
         self.groups = group_channels([c for c in channels if c[0] > 0] or [(146.52, "fm", "146.52")])
-        # (v196) exactly one channel and it is AM: the airband receiver takes it (see Channel._airband)
-        self.solo_am = bool(AB is not None and len(self.groups) == 1 and len(self.groups[0][1]) == 1 and self.groups[0][1][0][1] == "am" and airband_on())
+        # (v196) one AM channel: the airband receiver takes it (see Channel._airband). (v197) The same for every session whose
+        # channels are all AM - the airport banks and Follow traffic. A bank that mixes AM and FM keeps the old AM path for now:
+        # its FM audio goes through sox, and two audio paths into one loudspeaker need their hand-over worked out first.
+        self.air = bool(AB is not None and airband_on() and all(c[1] == "am" for _, g in self.groups for c in g))
+        self.solo_am = bool(self.air and len(self.groups) == 1 and len(self.groups[0][1]) == 1)
+        self.dead_f = {}                           # (v197) per channel: the frequency (Hz from the channel centre) of a carrier that was shut out for carrying nothing
+        self.dead_miss = {}                        #        ... and visits in a row on which it was not there any more
         self.manual = manual; self.record_dir = record_dir; self.on_heard = on_heard
         self.gain_tenths = int(round(float(gain) * 10))
         self.log = open(log_path, "a") if log_path else None
@@ -444,7 +463,7 @@ class Channelizer:
         # (5 Nov) the live audio goes through the SAME sox chain as a direct listen (voice band-pass + compand, 100 ms look-ahead):
         # Monitor sounds exactly like pressing play on the channel. Without sox the old scipy chain is used. (started last: the reader needs qcond/alive)
         try:
-            if self.solo_am: raise RuntimeError("the airband receiver delivers finished audio: no sox, no compander")
+            if self.air: raise RuntimeError("the airband receiver delivers finished audio: no sox, no compander")
             self.sox = subprocess.Popen(AU.sox_cmd("fm", voice), stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
             threading.Thread(target=self._sox_reader, daemon=True).start()
         except Exception: self.sox = None
@@ -491,15 +510,18 @@ class Channelizer:
                 # floor: 0.2 s flush for the samples still in the pipe, then FAST_LOOK. Measured before: 0.4 s flush + 0.5 s blind + 0.6 s
                 # of looking per window made a 10 s lap, and only calls that STARTED in those 0.6 s were caught.
                 fast = all(mo in ("am", "fm") for _, mo, _ in chans) and all(ref_possible(m * 1e6 - center) for m, _, _ in chans)
+                if self.air: fast = True                                               # (v197) a carrier line is there or it is not: one block decides, nothing to learn
                 dwell = self.FAST_LOOK if fast else self.DWELL
                 if self.center != center:
                     self.tcp.retune(center); self.center = center
                     for _ in range(2 if fast else 4): self.tcp.block()                  # flush the retune transient (0.5 s: the tuner's gain ramps after a retune)
                 self.chans = [Channel(m, mo, n, center, self.manual, self.record_dir) for m, mo, n in chans if round(m, 4) not in self.lockout] or \
                              [Channel(m, mo, n, center, self.manual, self.record_dir) for m, mo, n in chans[:1]]
-                if self.solo_am:
+                if self.air:
                     for ch in self.chans:
-                        if ch.mode == "am": ch.rx = AB.AmRx(RATE, BLOCK // (FS // RATE), manual=self.manual); ch.confirmed = False
+                        if ch.mode == "am":
+                            ch.rx = AB.AmRx(RATE, BLOCK // (FS // RATE), manual=self.manual); ch.confirmed = False
+                            ch.rx_scan = not self.solo_am; ch.rx.shut = self.dead_f.get(round(ch.mhz, 4))
                 for ch in self.chans:
                     ch.gate.n = max(0, AU.SETTLE - 2)          # the settle guard is for rtl_fm's DC filter; our own filters settle in 2 blocks
                     if round(ch.mhz, 4) in self.trusted: ch.gate.set_wide(True)
@@ -606,6 +628,14 @@ class Channelizer:
                 if self.tap is not None:
                     try: self.tap.end_visit()
                     except Exception: self.tap = None
+                for ch in self.chans:                                                  # (v197) a carrier shut out for carrying nothing stays remembered across visits ...
+                    if ch.rx is None: continue
+                    k = round(ch.mhz, 4)
+                    if ch.rx.shut is None: self.dead_f.pop(k, None); self.dead_miss.pop(k, None)      # never shut out, or it spoke
+                    elif ch.rx.gone == 0: self.dead_f[k] = ch.rx.shut; self.dead_miss[k] = 0           # still there in the last block
+                    else:                                                              # ... until it has not been there on 20 visits in a row
+                        self.dead_miss[k] = self.dead_miss.get(k, 0) + 1
+                        if self.dead_miss[k] >= 20: self.dead_f.pop(k, None); self.dead_miss.pop(k, None)
                 for ch in self.chans:
                     k = round(ch.mhz, 4)                                                # (v190) six visits running with a carrier that never proved itself: no more grace for it
                     self.steady[k] = self.steady.get(k, 0) + 1 if (ch.carrier and not (ch.voice_ok if ch.mode == "am" else ch.gate.open)) else 0
