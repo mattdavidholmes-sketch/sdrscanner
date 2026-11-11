@@ -567,7 +567,9 @@ def diag_watcher():
                     subprocess.Popen(["/bin/bash", path], cwd=HERE, stdout=open(os.path.join(DIAG_DIR, name + ".log"), "w"), stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL, start_new_session=True)
             if os.path.exists(DIAG_REQ):
                 with _lock: listening = _player.get("session") is not None
-                if listening or USER_WANTS.is_set() or time.time() - LAST_USER_PLAY[0] < 20: continue       # diagnostics never take the dongle from the user
+                # (v193) ... nor from SDRTrunk: a digital listen holds the dongle without a player session, and a diagnostic fired during
+                # one (11 Nov 02:41) found the dongle busy and gave back nothing
+                if listening or USER_WANTS.is_set() or time.time() - LAST_USER_PLAY[0] < 20 or os.path.exists(os.path.join(HERE, "SDRTRUNK_HAS_DONGLE")): continue       # diagnostics never take the dongle from the user
                 req = open(DIAG_REQ).read().split(); os.remove(DIAG_REQ)
                 if req and req[0] == "RATE" and len(req) >= 3: rate_test(float(req[1]), req[2])
                 elif req and req[0] == "GAIN": gain_test(*([float(req[1]), float(req[2])] if len(req) >= 3 else []))
@@ -1327,6 +1329,17 @@ SOLID_WASTE = [(m, "fm", n) for m, n in (
     (464.1625, "Solid Waste Mgmt (Etobicoke + 4 more sites)"),
 )]
 
+_P25F = {"m": None, "f": ()}
+def digital_freq(mhz):
+    """(v193) True on a frequency of one of the P25 systems the app decodes with SDRTrunk (control and traffic channels). Those are
+    never analog voice, whatever the bank says about them."""
+    try:
+        import sdrtrunk_playlist as SP
+        if _P25F["m"] is not SP.P25_SITES:
+            _P25F["f"] = tuple(sorted({round(f, 5) for _, _, fr in SP.P25_SITES for f in fr})); _P25F["m"] = SP.P25_SITES
+        return any(abs(f - mhz) <= 0.0016 for f in _P25F["f"])
+    except Exception: return False
+
 def monitor_list(cat="All", minutes=30, limit=30):
     """Channels worth monitoring: banked voice channels heard in the last `minutes`, plus verified / known voice channels
     in the category, newest first. Read straight from bank.json (written by the dashboard front end).
@@ -1349,7 +1362,9 @@ def monitor_list(cat="All", minutes=30, limit=30):
     except Exception: bank = {}
     now = time.time(); rows = []
     for k, e in bank.items():
-        if e.get("ver") == "DATA": continue
+        # (v193) the analog monitor listens to analog channels only. A digital channel demodulated as FM is noise that the squelch
+        # opens on for a second and a half before the data detector shuts it - which used to count as "heard".
+        if e.get("ver") in ("DATA", "DIGITAL") or (e.get("cat") or "") == "Digital" or digital_freq(float(e.get("mhz", k))): continue
         if 88 <= float(e.get("mhz", k)) < 108: continue                       # broadcast FM is not part of the scanner (the FM Radio tab is only the audio test)
         m = float(e.get("mhz", k)); age = (now - e.get("last_heard", 0)) / 60 if e.get("last_heard") else 1e9
         recent = age <= minutes; sure = e.get("ver") in ("VOICE", "KNOWN") or sdr_scan.reference_for(m) is not None
@@ -1367,7 +1382,7 @@ def monitor_heard(mhz, name, secs, tones):
         p = os.path.join(HERE, "bank.json"); bank = json.load(open(p)); k = f"{mhz:.4f}"
         e = bank.setdefault(k, {"mhz": mhz, "name": name, "service": "", "mode": "AM" if mhz < 137 else "NFM", "cat": "", "uv32": sdr_scan.uv32_can_hear(mhz), "first_heard": time.time(), "best_snr": 0, "times": 0, "tone": "", "ver": ""})
         e["last_heard"] = time.time(); e["times"] = e.get("times", 0) + 1
-        if secs >= 1.5 and e.get("ver") != "KNOWN": e["ver"] = "VOICE"
+        if secs >= 1.5 and e.get("ver") not in ("KNOWN", "DIGITAL") and not digital_freq(mhz): e["ver"] = "VOICE"     # (v193) digital stays digital
         try: alerts_check_heard(mhz, name, e.get("cat", ""))
         except Exception: pass
         if tones: e["tone"] = tones

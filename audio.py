@@ -86,6 +86,7 @@ class ZcrSquelch:
         # adaptive: learn this channel's own idle-noise ZCR (FM ~0.60-0.67, AM ~0.48) and open on anything clearly below it.
         # Much more sensitive than a fixed 0.35 on FM, still no static: the gap to the noise is fixed, not the threshold.
         self.noise = None; self.margin = 0.07 if mode != "am" else 0.05      # (v178: AM 0.06 -> 0.05, weak aircraft were closing between words)
+        self.noise_n = 0; self.lvl_max = 0.0                               # (v193) blocks the idle-noise estimate was learned from; the loudest recent block
         self._m0 = self.margin                                              # auto = as open as possible without static (measured hiss ZCR 0.50-0.67, voice 0.10-0.35)
         self.wide = False; self.hang_blocks = 30 if mode == "am" else 15    # (v178) airband: 3 s hang - a pilot/controller exchange stays in one piece; set_wide(): a known / expected voice channel opens on weaker audio and hangs longer
         self.always = (manual == 0) or mode == "wbfm"
@@ -143,11 +144,22 @@ class ZcrSquelch:
         self.ema = self.zcr if self.ema is None else 0.5 * self.zcr + 0.5 * self.ema
         if self.manual is None:
             # noise estimate: slow EMA of the ZCR while closed (fast at first so it settles within ~1 s)
-            if not self.open:
+            # (v193) Learned from blocks that look like noise, and from nothing else. The estimate used to start from the first block
+            # whatever was on it: tuning in while somebody was talking, or onto a digital signal, took the SIGNAL for the idle noise.
+            # From then on "open" needed something even quieter than that signal, so the squelch chattered through the transmission
+            # (open one block, 1.5 s of hang, shut, open again - the hang is silent until the level is known) and stayed deaf to weak
+            # voice for the next 10-20 s. A scan visit starts a new squelch every time, so this hit every call already in progress.
+            # Until noise has been seen the fixed 0.35 threshold decides, which is what the squelch was before it adapted.
+            # FM only: the pause between two words is a quiet carrier - hiss-like but faint (a few hundred, where an empty channel
+            # is the loudest thing a discriminator puts out: 9,500 measured on 146.52, 4,800 on 443.9 with a faint carrier under
+            # it). Those pauses are not idle noise either; learned as such they left the squelch open on the full hiss after the call.
+            self.lvl_max = max(self.level, 0.99 * self.lvl_max)
+            if not self.open and self.zcr > self.thresh and (self.mode != "fm" or self.level >= 0.4 * self.lvl_max):
                 if self.noise is None: self.noise = self.zcr
                 else:
-                    a = 0.2 if self.n < 30 else 0.02
-                    if self.zcr > self.thresh: self.noise = (1 - a) * self.noise + a * self.zcr
+                    a = 0.2 if self.noise_n < 12 else 0.02
+                    self.noise = (1 - a) * self.noise + a * self.zcr
+                self.noise_n += 1
             if self.noise is not None: self.thresh = min(0.55, max(0.30, self.noise - self.margin))
         if self.open: sig = self.ema < (min(self.thresh + 0.08, self.noise - 0.04) if self.noise is not None else self.thresh + 0.05)   # hysteresis, but always below the hiss
         else:         sig = self.ema < self.thresh

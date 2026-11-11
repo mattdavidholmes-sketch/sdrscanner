@@ -99,6 +99,8 @@ class Channel:
         self.open_blocks = 0                       # consecutive blocks the AM carrier squelch has been open
         self.nblk = 0                              # blocks processed since this channel object was made (retune)
         self.pinned = False                        # set when the carrier never dropped for 20 s: a beacon / ATIS / data, not a conversation
+        self.pin_why = ""                          # (v193) why it was pinned, for the log line
+        self.cv_max = 0.0; self.data_end = False   # (v193) FM: the most speech-like the envelope got during this opening; the data detector ended it without any
         self.env_hist = []; self.voice_mod = 0.0; self.voice_ok = False; self.am_blocks = 0   # syllabic modulation detector (AM): speech ~0.5-1.0, steady noise/carrier < 0.15
         self.pending = []; self.pending_raw = []; self.live = b""; self.max_mod = 0.0; self.open_n = 0; self.snr_sum = 0.0; self.confirmed = True   # confirmed: the last AM open carried speech (FM: always)
         self.nb = None                                             # noise blanker state
@@ -214,9 +216,9 @@ class Channel:
             g.data = False; g.data_latched = False
             gated = raw if (g.open and self.am_open) else bytes(len(raw))            # during the flutter hang the channel stays open but silent (no hiss burst)
         if g.open and not (g.data or (g.data_latched and g.data_blocks >= 10)):
-            if self.open_since is None: self.open_since = t_block
+            if self.open_since is None: self.open_since = t_block; self.cv_max = 0.0; self.data_end = False
             self.last_open = t_block
-            if self.mode == "fm": self.tones.feed(raw)
+            if self.mode == "fm": self.tones.feed(raw); self.cv_max = max(self.cv_max, g.voice_cv)
             a = np.frombuffer(gated, dtype=np.int16).astype(np.float64)
             if self.mode != "wbfm":
                 a, self.zih = signal.sosfilt(self.sosh, a, zi=self.zih)
@@ -244,6 +246,11 @@ class Channel:
             return out, True
         if self.open_since is not None:
             self.secs_open += (self.last_open - self.open_since) + 0.1; self.open_since = None
+            # (v193) The data detector closed this FM opening and the level never once rose and fell the way speech does: a control
+            # channel or a data link, not somebody talking. Level variation of speech: 0.24-0.5 (the squelch's earlier measurements);
+            # of the P25 control channel on 770.58125: 0.049 at most (capture of 11 Nov). 0.12 is the line the data detector itself
+            # draws. A voice call that ends in a flat repeater tail has had its syllables by then and still counts.
+            self.data_end = self.mode == "fm" and bool(g.data or (g.data_latched and g.data_blocks >= 10)) and self.cv_max < 0.12
             if self.open_n and OPEN_LOG:                                 # one line per open: tune the speech detector from real data
                 try:
                     with open(OPEN_LOG, "a") as f: f.write(f"{dt.datetime.now():%m-%d %H:%M:%S} {self.name} {self.mhz:.4f} {self.mode} {self.open_n/10:.1f}s max_mod {self.max_mod:.2f} mean_snr {self.snr_sum/self.open_n:.1f} voice {'yes' if self.voice_ok else 'no'}\n")
@@ -318,6 +325,7 @@ class Channelizer:
         self.mhz = 0.0; self.mode = "fm"; self.name = ""; self.active = None
         self.hold = False; self.skip_req = False; self.base = 0; self.hotwin = {}; self.visit = {}; self.nvisit = 0; self.lap_t0 = time.time(); self.lap_s = None; self.laps = 0; self.lockout = set()          # (v137) scanner keys: HOLD stays on this window, SKIP hops now, lockout = never stop here
         self.steady = {}                           # (v190) per channel: visits in a row that ended with an unproven carrier still up (a birdie, a stuck transmitter)
+        self.datahits = {}                         # (v193) per channel: openings in a row that the data detector ended with no speech in them
         self.bias = {}                             # (v190) per channel: its idle reading against the gaps beside it, learned slowly (dB)
         self.heard = []; self.lock = threading.Lock(); self.q = []; self.qcond = threading.Condition(self.lock)
         self.tcp = None; self.blocks = 0; self.load = 0.0
@@ -381,7 +389,7 @@ class Channelizer:
                     if round(ch.mhz, 4) in self.trusted: ch.gate.set_wide(True)
                 for ch in self.chans:                                  # known voice channels are never vetoed as 'data' (repeater tails)
                     if round(ch.mhz, 4) in self.trusted: ch.gate.detect_data = False
-                t0 = time.time(); last_any = None; opened = {}; graced = {}; grace_until = 0.0
+                t0 = time.time(); last_any = None; opened = {}; graced = {}; grace_until = 0.0; proven_t = {}
                 while self.alive:
                     iq = self.tcp.block(); tb = time.time(); t_cpu = time.perf_counter()
                     outs = []
@@ -419,9 +427,21 @@ class Channelizer:
                         if is_open:
                             outs.append((ch.gate.level, ch, out))
                             if ch.mhz not in opened: opened[ch.mhz] = tb
-                        if proven: last_any = tb
+                        if proven: last_any = tb; proven_t[ch.mhz] = tb
                         elif ch.mhz in opened:
                             secs = round(tb - opened.pop(ch.mhz), 1)
+                            if ch.mode == "fm":
+                                # (v193) An opening the data detector ended, with no speech in it, was a digital signal: it is not "heard",
+                                # it gives back the hold it earned while it looked like a call, and the third one in a row locks the channel
+                                # out for this session. Before, a P25 control channel in the list was "heard" every 1.5 s, held the scan
+                                # for 6 s each time and was written to the bank as confirmed voice.
+                                k = round(ch.mhz, 4)
+                                if ch.data_end:
+                                    self.datahits[k] = self.datahits.get(k, 0) + 1
+                                    proven_t.pop(ch.mhz, None); last_any = max(proven_t.values(), default=None)
+                                    if self.datahits[k] >= 3 and k not in self.trusted: ch.pinned = True; ch.pin_why = "data"
+                                    continue
+                                if secs >= 0.5: self.datahits.pop(k, None)
                             if secs >= 0.5 and (ch.mode != "am" or ch.confirmed):            # (5 Nov) flickers and refused AM carriers stay out of the heard log
                                 self.heard.append({"mhz": ch.mhz, "name": ch.name, "when": dt.datetime.now().strftime("%H:%M:%S"), "secs": secs, "tones": ch.tones.summary()})
                                 self.heard = self.heard[-50:]; self.hotwin[self.gi] = time.time()
@@ -450,7 +470,9 @@ class Channelizer:
                     for ch in pinned:
                         self.lockout.add(round(ch.mhz, 4)); ch.pinned = False
                         if self.log:
-                            try: self.log.write(f"monitor: {ch.name} {ch.mhz:.4f} open 20 s without a break - continuous carrier, locked out for this session\n"); self.log.flush()
+                            try:
+                                why = "digital / data signal, no speech in three openings" if ch.pin_why == "data" else "open 20 s without a break - continuous carrier"
+                                self.log.write(f"monitor: {ch.name} {ch.mhz:.4f} {why}, locked out for this session\n"); self.log.flush()
                             except Exception: pass
                         if self.active is ch: self.active = None; last_any = None
                         if ch.rec: ch.rec.close()

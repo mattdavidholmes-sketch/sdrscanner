@@ -146,7 +146,8 @@ def hist_hourly(mhz, days=7):
 
 BANK = os.path.join(HERE, "bank.json")
 _bank = {"loaded": False, "data": {}, "saved": 0}
-NAME_FIX = {"YYZ TWR W": "YYZ TWR S", "YYZ TWR E": "YYZ TWR N"}        # (v183) Pearson's towers are South (118.350) and North (118.700), not West and East
+NAME_FIX = {"YYZ TWR W": "YYZ TWR S", "YYZ TWR E": "YYZ TWR N",
+            "City of Toronto P25 - Metrolinx Central CONTROL channel": "Metrolinx / GO Transit P25 - Metrolinx Central CONTROL channel"}        # (v183) Pearson's towers are South (118.350) and North (118.700), not West and East
 def bank_load():
     """Load the bank. A failed read (iCloud half-synced file, truncated JSON) must NEVER start an empty bank that then overwrites the real one:
     retry, compare with the rolling backups (.bak every 15 min, .bak2 every 6 h) and take the fullest one if the main file lost more than half
@@ -168,6 +169,14 @@ def bank_load():
             data = {}; _bank["ok"] = not os.path.exists(BANK) or os.path.getsize(BANK) == 0      # unreadable real file: do not overwrite it
         for e in data.values():                                               # (v183) channels banked under a name that has since been corrected
             if isinstance(e, dict) and e.get("name") in NAME_FIX: e["name"] = NAME_FIX[e["name"]]
+        # (v193) A frequency of a P25 system is digital, always. Until v193 a decoded call stamped the system's control channel as
+        # analog "VOICE", which put it in the analog monitor list, where its data was then "heard" again and again. Rows found in
+        # that state are put right once; the voice time on them came from that loop and is dropped (decoded calls set it again).
+        for e in data.values():
+            try:
+                if isinstance(e, dict) and e.get("ver") != "DIGITAL" and v1.digital_freq(float(e.get("mhz", 0))):
+                    e["ver"] = "DIGITAL"; e["cat"] = "Digital"; e["uv32"] = False; e.pop("voice_ts", None)   # uv32: an analog handheld cannot decode it
+            except Exception: pass
         _bank["data"] = data; _bank["loaded"] = True; _bank["n0"] = len(data)
     return _bank["data"]
 def bank_mark_data(keys):
@@ -176,7 +185,7 @@ def bank_mark_data(keys):
     data = bank_load(); changed = False
     for k in keys:
         e = data.get(k)
-        if e and e.get("ver") != "DATA": e["ver"] = "DATA"; changed = True
+        if e and e.get("ver") not in ("DATA", "DIGITAL"): e["ver"] = "DATA"; changed = True      # (v193) DIGITAL (decoded by SDRTrunk) says more than DATA
     if changed: bank_save()
 def bank_save():
     try:
@@ -206,13 +215,33 @@ def heard_stamp(mhz, name, secs, tones, count=True):
                            "first_heard": now, "best_snr": 0, "times": 0, "tone": "", "ver": ""}
         e["last_heard"] = now; e["voice_ts"] = now
         if count: e["times"] = e.get("times", 0) + 1
-        if secs >= 1.5 and e.get("ver") != "KNOWN": e["ver"] = "VOICE"
+        if secs >= 1.5 and e.get("ver") not in ("KNOWN", "DIGITAL") and not v1.digital_freq(mhz): e["ver"] = "VOICE"   # (v193) digital stays digital
         if tones: e["tone"] = tones
         _bank["dirty"] = True; _STC["t"] = 0.0                                   # the next page poll gets a fresh state, not the 3 s old one
         try: v1.alerts_check_heard(mhz, name, e.get("cat", ""))
         except Exception: pass
     except Exception: pass
 v1.monitor_heard = heard_stamp                # Monitor, Follow traffic and the voice check call this by name at the end of every confirmed opening
+
+def digital_stamp(mhz, name, tg, calls=1, enc=False):
+    """(v193) SDRTrunk decoded a call on this channel (or, for a trunked system, on the system this control channel belongs to):
+    stamp the bank the page reads, as DIGITAL - never as analog voice. dashboard.digital_heard wrote bank.json on disk, where this
+    module's copy overwrote it within two minutes, so no digital channel ever kept its last call. An unencrypted call is voice
+    that was heard; an encrypted one is only a signal."""
+    try:
+        data = bank_load(); k = f"{mhz:.4f}"; now = time.time(); e = data.get(k)
+        if e is None:
+            e = data[k] = {"mhz": mhz, "name": name, "service": "", "mode": "NFM", "cat": "Digital", "uv32": False, "first_seen": now, "times": 0}
+        e["last_heard"] = now; e["times"] = e.get("times", 0) + calls; e["ver"] = "DIGITAL"; e["uv32"] = False
+        if not enc: e["voice_ts"] = now
+        if name and (not e.get("name") or e["name"].startswith(k[:3])): e["name"] = name
+        lc = e.get("last_call") or {}
+        e["last_call"] = {"tg": tg, "calls": lc.get("calls", 0) + calls, "when": dt.datetime.now().strftime("%b %d %H:%M"), "enc": "encrypted" if enc else ""}
+        _bank["dirty"] = True; _STC["t"] = 0.0
+        try: v1.alerts_check_heard(mhz, name, "Digital")
+        except Exception: pass
+    except Exception: pass
+v1.digital_heard = digital_stamp
 
 def _listen_watch():
     """(v191) While somebody is listening and the squelch is open on a channel, that channel IS being heard: stamp it once when it
@@ -226,7 +255,10 @@ def _listen_watch():
             if ses is not None:
                 if hasattr(ses, "groups"):                                       # channelizer (Monitor): the channel that is open right now
                     a = getattr(ses, "active", None)
-                    if a is not None and (a.mode != "am" or a.voice_ok): cur = (round(a.mhz, 4), a.name)
+                    # (v193) FM: only once the level has risen and fallen like speech and the data detector has nothing against it -
+                    # the first second of a digital signal looks open too. The opening is stamped when it ends in any case.
+                    if a is not None and (a.voice_ok if a.mode == "am" else (a.mode == "wbfm" or (getattr(a, "cv_max", 0.0) >= 0.12 and not a.gate.data))):
+                        cur = (round(a.mhz, 4), a.name)
                 elif mhz and mhz > 1 and manual != 0:                            # one channel; a squelch held open by hand proves nothing
                     g = getattr(ses, "gate", None)
                     if g is not None and g.open and not getattr(g, "always", False) and not (g.data or g.data_latched):
@@ -885,7 +917,9 @@ def calls_log_update():
             import sdrtrunk_playlist as SP
             site = (SDRT["target"] or "").split(":", 1)[1] if (SDRT["target"] or "").startswith("p25:") else None
             cc = next((fr[0] for n, _, fr in SP.P25_SITES if n == site), None)
-            if cc and any(not c.get("enc") for c in cur): v1.monitor_heard(cc, f"City of Toronto P25 - {site} CONTROL channel", 5, "")
+            fresh = [c for c in cur if (c["t"], c["to"], c["from"]) not in seen and not c.get("enc")]
+            if cc and fresh:                                                    # (v193) was monitor_heard(..., 5 s): that made the control channel "analog VOICE"
+                digital_stamp(cc, f"{SP.SITE_SYSTEM.get(site, ('City of Toronto',))[0]} P25 - {site} CONTROL channel", call_label(fresh[-1])["label"], len(fresh), False)
         except Exception: pass
         # (v143) DMR / NXDN windows: every decoded call stamps ITS channel in the bank (last heard, last call) and the talkgroup is
         # remembered per frequency (dmr_talkgroups.json), so "Scan all DMR" leaves a trail: which channel talked, which TG, when.
@@ -2655,7 +2689,7 @@ function spark(hours,h){const pct=Math.max(0,Math.min(100,Math.round((h&&h.recen
  return `<div class="act" title="how much of the last 30 minutes of sweeps this channel was on the air (${pct}%)"><div class="actb">${segs}</div><div class="actl"><b>${pct}%</b> <span class="sv">${h&&h.last?'· last '+h.last:'· not yet'}</span></div>${lc}</div>`;}
 function rowHTML(h){return `<td><button class="play" data-mhz="${h.mhz}" data-mode="${h.ver==='DIGITAL'?'digital':(h.mode==='AM'?'am':'fm')}" data-name="${esc(h.name)}" title="${h.ver==='DIGITAL'?'digital voice - decoded by SDRTrunk, plays through the Mac':'listen'}">▶</button></td><td class="sv rank">${h.live?h.rank:'<span class="tag" title="not in the current sweep - last known values">banked</span>'}</td><td class="f">${fmt(h.mhz)}</td><td><span class="nm">${esc(h.name)}</span></td><td class="vc">${voiceCell(h)}</td><td class="sv">${h.cat}</td><td class="sv">${esc(h.service)||'—'}</td><td class="sv">${h.mode}</td>
  <td><span class="meter"><i style="width:${Math.min(100,h.snr*2.5)}%"></i></span><span class="snr">${h.snr} dB</span></td><td class="busy">${h.busy}%${h.cont?' <span class="tag" style="border-color:#6b5520;color:var(--warn)" title="on 100% of the time - a data link, beacon or sweep artifact, not voice">cont.</span>':''}</td><td>${spark(h.hours,h)}</td><td class="heard">${heardCell(h)}</td><td>${h.tone?'<span class="tag tone">'+esc(h.tone)+'</span>':''}</td><td>${h.uv32?'<span class="tag uv">UV-32</span>':'<span class="tag sdr">SDR only</span>'}</td>`;}
-function voiceCell(h){if(h.ver==='DIGITAL')return '<span class="vtag v4" title="digital voice (P25) - ▶ decodes it with SDRTrunk; audio plays through the Mac">◆ P25 digital</span>';if(h.ver==='VOICE')return '<span class="vtag v1" title="the dashboard listened and heard real speech here">✓ VOICE heard</span>';if(h.ver==='KNOWN')return '<span class="vtag v2" title="a known voice channel: airport, repeater, FRS/GMRS or store table">✓ known voice</span>';return '<span class="vtag v3" title="not auditioned yet - the dashboard checks it when nobody is listening">? unverified</span>';}
+function voiceCell(h){if(h.ver==='DIGITAL'){const k=h.mode==='P25'?'P25 ':(h.mode==='DMR'?'DMR ':'');return '<span class="vtag v4" title="digital voice - ▶ decodes it with SDRTrunk; audio plays through the Mac">◆ '+k+'digital</span>';}if(h.ver==='VOICE')return '<span class="vtag v1" title="the dashboard listened and heard real speech here">✓ VOICE heard</span>';if(h.ver==='KNOWN')return '<span class="vtag v2" title="a known voice channel: airport, repeater, FRS/GMRS or store table">✓ known voice</span>';return '<span class="vtag v3" title="not auditioned yet - the dashboard checks it when nobody is listening">? unverified</span>';}
 function agreeTag(a){if(a==null)return ' <span class="tag" style="opacity:.6" title="one engine only (whisper) - install professional transcription for a cross-check">1 engine</span>';if(a>=0.6)return ' <span class="tag" style="border-color:#1f5c3a;color:var(--acc)" title="two independent engines agree on '+Math.round(a*100)+'% of the words">✓ 2 engines agree</span>';return ' <span class="tag" style="border-color:#6b5520;color:var(--warn)" title="the two engines disagree ('+Math.round(a*100)+'% overlap) - treat as uncertain">? uncertain</span>';}
 // (v191) Two different facts, kept apart: VOICE = somebody was actually heard here (Monitor, the background voice check, a listen whose
 // squelch opened, a decoded digital call); SIGNAL = the sweep saw a carrier (may be data). Seconds for the first two minutes.
