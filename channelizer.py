@@ -56,6 +56,40 @@ def ref_possible(off):
     """can window_refs() give this channel a floor? (its own band and at least two of the four gaps beside it are measurable)"""
     return _band_bin(off) is not None and sum(_band_bin(off + sg * d) is not None for d in _GAPS for sg in (1, -1)) >= 3
 
+_HANN_POW = float(np.sum(_HANN.astype(np.float64) ** 2))
+_fb = np.abs(np.fft.fftfreq(NFFT, 1.0 / FS)); _FLOOR_BINS = np.where((_fb > 10_000) & (_fb < WINDOW / 2))[0]; del _fb    # not the centre spike, not the filter skirts
+
+class NoiseLog:
+    """(v201) One line a minute per tuned window in diag/noise_log.csv: time, window centre (MHz), tuner gain (dB), then the median,
+    10th and 90th percentile of the window's noise density over that minute (dB re full scale per Hz) and the number of 0.1 s looks.
+    Why: on the airband this receiver is limited by noise that comes in through the antenna (README, 11 Nov), and noise made by
+    things in a house comes and goes - a furnace, a lamp, a charger. The log shows when it rises and by how much, which is how
+    the source gets found. The figure is only comparable at the same gain and on the same band; it is not calibrated in dBm."""
+    MAX_BYTES = 3 << 20
+    def __init__(self, gain_db):
+        self.path = os.path.join(os.path.dirname(OPEN_LOG), "diag", "noise_log.csv"); self.gain = gain_db; self.acc = {}; self.t0 = time.time()
+    def add(self, center_hz, floor_db, now):
+        if floor_db is None or not math.isfinite(floor_db): return
+        self.acc.setdefault(round(center_hz / 1e6, 3), []).append(floor_db)
+        if now - self.t0 >= 60.0: self.flush(now)
+    def flush(self, now=None):
+        now = now or time.time(); acc, self.acc, self.t0 = self.acc, {}, now
+        rows = [(c, v) for c, v in sorted(acc.items()) if len(v) >= 20]             # two seconds of looks at least
+        if not rows: return
+        try:
+            os.makedirs(os.path.dirname(self.path), exist_ok=True)
+            new = not os.path.exists(self.path)
+            if not new and os.path.getsize(self.path) > self.MAX_BYTES:           # keep the newer half
+                lines = open(self.path).read().splitlines(); keep = lines[:1] + lines[len(lines) // 2:]
+                with open(self.path + ".tmp", "w") as f: f.write("\n".join(keep) + "\n")
+                os.replace(self.path + ".tmp", self.path)
+            with open(self.path, "a") as f:
+                if new: f.write("time,center_mhz,gain_db,noise_db_per_hz,p10,p90,looks\n")
+                stamp = dt.datetime.fromtimestamp(now).strftime("%Y-%m-%d %H:%M:%S")
+                for c, v in rows:
+                    a = np.asarray(v); f.write(f"{stamp},{c:.3f},{self.gain:.1f},{np.median(a):.2f},{np.percentile(a, 10):.2f},{np.percentile(a, 90):.2f},{len(v)}\n")
+        except OSError: pass                                                        # a log must never stop the listening
+
 def window_refs(iq, offsets):
     """(v190) For each channel offset (Hz from the tuned centre): how many dB the channel stands above the noise measured IN THE SAME
     BLOCK in the gaps beside it. One FFT pass serves every channel in the window. A scanner's squelch compares a channel with its own
@@ -64,6 +98,9 @@ def window_refs(iq, offsets):
     n = (len(iq) // NFFT) * NFFT
     if n < NFFT * 8: return [None] * len(offsets)
     ps = np.mean(np.abs(np.fft.fft(iq[:n].reshape(-1, NFFT) * _HANN, axis=1)) ** 2, axis=0)
+    # (v201) the window's noise floor in this block, as a density (dB re full scale, per Hz): the median bin of the usable span.
+    # Signals occupy a few bins of several hundred, so the median does not see them.
+    window_refs.floor_db = 10 * math.log10(float(np.median(ps[_FLOOR_BINS])) / _HANN_POW / FS + 1e-30)
     def power(off):
         k = _band_bin(off)
         return None if k is None else float(np.sum(ps[np.arange(k - _HALF, k + _HALF + 1) % NFFT]))
@@ -96,8 +133,10 @@ class Tap:
         if rx is not None:
             # (v200) With the airband receiver on the channel a transmission is a carrier LINE, and that is what gets kept - down to
             # 3 dB under the noise, so the ground stations that are too weak to open the squelch are still on file. The old test
-            # (3 dB more power than the channels beside it) filled the folder with 0.3 s files every time broadband noise came up:
-            # 151 of them between 04:00 and 04:10 on 11 Nov, not one with a carrier in it.
+            # (3 dB more power than the gaps beside the channel) filled the folder with 0.3 s files whenever a channel read high
+            # without a carrier on it: 151 of them between 04:00 and 04:10 on 11 Nov, on 124.475 and 125.400 at the same time.
+            # (What that was is not known. The two channels sit +-462.5 kHz either side of the tuned centre, so it may be
+            # the receiver as much as the air. v201's noise log is there to find out.)
             line = bool(rx.line_db >= rx.LINE_DB and rx.cnr_db >= -3.0); on = bool(ch.am_open) or line
         row = [round(ref, 1), round(ch.pow_db, 1), round(ch.floor_db, 1) if ch.floor_db is not None else None, round(ch.voice_mod, 2),
                int(bool(ch.am_open)), int(bool(ch.voice_ok)), int(bool(g.open)),
@@ -475,6 +514,7 @@ class Channelizer:
         self.dead_miss = {}                        #        ... and visits in a row on which it was not there any more
         self.manual = manual; self.record_dir = record_dir; self.on_heard = on_heard
         self.gain_tenths = int(round(float(gain) * 10))
+        self.noise = NoiseLog(self.gain_tenths / 10.0)                                 # (v201) the window's noise floor, one line a minute
         self.log = open(log_path, "a") if log_path else None
         self.alive = True; self.err = ""; self.gi = -1; self.chans = []; self.center = 0.0; self.trusted = set(trusted)
         self.mhz = 0.0; self.mode = "fm"; self.name = ""; self.active = None
@@ -557,7 +597,10 @@ class Channelizer:
                     outs = []
                     nar = [c for c in self.chans if c.mode in ("am", "fm")]
                     if nar:                                                             # (v190) every narrow channel's floor, from this very block
-                        for c, r in zip(nar, window_refs(iq, [c.offset for c in nar])):
+                        window_refs.floor_db = None; refs = window_refs(iq, [c.offset for c in nar])
+                        try: self.noise.add(self.center, window_refs.floor_db, tb)
+                        except Exception: pass
+                        for c, r in zip(nar, refs):
                             # a channel that always reads a little high or low against its gaps (tuner ripple, a faint birdie) has that
                             # learned while it is idle and taken off, so only a real change counts as a carrier
                             k = round(c.mhz, 4); b = self.bias.get(k, 0.0)
@@ -697,6 +740,8 @@ class Channelizer:
         return bytes(n) if self.alive else b""
     def stop(self):
         self.alive = False
+        try: self.noise.flush()
+        except Exception: pass
         with self.qcond: self.qcond.notify_all()
         if self.tcp: self.tcp.close()
         if self.sox is not None:
