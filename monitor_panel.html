@@ -232,7 +232,7 @@
  logCard.innerHTML='<summary>Airport log <span class="sv" id="aplogn"></span></summary><div id="aplog" class="sv"></div>';card.after(logCard);
  // the page's own aircraft card sits under the map: its three buttons move up into the header, its explanation folds away
  (function tidy(){const own=[...tabAir.children].find(c=>c!==card&&c!==logCard&&c.querySelector&&c.querySelector('#airrows'));if(!own)return;
-  ['#airtune','#airfollow','#airtraffic'].forEach(id=>{const b=own.querySelector(id);if(b)q('#apbtns').insertBefore(b,q('#apmon'));});
+  ['#airtune','#airfollow','#airarr','#airdep','#airtraffic'].forEach(id=>{const b=own.querySelector(id);if(b)q('#apbtns').insertBefore(b,q('#apmon'));});
   const h=own.querySelector('h3');if(h&&h.firstChild&&h.firstChild.nodeType===3&&/Aircraft over Toronto/.test(h.firstChild.nodeValue))h.firstChild.nodeValue='Every aircraft within 60 nm ';
   const p=[...own.children].find(c=>c.tagName==='P'&&c.classList.contains('sub'));
   if(p){const d=document.createElement('details');d.className='airhelp';d.innerHTML='<summary>How this works</summary>';p.before(d);d.appendChild(p);}})();

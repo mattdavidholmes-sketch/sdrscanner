@@ -31,6 +31,41 @@ WINDOW = FS - 400_000          # usable span (the outer 200 kHz on each side are
 TCP_PORT = 1234
 OPEN_LOG = os.path.join(os.path.dirname(os.path.abspath(__file__)), "monitor_opens.log")   # one line per squelch open (name, secs, max modulation, mean SNR, voice verdict)
 
+NFFT = 1024                    # (v190) one averaged spectrum per block: 2.34 kHz bins at 2.4 MS/s
+_HANN = np.hanning(NFFT).astype(np.float32)
+_GAPS = (37_500, 62_500, 87_500, 112_500)   # Hz beside a channel, both sides: between the channels of a 25 kHz raster. Eight looks, the median wins,
+                               # so a neighbour that happens to be talking (or sits on a 12.5 kHz raster) does not move the floor
+_HALF = 2                      # a channel = its centre bin +-2 = 11.7 kHz, the width of an AM voice channel
+
+def _band_bin(off):
+    """centre bin of a band at `off` Hz from the tuned centre, or None when it cannot be measured there"""
+    k = int(round(off / (FS / NFFT)))
+    if abs(k) + _HALF >= NFFT // 2 - 8: return None          # off the edge of the sampled window
+    if abs(k) <= _HALF + 1: return None                      # the dongle's DC spike sits on the tuned centre
+    return k
+
+def ref_possible(off):
+    """can window_refs() give this channel a floor? (its own band and at least two of the four gaps beside it are measurable)"""
+    return _band_bin(off) is not None and sum(_band_bin(off + sg * d) is not None for d in _GAPS for sg in (1, -1)) >= 3
+
+def window_refs(iq, offsets):
+    """(v190) For each channel offset (Hz from the tuned centre): how many dB the channel stands above the noise measured IN THE SAME
+    BLOCK in the gaps beside it. One FFT pass serves every channel in the window. A scanner's squelch compares a channel with its own
+    past; this compares it with its neighbourhood right now, so a call that is already running when the scan arrives stands out at
+    once and a gain step after a retune cancels out. None where it cannot be measured."""
+    n = (len(iq) // NFFT) * NFFT
+    if n < NFFT * 8: return [None] * len(offsets)
+    ps = np.mean(np.abs(np.fft.fft(iq[:n].reshape(-1, NFFT) * _HANN, axis=1)) ** 2, axis=0)
+    def power(off):
+        k = _band_bin(off)
+        return None if k is None else float(np.sum(ps[np.arange(k - _HALF, k + _HALF + 1) % NFFT]))
+    out = []
+    for off in offsets:
+        p = power(off)
+        gaps = [g for g in (power(off + sg * d) for d in _GAPS for sg in (1, -1)) if g is not None]
+        out.append(10 * math.log10((p + 1e-20) / (float(np.median(gaps)) + 1e-20)) if (p is not None and len(gaps) >= 3) else None)
+    return out
+
 def _sos(cut, fs, order=6):
     return signal.butter(order, cut / (fs / 2), output="sos")
 
@@ -57,6 +92,7 @@ class Channel:
         # AM (airband): a real carrier squelch. Channel power vs this channel's own noise floor - the way a scanner does it.
         # Far more sensitive than judging the demodulated audio, because an AM carrier is there even between words.
         self.floor_db = None; self.pow_db = -99.0; self.am_open = False; self.am_hang = 0; self.carrier = False
+        self.ref_db = None                         # (v190) dB over the noise in the gaps beside this channel, same block (set by the Channelizer); None = not measurable
         # AM (airband): a weak tower/aircraft carrier lifts the envelope power by only ~3 dB here (measured 5 Nov on 118.35); idle jitter is +-0.3 dB, so 1.5 dB is safe
         self.carrier_margin = 1.5 if mode == "am" else 4.0
         self.weak_blocks = 0                       # consecutive blocks open on a weak carrier without voice evidence
@@ -89,7 +125,16 @@ class Channel:
                 med = float(np.median(env)) + 1e-9; env = np.minimum(env, 3.0 * med)
                 self.pow_db = 10 * np.log10(float(np.mean(env * env)) + 1e-12)
                 self.nblk += 1
-                if self.nblk <= 5: self.floor_db = self.pow_db                       # (5 Nov) tuner gain ramps for ~0.5 s after a retune: the floor is learned after that, never from the quiet start
+                ref = self.ref_db
+                if ref is not None:
+                    # (v190) the floor comes from the SAME block (window_refs): no blind half second after a retune, no slow floor to
+                    # learn, and a call already in progress is not mistaken for the quiet level. 20 s of unbroken carrier is still
+                    # "not a conversation" (ATIS, a beacon): pinned, and the Channelizer locks it out for the session.
+                    self.floor_db = self.pow_db - max(0.0, ref)
+                    if self.am_open:
+                        self.open_blocks += 1
+                        if self.open_blocks >= 200: self.open_blocks = 0; self.pinned = True
+                elif self.nblk <= 5: self.floor_db = self.pow_db                       # (5 Nov) tuner gain ramps for ~0.5 s after a retune: the floor is learned after that, never from the quiet start
                 elif not self.am_open: self.floor_db = min(self.floor_db + 0.05, 0.9 * self.floor_db + 0.1 * self.pow_db)   # track the floor slowly upward, quickly downward
                 else:
                     # (5 Nov) while open the floor still creeps up 0.02 dB/block (a 5 s call loses 1 dB), and after 20 s of continuous "open"
@@ -100,7 +145,7 @@ class Channel:
                 snr = self.pow_db - self.floor_db
                 # (v178) once speech is confirmed the carrier may sag to 0.3 dB over the floor before the channel is called closed (was 0.8 dB:
                 # a weak aircraft fluttering around the threshold was chopped into pieces)
-                self.am_open = self.nblk > 5 and (snr > self.carrier_margin or (self.am_open and snr > self.carrier_margin - 0.7)); self.carrier = self.am_open
+                self.am_open = (ref is not None or self.nblk > 5) and (snr > self.carrier_margin or (self.am_open and snr > self.carrier_margin - 0.7)); self.carrier = self.am_open
                 # audio = envelope minus the carrier, normalised by the carrier (so a weak carrier and a strong one sound the same).
                 # The carrier estimate is smoothed across blocks: using each block's own median put a DC step (a click) at every edge.
                 self.car = med if self.car is None else 0.85 * self.car + 0.15 * med
@@ -109,11 +154,20 @@ class Channel:
                 # carrier detector (fast, 1 block): channel power against this channel's own noise floor. Decides the HOP, not the audio.
                 self.pow_db = 10 * np.log10(float(np.mean(np.abs(x) ** 2)) + 1e-12)
                 self.nblk += 1
-                if self.nblk <= 5: self.floor_db = self.pow_db                       # (5 Nov) see the AM branch: no floor from the retune ramp
+                ref = self.ref_db
+                if ref is not None:                                              # (v190) as in the AM branch: the floor comes from the gaps beside the channel, same block
+                    self.floor_db = self.pow_db - max(0.0, ref)
+                    # 20 s of carrier with the audio gate shut = a data link or a birdie. With the gate open it is somebody talking: a net
+                    # control reading the roll for a minute must never get the repeater locked out (the old rule did exactly that).
+                    if self.carrier and not self.gate.open:
+                        self.open_blocks += 1
+                        if self.open_blocks >= 200: self.open_blocks = 0; self.pinned = True
+                    elif self.gate.open: self.open_blocks = 0
+                elif self.nblk <= 5: self.floor_db = self.pow_db                       # (5 Nov) see the AM branch: no floor from the retune ramp
                 elif not self.carrier: self.floor_db = min(self.floor_db + 0.05, 0.9 * self.floor_db + 0.1 * self.pow_db)
                 else:                                                            # (5 Nov) same as AM: creep while open, re-learn after 20 s continuous
                     self.floor_db = min(self.floor_db + 0.02, self.pow_db); self.open_blocks += 1
-                    if self.open_blocks >= 200: self.floor_db = self.pow_db; self.open_blocks = 0; self.pinned = True
+                    if self.open_blocks >= 200: self.floor_db = self.pow_db; self.open_blocks = 0; self.pinned = not self.gate.open   # (v190) not while somebody is talking
                 if not self.carrier: self.open_blocks = 0
                 self.carrier = (self.pow_db - self.floor_db) > (self.carrier_margin if not self.carrier else self.carrier_margin - 2.0)
                 prev = np.concatenate(([self.last], x[:-1])); self.last = x[-1]
@@ -251,6 +305,7 @@ def group_channels(chans):
 
 class Channelizer:
     DWELL = 1.1            # (v151: was 2.5; the retune flush now happens BEFORE this clock starts, so 1.4 s is a full look at a quiet window) # seconds on a group with nothing open before hopping on (5 Nov: 0.9 was too fast - retune flush + gate settle ate most of it)
+    FAST_LOOK = 0.25       # (v190) seconds on a quiet window: three 0.1 s blocks, each channel judged against the noise beside it
     HOLD = 6.0             # seconds to stay after the last channel in the group closes: the gap between "go ahead" and the reply is often 3-5 s
     def __init__(self, channels, manual=None, voice=True, gain="49.6", record_dir=None, log_path=None, on_heard=None, trusted=(), refresh=None):
         self.refresh = refresh                     # Follow traffic: callable returning a new channel list; read at the start of every lap (no audio cut)
@@ -262,6 +317,8 @@ class Channelizer:
         self.alive = True; self.err = ""; self.gi = -1; self.chans = []; self.center = 0.0; self.trusted = set(trusted)
         self.mhz = 0.0; self.mode = "fm"; self.name = ""; self.active = None
         self.hold = False; self.skip_req = False; self.base = 0; self.hotwin = {}; self.visit = {}; self.nvisit = 0; self.lap_t0 = time.time(); self.lap_s = None; self.laps = 0; self.lockout = set()          # (v137) scanner keys: HOLD stays on this window, SKIP hops now, lockout = never stop here
+        self.steady = {}                           # (v190) per channel: visits in a row that ended with an unproven carrier still up (a birdie, a stuck transmitter)
+        self.bias = {}                             # (v190) per channel: its idle reading against the gaps beside it, learned slowly (dB)
         self.heard = []; self.lock = threading.Lock(); self.q = []; self.qcond = threading.Condition(self.lock)
         self.tcp = None; self.blocks = 0; self.load = 0.0
         # (5 Nov) the live audio goes through the SAME sox chain as a direct listen (voice band-pass + compand, 100 ms look-ahead):
@@ -309,9 +366,14 @@ class Channelizer:
                     self.gi = self.base % ng; self.base += 1
                 self.visit[self.gi] = now
                 center, chans = self.groups[self.gi]
+                # (v190) a window whose channels can all be judged against the noise beside them needs no settled gain and no learned
+                # floor: 0.2 s flush for the samples still in the pipe, then FAST_LOOK. Measured before: 0.4 s flush + 0.5 s blind + 0.6 s
+                # of looking per window made a 10 s lap, and only calls that STARTED in those 0.6 s were caught.
+                fast = all(mo in ("am", "fm") for _, mo, _ in chans) and all(ref_possible(m * 1e6 - center) for m, _, _ in chans)
+                dwell = self.FAST_LOOK if fast else self.DWELL
                 if self.center != center:
                     self.tcp.retune(center); self.center = center
-                    for _ in range(4): self.tcp.block()                                 # flush the retune transient (0.5 s: the tuner's gain ramps after a retune)
+                    for _ in range(2 if fast else 4): self.tcp.block()                  # flush the retune transient (0.5 s: the tuner's gain ramps after a retune)
                 self.chans = [Channel(m, mo, n, center, self.manual, self.record_dir) for m, mo, n in chans if round(m, 4) not in self.lockout] or \
                              [Channel(m, mo, n, center, self.manual, self.record_dir) for m, mo, n in chans[:1]]
                 for ch in self.chans:
@@ -323,25 +385,33 @@ class Channelizer:
                 while self.alive:
                     iq = self.tcp.block(); tb = time.time(); t_cpu = time.perf_counter()
                     outs = []
+                    nar = [c for c in self.chans if c.mode in ("am", "fm")]
+                    if nar:                                                             # (v190) every narrow channel's floor, from this very block
+                        for c, r in zip(nar, window_refs(iq, [c.offset for c in nar])):
+                            # a channel that always reads a little high or low against its gaps (tuner ripple, a faint birdie) has that
+                            # learned while it is idle and taken off, so only a real change counts as a carrier
+                            k = round(c.mhz, 4); b = self.bias.get(k, 0.0)
+                            c.ref_db = None if r is None else r - b
+                            if r is not None and not c.carrier and abs(r - b) < 1.2: self.bias[k] = max(-1.5, min(1.5, b + 0.03 * (r - b)))
                     results = [(ch,) + tuple(ch.process(iq, tb)) for ch in self.chans]
                     if len(self.chans) >= 3:
                         # group floor = the median channel power (most channels are idle): a channel well above it carries a signal,
                         # even on the very first block after a retune (its own floor would otherwise learn the carrier as "quiet")
                         med = float(np.median([c.pow_db for c in self.chans]))
                         for c in self.chans:
-                            if c.mode != "am": c.carrier = (c.pow_db - med) > c.carrier_margin
+                            if c.mode != "am" and c.ref_db is None: c.carrier = (c.pow_db - med) > c.carrier_margin
                         ams = [c for c in self.chans if c.mode == "am"]
                         if len(ams) >= 3:                                              # AM floor = the quiet channels in the window: a transmission already
                             med_am = float(np.median([c.pow_db for c in ams]))        # in progress when we arrive is not learned as "the floor"
                             for c in ams:
-                                if c.floor_db is not None and c.floor_db > med_am + 0.5: c.floor_db = med_am
+                                if c.ref_db is None and c.floor_db is not None and c.floor_db > med_am + 0.5: c.floor_db = med_am
                     for ch, out, is_open in results:
                         # (v180) Only proven activity earns the 6 s HOLD: an FM channel whose audio gate is open, an AM channel whose speech is
                         # confirmed. A carrier that has not proven itself gets 1.2 s from the moment it appears (enough to confirm), once per
                         # visit for weak ones. Before, every block of any carrier reset the hold: 118.7's noise floor flickering 1.5 dB (62
                         # times in 95 s on 10 Nov) pinned the scanner to that window and the other windows were not visited.
                         proven = is_open and (ch.mode != "am" or ch.confirmed)
-                        if ch.carrier and ch.gate.n >= 2 and not proven:
+                        if ch.carrier and ch.gate.n >= 2 and not proven and self.steady.get(round(ch.mhz, 4), 0) < 6:
                             g0 = graced.get(ch.mhz)
                             strong = ch.mode != "am" or (ch.floor_db is not None and ch.pow_db - ch.floor_db >= 4.0)
                             if g0 is None or (strong and tb - g0[1] > 1.0): graced[ch.mhz] = [tb, tb]; grace_until = max(grace_until, tb + 1.2)
@@ -388,9 +458,11 @@ class Channelizer:
                     if self.skip_req: self.skip_req = False; break                      # SKIP: hop now, whoever is talking
                     if self.active is not None and round(self.active.mhz, 4) in self.lockout: self.active = None; break   # locked out mid-call: leave
                     if len(self.groups) > 1 and not self.hold:                           # HOLD: stay in this window until released
-                        if last_any is None and tb - t0 > self.DWELL and tb >= grace_until: break
+                        if last_any is None and tb - t0 > dwell and tb >= grace_until: break
                         if last_any is not None and tb - last_any > self.HOLD and tb >= grace_until: break
                 for ch in self.chans:
+                    k = round(ch.mhz, 4)                                                # (v190) six visits running with a carrier that never proved itself: no more grace for it
+                    self.steady[k] = self.steady.get(k, 0) + 1 if (ch.carrier and not (ch.voice_ok if ch.mode == "am" else ch.gate.open)) else 0
                     if ch.rec: ch.rec.close()
         except Exception as e:
             if self.alive: self.err = f"channelizer: {e!r}"

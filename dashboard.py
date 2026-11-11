@@ -751,7 +751,7 @@ def gather(folder):
         try:
             with open(lg, "rb") as fh: fh.seek(max(0, os.path.getsize(lg) - 4000)); usb += fh.read().decode(errors="ignore").count("failed with -4")
         except OSError: pass
-    out["usb_errors_recent"] = usb; out["background"] = BG_STATE.get("what", "")
+    out["usb_errors_recent"] = usb; out["background"] = BG_STATE.get("what", ""); out["background_last"] = BG_STATE.get("last", "")
     logs = sorted(glob.glob(os.path.join(folder, "rtl_*.log")), key=os.path.getmtime)
     if logs:
         try: out["log"] = open(logs[-1], errors="ignore").read()[-500:]
@@ -1292,6 +1292,19 @@ CP_ETOBICOKE = [(m, "fm", n) for m, n in (
 
 # (v153) "TTC Etobicoke": TTC analog (narrow FM) licences near Etobicoke - 3300 Bloor St W and the Zone 1 / Kipling set (ISED licence list). TTC's main voice
 # system is TETRA (not decodable); these analog channels may be quiet, but they are the part of TTC that a plain receiver can hear.
+# (v190) Pearson's terminal channels as two Monitor banks. Departures 127.575 + 128.800 are 1.2 MHz apart: one dongle window, both
+# decoded at the same time, no hopping - the same trick as the four Fire / EMS sites. Arrivals 124.475 + 125.400 share a window too;
+# 132.800 is 8 MHz away (one dongle sees about 2 MHz), so the scan alternates between those two windows, about half a second each
+# while both are quiet.
+YYZ_DEP = [(127.575, "am", "YYZ DEP 1"), (128.800, "am", "YYZ DEP 2")]
+YYZ_ARR = [(132.800, "am", "YYZ ARR 3"), (124.475, "am", "YYZ ARR 1"), (125.400, "am", "YYZ ARR 2")]
+def yyz_arrivals():
+    """Overnight Pearson combines its terminal sectors: on 11 Nov 2026 at 01:22 an inbound flight was cleared down to 3,000 ft on 128.800,
+    the 'departure' frequency, and after midnight it was the only terminal channel with voice. So from 23:00 to 07:00 the departure
+    pair is watched with the arrivals. (One night's evidence - the app should learn this from the air rather than from the clock.)"""
+    h = dt.datetime.now().hour
+    return YYZ_ARR + (YYZ_DEP if (h >= 23 or h < 7) else [])
+
 TTC_ETOB = [(m, "fm", n) for m, n in (
     (417.0375, "TTC Etobicoke 417.0375 (3300 Bloor W)"), (417.0625, "TTC Etobicoke 417.0625 (3300 Bloor W)"), (417.1125, "TTC Etobicoke 417.1125 (3300 Bloor W)"),
     (417.5875, "TTC Etobicoke 417.5875 (3300 Bloor W)"), (417.6125, "TTC Etobicoke 417.6125 (3300 Bloor W)"),
@@ -1320,6 +1333,8 @@ def monitor_list(cat="All", minutes=30, limit=30):
     cat "X|quick" = Quick scan: every channel heard in the last 24 h (voice or not yet judged), up to 80, busiest-first."""
     quick = cat.endswith("|quick"); cat = cat.split("|")[0]
     lo = lockouts()
+    if cat == "YYZ Arrivals": return [c for c in yyz_arrivals() if round(c[0], 4) not in lo]       # (v190)
+    if cat == "YYZ Departures": return [c for c in YYZ_DEP if round(c[0], 4) not in lo]           # (v190)
     if cat == "TTC Etobicoke": return [c for c in TTC_ETOB if round(c[0], 4) not in lo]            # (v153)
     if cat == "Union Station": return [c for c in UNION_STATION if round(c[0], 4) not in lo]       # (v157)
     if cat == "CP Etobicoke Yard": return [c for c in CP_ETOBICOKE if round(c[0], 4) not in lo]   # (v158)
@@ -1478,23 +1493,37 @@ def verify_worker():
             if not folder: continue
             d = gather(folder)
             ver = load_verified()
-            # priority pass: every ~3 minutes, watch all the known / confirmed voice channels at once for 20 s with the channelizer,
-            # so the bank's "last heard" and the Monitor list stay true even while the sweep is busy elsewhere
+            # voice check (was "priority check"): every ~2 minutes, listen on the known / confirmed voice channels with the channelizer, so
+            # the bank's "last heard" and the Monitor list stay true even while the sweep is busy elsewhere.
+            # (v190) Before, 40 channels meant about 15 tuning positions at 1.5 s each: the 20 s were over before one lap was, and a call had
+            # to START in the 0.6 s the radio really looked. Now a quiet position takes half a second (channelizer v190), so 20 s is two to
+            # three full laps; a net that should be on the air right now goes to the front of the list; and when somebody is talking the
+            # check stays until they finish (75 s at most) instead of cutting the call at 20 s. What it heard is written to the log.
             now = time.time()
-            if now - PRIO_LAST[0] > 180:
+            if now - PRIO_LAST[0] > 110:
                 PRIO_LAST[0] = now
                 try:
                     import channelizer as CH
                     chans = [c for c in monitor_list("All", minutes=30, limit=40)]
+                    try:
+                        import ham_nets
+                        on = [(round(float(o["mhz"]), 4), "fm", o["name"]) for o in ham_nets.view()["now"] if o.get("kind") == "net" and o.get("rx") and 30 < float(o["mhz"]) < 1700]
+                        chans = on + [c for c in chans if round(c[0], 4) not in {m for m, _, _ in on}]
+                    except Exception: pass
                     if CH.available() and chans:
-                        take_dongle(); BG_STATE["what"] = f"priority check: {len(chans)} known voice channels at once (20 s)"; BG_STATE["since"] = time.time()
+                        take_dongle(); BG_STATE["what"] = f"voice check: listening on {len(chans)} known channels (20 s, longer while someone talks)"; BG_STATE["since"] = time.time()
                         try:
                             ses = CH.Channelizer(chans, None, True, "49.6", newest_scan() or HERE, FM_LOG, on_heard=monitor_heard, trusted=trusted_set(chans))
                             t0 = time.time()
-                            while time.time() - t0 < 20 and not USER_WANTS.is_set():
+                            while not USER_WANTS.is_set():
+                                el = time.time() - t0
+                                if el >= 75 or (el >= 20 and ses.active is None): break
                                 b = ses.read(4800)
                                 if not b: break
+                            got = [f"{h['name']} {h['mhz']:.4f} ({h['secs']:.0f} s)" for h in list(ses.heard)]
                             ses.stop()
+                            BG_STATE["last"] = f"{dt.datetime.now():%H:%M} voice check: " + (("heard " + ", ".join(got[:4])) if got else f"nothing on {len(chans)} channels in {ses.laps} laps")
+                            if got: say("voice check: heard " + ", ".join(got[:6]))
                         finally:
                             BG_STATE["what"] = ""
                             with _lock: still = _player.get("session") is not None
