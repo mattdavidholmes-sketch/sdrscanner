@@ -930,12 +930,28 @@ async function info(tr){const mhz=parseFloat(tr.dataset.mhz);const nxt=tr.nextEl
 document.getElementById('rows').addEventListener('click',e=>{if(e.target.closest('button'))return;const tr=e.target.closest('tr');if(tr&&tr.dataset.mhz)info(tr);});
 // Web Audio streaming player: fetch raw PCM, schedule buffers back to back. Works in Safari, Chrome and iOS.
 let actx=null,gainNode=null,nextT=0,abort=null,bytesIn=0;
+var PO={nextT:0,rate:{},m:9,s:0,n:0,aPrev:null,tWin:0,gaps:0};
+function playout(ctx,ab,src,kind){
+ /* (v204) Queue one piece of audio. The radio does not hand over audio at exactly the speed it is played: single channels come in
+    lumps of a third of a second, and at the airband receiver's dongle rate about 5% of the samples are lost on this Mac's USB path.
+    The old player kept 0.4 s in hand and, when that ran out, jumped ahead - a gap, heard as a click, every few seconds.
+    Now: 0.8 s in hand, and the playing speed follows the source (the cushion's average over 3 s says whether it is draining or
+    growing; the speed moves by a fraction of a percent at a time) so it neither runs dry nor piles up. The speed found is
+    remembered per kind of listen. A real stall still restarts the cushion, with a 10 ms fade-in instead of a hard edge. */
+ var now=ctx.currentTime,r=PO.rate[kind]||1;
+ if(PO.nextT<now+0.03){if(PO.nextT>0)PO.gaps++;PO.nextT=now+0.8;PO.m=9;PO.s=0;PO.n=0;PO.aPrev=null;PO.tWin=now;
+  var ch=ab.getChannelData(0),k=Math.min(240,ch.length);for(var i=0;i<k;i++)ch[i]*=i/k;}
+ var lead=PO.nextT-now;if(lead<PO.m)PO.m=lead;PO.s+=lead;PO.n++;
+ if(now-PO.tWin>=3&&PO.n>2){var W=now-PO.tWin,a=PO.s/PO.n;
+  if(PO.aPrev!==null)r+=0.3*(a-PO.aPrev)/W;
+  r+=0.02*(PO.m-0.45);r=Math.max(0.92,Math.min(1.03,r));PO.rate[kind]=r;PO.aPrev=a;PO.m=9;PO.s=0;PO.n=0;PO.tWin=now;}
+ src.playbackRate.value=r;src.start(PO.nextT);PO.nextT+=ab.duration/r;}
 function ensureCtx(){if(!actx){actx=new (window.AudioContext||window.webkitAudioContext)();gainNode=actx.createGain();gainNode.connect(actx.destination);}
  if(actx.state!=='running')actx.resume();gainNode.gain.value=parseFloat(document.getElementById('vol').value);}
 document.getElementById('vol').addEventListener('input',e=>{if(gainNode)gainNode.gain.value=parseFloat(e.target.value);});
 async function play(mhz,md,name){mode='listen';paintMode();const sq=sqArg();cur={mhz,mode:md,name,where:'browser'};playing=mhz;
  document.getElementById('np').textContent=mhz.toFixed(4)+' '+md.toUpperCase()+'  '+name;
- ensureCtx();if(abort)abort.abort();abort=new AbortController();bytesIn=0;nextT=0;
+ ensureCtx();if(abort)abort.abort();abort=new AbortController();bytesIn=0;nextT=0;PO.nextT=0;
  const stat=document.getElementById('stat');stat.textContent='connecting...';
  try{const r=await fetch('/stream?raw=1&mhz='+mhz+'&mode='+md+'&sq='+sq+'&name='+encodeURIComponent(name)+'&t='+Date.now(),{signal:abort.signal});
   const rd=r.body.getReader();let carry=new Uint8Array(0);
@@ -945,7 +961,7 @@ async function play(mhz,md,name){mode='listen';paintMode();const sq=sqArg();cur=
    if(n<1200){carry=buf;continue;}
    const ab=actx.createBuffer(1,n,24000);const ch=ab.getChannelData(0);for(let i=0;i<n;i++)ch[i]=pcm[i]/32768;
    const src=actx.createBufferSource();src.buffer=ab;src.connect(gainNode);
-   const now=actx.currentTime;if(nextT<now+0.1)nextT=now+0.4;src.start(nextT);nextT+=ab.duration;
+   playout(actx,ab,src,md);nextT=PO.nextT;
    stat.textContent='streaming '+(bytesIn/1024).toFixed(0)+' KB  (buffer '+Math.max(0,nextT-actx.currentTime).toFixed(2)+' s)';}
   const m=await (await fetch('/meter')).json();stat.textContent='stream ended - rtl_fm said: '+(m.fm||'(nothing)');}catch(e){if(e.name!=='AbortError')stat.textContent='player error: '+e.message;}}
 function playMac(mhz,md,name){mode='listen';paintMode();if(abort){abort.abort();abort=null;}const sq=sqArg();cur={mhz,mode:md,name,where:'mac'};playing=mhz;document.getElementById('np').textContent=mhz.toFixed(4)+' '+md.toUpperCase()+'  '+name+' (Mac speakers)';

@@ -126,8 +126,25 @@ function ensure(){
  $('#unlock').style.display='none';
 }
 function stopAudio(){seq++;if(abort){try{abort.abort()}catch(e){}abort=null;}if(DIGA){try{DIGA.pause();DIGA.removeAttribute('src');DIGA.load();}catch(e){}DIGA=null;}}
+var PO={nextT:0,rate:{},m:9,s:0,n:0,aPrev:null,tWin:0,gaps:0};
+function playout(ctx,ab,src,kind){
+ /* (v204) Queue one piece of audio. The radio does not hand over audio at exactly the speed it is played: single channels come in
+    lumps of a third of a second, and at the airband receiver's dongle rate about 5% of the samples are lost on this Mac's USB path.
+    The old player kept 0.4 s in hand and, when that ran out, jumped ahead - a gap, heard as a click, every few seconds.
+    Now: 0.8 s in hand, and the playing speed follows the source (the cushion's average over 3 s says whether it is draining or
+    growing; the speed moves by a fraction of a percent at a time) so it neither runs dry nor piles up. The speed found is
+    remembered per kind of listen. A real stall still restarts the cushion, with a 10 ms fade-in instead of a hard edge. */
+ var now=ctx.currentTime,r=PO.rate[kind]||1;
+ if(PO.nextT<now+0.03){if(PO.nextT>0)PO.gaps++;PO.nextT=now+0.8;PO.m=9;PO.s=0;PO.n=0;PO.aPrev=null;PO.tWin=now;
+  var ch=ab.getChannelData(0),k=Math.min(240,ch.length);for(var i=0;i<k;i++)ch[i]*=i/k;}
+ var lead=PO.nextT-now;if(lead<PO.m)PO.m=lead;PO.s+=lead;PO.n++;
+ if(now-PO.tWin>=3&&PO.n>2){var W=now-PO.tWin,a=PO.s/PO.n;
+  if(PO.aPrev!==null)r+=0.3*(a-PO.aPrev)/W;
+  r+=0.02*(PO.m-0.45);r=Math.max(0.92,Math.min(1.03,r));PO.rate[kind]=r;PO.aPrev=a;PO.m=9;PO.s=0;PO.n=0;PO.tWin=now;}
+ src.playbackRate.value=r;src.start(PO.nextT);PO.nextT+=ab.duration/r;}
 async function pcm(url,my){
- ensure();abort=new AbortController();nextT=0;
+ ensure();abort=new AbortController();nextT=0;PO.nextT=0;
+ var kind=(/mode=([a-z]+)/.exec(url)||[0,'x'])[1];
  try{
   var r=await fetch(url,{signal:abort.signal});if(!r.ok){say('stream error '+r.status);return;}
   var rd=r.body.getReader(),carry=new Uint8Array(0);
@@ -139,7 +156,7 @@ async function pcm(url,my){
    var ab=actx.createBuffer(1,n,24000),ch=ab.getChannelData(0);for(var i=0;i<n;i++)ch[i]=s[i]/32768;
    var src=actx.createBufferSource();src.buffer=ab;src.connect(gain);
    if(actx.state!=='running')actx.resume();
-   var t=actx.currentTime;if(nextT<t+0.1)nextT=t+0.4;src.start(nextT);nextT+=ab.duration;
+   playout(actx,ab,src,kind);nextT=PO.nextT;
   }
  }catch(e){if(e.name!=='AbortError')say('audio: '+e.message);}
 }
