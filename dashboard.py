@@ -930,26 +930,29 @@ async function info(tr){const mhz=parseFloat(tr.dataset.mhz);const nxt=tr.nextEl
 document.getElementById('rows').addEventListener('click',e=>{if(e.target.closest('button'))return;const tr=e.target.closest('tr');if(tr&&tr.dataset.mhz)info(tr);});
 // Web Audio streaming player: fetch raw PCM, schedule buffers back to back. Works in Safari, Chrome and iOS.
 let actx=null,gainNode=null,nextT=0,abort=null,bytesIn=0;
-var PO={nextT:0,rate:{},m:9,tWin:0,t0:0,got:0,mode:0,gaps:0,changes:0};
+var PO={nextT:0,rate:{},m:9,tWin:0,t0:0,tLast:0,got:0,est:0,mode:0,mIn:0,gaps:0};
 function playout(ctx,ab,src,kind){
- /* Queue one piece of audio (v204, speed control redone in v205).
-    The radio does not always hand over audio at the speed it is played: at the airband receiver's dongle rate about 5% of the
-    samples are lost on this Mac's USB path, and single FM channels arrive in lumps of a third of a second. A player that only
-    queues pieces back to back runs dry and leaves holes (the clicks of 12 Nov).
-    0.8 s is kept in hand. The playing speed stays exactly where it is while the cushion is between 0.35 and 1.2 s - lumps move
-    it around inside that band and must not move the pitch. Only when it leaves the band is the speed set, once, to what the
-    source has actually delivered since the listen began (audio received / time passed), a hair to the side so the cushion
-    walks back to the middle, then held again. The speed found is remembered per kind of listen. */
+ /* Queue one piece of audio (v204; speed control redone in v205 and v206).
+    Audio reaches the page in lumps (a single FM channel: up to 0.4 s at a time), and the radio's clock and this device's
+    sound clock are never exactly alike. A player that only queues pieces back to back with 0.4 s in hand runs dry and
+    leaves holes. (Until v206 the app itself also sent the silence between transmissions at 95% of real time, which
+    drained whatever was in hand in every pause; that is fixed where it was made, in channelizer.read.)
+    One second is kept in hand. The playing speed stays exactly where it is while the cushion is between 0.35 and 1.5 s -
+    lumps move the cushion around inside that band and must not move the pitch. When it leaves the band the speed is set
+    ONCE to what the source has really delivered (audio received / time passed, read at the start of a lump so the lumps do
+    not fool it, and not before 10 s have passed), a little to the side so the cushion walks back to the middle, and then
+    to the delivered speed itself and held. The speed found is remembered per kind of listen. */
  var now=ctx.currentTime,r=PO.rate[kind]||1;
- if(PO.nextT<now+0.03){if(PO.nextT>0)PO.gaps++;PO.nextT=now+0.8;PO.m=9;PO.tWin=now;PO.t0=now;PO.got=0;PO.mode=0;
+ if(PO.nextT<now+0.03){if(PO.nextT>0)PO.gaps++;PO.nextT=now+1.0;PO.m=9;PO.tWin=now;PO.t0=now;PO.tLast=now;PO.got=0;PO.est=0;PO.mode=0;
   var ch=ab.getChannelData(0),k=Math.min(240,ch.length);for(var i=0;i<k;i++)ch[i]*=i/k;}
+ var T=now-PO.t0;if(now-PO.tLast>0.05&&T>=10)PO.est=PO.got/T;PO.tLast=now;
  var lead=PO.nextT-now;if(lead<PO.m)PO.m=lead;
- if(now-PO.tWin>=2){var T=now-PO.t0,est=T>=6?PO.got/T:0,r0=r;
-  if(est>0.9&&est<1.06){
-   if(PO.mode===0){if(PO.m<0.35){PO.mode=-1;r=est-0.012;}else if(PO.m>1.2){PO.mode=1;r=est+0.012;}}
-   else if(PO.mode===-1){if(PO.m>0.6){PO.mode=0;r=est;}else r=est-0.012;}
-   else{if(PO.m<0.9){PO.mode=0;r=est;}else r=est+0.012;}
-   r=Math.max(0.92,Math.min(1.04,r));if(Math.abs(r-r0)>0.0005){PO.changes++;PO.rate[kind]=r;}else r=r0;}
+ if(now-PO.tWin>=2){var e=PO.est,m=PO.m;
+  if(e>0.9&&e<1.06){
+   if(PO.mode===0){if(m<0.35){PO.mode=-1;PO.mIn=m;r=e-0.012;}else if(m>1.5){PO.mode=1;PO.mIn=m;r=e+0.012;}}
+   else if(PO.mode===-1){if(m>0.7){PO.mode=0;r=e;}else if(m<PO.mIn-0.1){PO.mIn=m;r=Math.min(r,e-0.02);}}
+   else{if(m<1.1){PO.mode=0;r=e;}else if(m>PO.mIn+0.15){PO.mIn=m;r=Math.max(r,e+0.02);}}
+   r=Math.max(0.92,Math.min(1.04,r));PO.rate[kind]=r;}
   PO.m=9;PO.tWin=now;}
  src.playbackRate.value=r;src.start(PO.nextT);PO.nextT+=ab.duration/r;PO.got+=ab.duration;}
 function ensureCtx(){if(!actx){actx=new (window.AudioContext||window.webkitAudioContext)();gainNode=actx.createGain();gainNode.connect(actx.destination);}

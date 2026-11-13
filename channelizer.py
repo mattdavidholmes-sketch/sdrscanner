@@ -524,6 +524,8 @@ class Channelizer:
         self.bias = {}                             # (v190) per channel: its idle reading against the gaps beside it, learned slowly (dB)
         self.heard = []; self.lock = threading.Lock(); self.q = []; self.qcond = threading.Condition(self.lock)
         self.tcp = None; self.blocks = 0; self.load = 0.0
+        self.t_out = 0.0                           # (v206) the time up to which audio has been handed to the listener (see read)
+        self.iq = None; self.iq_min = None         # (v206) IQ received / IQ due over the last 5 s, and the lowest such figure this session (1.00 = the dongle delivers everything)
         # (5 Nov) the live audio goes through the SAME sox chain as a direct listen (voice band-pass + compand, 100 ms look-ahead):
         # Monitor sounds exactly like pressing play on the channel. Without sox the old scipy chain is used. (started last: the reader needs qcond/alive)
         try:
@@ -591,9 +593,14 @@ class Channelizer:
                     if round(ch.mhz, 4) in self.trusted: ch.gate.set_wide(True)
                 for ch in self.chans:                                  # known voice channels are never vetoed as 'data' (repeater tails)
                     if round(ch.mhz, 4) in self.trusted: ch.gate.detect_data = False
-                t0 = time.time(); last_any = None; opened = {}; graced = {}; grace_until = 0.0; proven_t = {}
+                t0 = time.time(); last_any = None; opened = {}; graced = {}; grace_until = 0.0; proven_t = {}; nv = 0; tv = 0.0
                 while self.alive:
                     iq = self.tcp.block(); tb = time.time(); t_cpu = time.perf_counter()
+                    if nv == 0: tv = tb                                                  # (v206) does the dongle deliver all its samples? Blocks counted against the clock, 5 s at a time
+                    elif nv % 50 == 0:
+                        self.iq = round(5.0 / max(tb - tv, 0.5), 3); tv = tb
+                        if nv > 50: self.iq_min = self.iq if self.iq_min is None else min(self.iq_min, self.iq)   # the first 5 s after a retune hold a start-up burst
+                    nv += 1
                     outs = []
                     nar = [c for c in self.chans if c.mode in ("am", "fm")]
                     if nar:                                                             # (v190) every narrow channel's floor, from this very block
@@ -733,10 +740,21 @@ class Channelizer:
                     self.q.append(b); self.q = self.q[-40:]; self.qcond.notify_all()
         except Exception: pass
     def read(self, n=4800):
+        """One piece of audio for the listener: speech while a channel is open, silence otherwise.
+        (v206) The silence is handed out by the clock. Until now it was "wait 0.1 s, then give 0.1 s of silence", and the few
+        milliseconds the caller spends between two calls belonged to nobody: a quiet channel reached the listener at 95 % of
+        real time (measured 13 Nov on 128.8: one piece every 0.105 s while nobody spoke, real time during speech). I read that
+        figure on 12 Nov as samples lost on the USB path. It was this line. t_out is the time up to which audio has been handed
+        out; a piece of silence waits until the clock has got there, so speech and silence together add up to real time."""
+        step = n / (2.0 * RATE)
         with self.qcond:
-            if not self.q: self.qcond.wait(0.1)
-            if not self.q and self.active is not None: self.qcond.wait(0.3)     # mid-sentence and the DSP is a little behind: wait, do not punch a 100 ms hole
-            if self.q: return self.q.pop(0)
+            now = time.perf_counter(); self.t_out = min(max(self.t_out, now - 0.5), now + 0.5) if self.t_out else now   # a stall is caught up by at most half a second
+            if not self.q:
+                if self.t_out > now: self.qcond.wait(self.t_out - now)
+                if not self.q and self.active is not None: self.qcond.wait(0.3)     # mid-sentence and the DSP is a little behind: wait, do not punch a 100 ms hole
+            if self.q:
+                b = self.q.pop(0); self.t_out += len(b) / (2.0 * RATE); return b
+            self.t_out += step
         return bytes(n) if self.alive else b""
     def stop(self):
         self.alive = False
@@ -756,7 +774,7 @@ class Channelizer:
         m = {"open": bool(g and g.open), "zcr": round(g.zcr, 2) if g else 0, "thresh": round(g.thresh, 2) if g else 0, "level": round(g.level) if g else 0,
              "snr_db": round(a.pow_db - a.floor_db, 1) if (a and a.mode == "am" and a.floor_db is not None) else None,
              "tones": a.tones.summary() if a else "", "tone_now": a.tones.last if a else "", "err": self.err, "data": bool(g and (g.data or g.data_latched)),
-             "data_secs": 0, "voice_cv": round(g.voice_cv, 2) if g else 0}
+             "data_secs": 0, "voice_cv": round(g.voice_cv, 2) if g else 0, "iq": self.iq, "iq_min": self.iq_min}
         if self.solo_am:
             # (v196) one airband channel: the same shape of answer as a plain single-channel listen (no "monitor" block - the page
             # would show the scanner), plus what the receiver sees

@@ -392,7 +392,7 @@ class Monitor:
         self.on_heard = on_heard
         self.alive = True; self.err = ""; self.idx = -1; self.ses = None; self.mhz = 0.0; self.mode = "fm"; self.name = ""
         self.heard = []            # (mhz, name, when, secs) history for the UI
-        self.lock = threading.Lock(); self.q = []; self.qcond = threading.Condition(self.lock)
+        self.lock = threading.Lock(); self.q = []; self.qcond = threading.Condition(self.lock); self.t_out = 0.0
         self.t = threading.Thread(target=self._run, daemon=True); self.t.start()
     @property
     def gate(self): return self.ses.gate if self.ses else ZcrSquelch("fm", self.manual)
@@ -442,10 +442,15 @@ class Monitor:
                 self.ses = None
                 time.sleep(0.6)                       # let libusb release the dongle before the next hop
     def read(self, n=4800):
-        """Blocks until audio is available (someone talking) or 0.5 s passed (then returns silence to keep the stream alive)."""
+        """Audio while someone is talking, silence otherwise. (v206) The silence is handed out by the clock: "wait 0.1 s, give
+        0.1 s" left the caller's own few milliseconds out and ran a quiet stream at 95 % of real time (see channelizer.read)."""
+        step = n / (2.0 * RATE)
         with self.qcond:
-            if not self.q: self.qcond.wait(0.1)        # 0.1 s of silence per 0.1 s of waiting: the stream stays in real time
-            if self.q: return self.q.pop(0)
+            now = time.perf_counter(); self.t_out = min(max(self.t_out, now - 0.5), now + 0.5) if self.t_out else now
+            if not self.q and self.t_out > now: self.qcond.wait(self.t_out - now)
+            if self.q:
+                b = self.q.pop(0); self.t_out += len(b) / (2.0 * RATE); return b
+            self.t_out += step
         return bytes(n) if self.alive else b""
     def stop(self):
         self.alive = False
