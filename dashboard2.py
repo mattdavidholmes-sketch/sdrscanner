@@ -919,9 +919,11 @@ def air_heard(window=900):
     try:
         import asr_atc
         live = {}                                                                # radio name -> {flight number without leading zeros: callsign}
+        bynum = {}                                                               # (v218) four-digit flight number -> the aircraft in the air that carry it
         for x in aircraft_now().get("aircraft", []):
             cs = x.get("callsign") or ""; m = re.match(r"([A-Z]{3})(\d+)", cs)
             if not m: continue
+            if len(m.group(2).lstrip("0")) >= 4 and not x.get("on_ground"): bynum.setdefault(m.group(2).lstrip("0"), []).append(cs)
             sp = asr_atc.spoken(cs).lower()
             if sp == cs.lower() or len(sp.split()) <= len(m.group(2)): continue
             live.setdefault(_say_norm(sp.rsplit(" ", len(m.group(2)))[0]), {})[m.group(2).lstrip("0") or "0"] = cs
@@ -944,6 +946,17 @@ def air_heard(window=900):
                         if len(near) != 1: continue
                         cs = nums[near[0]]; how = f" (the transcript has {mm.group(1)} for {re.sub(r'^[A-Z]+', '', cs)}; no other {tel.title()} flight in the air has a number that close)"
                     if cs not in out: out[cs] = f'{stamp} on {mhz:.3f} - "{said_txt}"{how}'
+            # (v218) The number without the name. The recogniser learned its airlines in Europe: on 13 Nov, 07:28-07:30, Envoy 3524 was
+            # written "Envoy" once and then "on boeing", "voz" and "aero flot three five two four". A four-digit flight number that
+            # stands in the transcript as a number of its own, and that exactly one aircraft in the air carries, is that aircraft -
+            # the line says the name is not there. Three digits are not enough ("four five two" matched a Jazz 452 parked at the
+            # gate while an Air Canada 452 was the one talking), and a number after "squawk", "altimeter" and the like is not a flight.
+            toks = norm.split()
+            for i, t in enumerate(toks):
+                c = bynum.get(t.lstrip("0")) if t.isdigit() else None
+                if not c or len(c) != 1 or c[0] in out: continue
+                if i and toks[i - 1] in ("squawk", "squawking", "altimeter", "heading", "runway", "level", "decimal", "point", "frequency", "contact"): continue
+                out[c[0]] = f'{stamp} on {mhz:.3f} - "{said_txt}" (the flight number {t} is in the transcript without this airline\'s name; it is the only aircraft in the air with that number)'
     except Exception: pass
     return out
 _LAST_UREQ = {"target": None, "t": 0.0}
