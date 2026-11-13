@@ -508,11 +508,13 @@ def recordings(limit=1000):
         if os.path.exists(tp):
             try: txt = open(tp, errors="ignore").read().strip()
             except OSError: pass
-        agree = None
-        try: agree = json.load(open(tp[:-4] + ".asr.json")).get("agree")
+        agree = None; asr = None
+        try:
+            j = json.load(open(tp[:-4] + ".asr.json")); agree = j.get("agree")
+            asr = {"air": "atc" in j, "atc": bool(j.get("atc")), "unsure": bool(j.get("unsure")), "conf": j.get("conf")}   # (v214) airband clips: which engine the text is from and how sure it was
         except Exception: pass
         out.append({"file": base, "mhz": parts[0], "name": parts[1] if len(parts) > 2 else "", "secs": round(max(0, (st.st_size - 44) / (RATE * 2)), 1),
-                    "time": dt.datetime.fromtimestamp(st.st_mtime).strftime("%b %d %H:%M:%S"), "text": txt, "agree": agree})
+                    "time": dt.datetime.fromtimestamp(st.st_mtime).strftime("%b %d %H:%M:%S"), "text": txt, "agree": agree, "asr": asr, "done": os.path.exists(tp)})
     return out
 
 def mac_sound():
@@ -900,6 +902,48 @@ def _say_norm(txt):
             out.append(_TENS[t] + "0"); i += 1; continue
         out.append(_NUMW.get(t, t)); i += 1
     return re.sub(r"(?<=\d) (?=\d)", "", " ".join(out)).lstrip()
+def _digits_close(a, b):
+    """two flight numbers one slip apart: one digit different, one missing or one extra"""
+    if len(a) == len(b): return sum(1 for p, q in zip(a, b) if p != q) == 1
+    if abs(len(a) - len(b)) != 1: return False
+    s, l = (a, b) if len(a) < len(b) else (b, a)
+    return any(l[:i] + l[i + 1:] == s for i in range(len(l)))
+def air_heard(window=900):
+    """callsign -> 'HH:MM on 128.800 - "what was said"' for the aircraft named in the airband transcripts of the last 15 minutes.
+    The airline's radio name and the WHOLE flight number have to be in the text ((v180): "air canada two" used to match every Air
+    Canada 2xx). (v214) One slip in the number is allowed when it can only mean one aircraft: on 13 Nov at 02:07 the controller
+    said "Cathay zero seven five", the recogniser wrote "cathay zero six five", and the panel for CPA075 said "not in the recent
+    transcripts" while Matt was listening to it. A number one digit off (one wrong, missing or extra; two digits at least) is
+    taken for the flight when exactly one aircraft of that airline in the air is that close - and the line says so."""
+    out = {}
+    try:
+        import asr_atc
+        live = {}                                                                # radio name -> {flight number without leading zeros: callsign}
+        for x in aircraft_now().get("aircraft", []):
+            cs = x.get("callsign") or ""; m = re.match(r"([A-Z]{3})(\d+)", cs)
+            if not m: continue
+            sp = asr_atc.spoken(cs).lower()
+            if sp == cs.lower() or len(sp.split()) <= len(m.group(2)): continue
+            live.setdefault(_say_norm(sp.rsplit(" ", len(m.group(2)))[0]), {})[m.group(2).lstrip("0") or "0"] = cs
+        for f in sorted(glob.glob(os.path.join(HERE, "scan_*", "recordings", "*.txt")), key=os.path.getmtime, reverse=True)[:80]:
+            try: mhz = float(os.path.basename(f).split("_")[0])
+            except ValueError: continue
+            if not 108 <= mhz <= 137 or time.time() - os.path.getmtime(f) > window: continue      # (v180) only the last 15 min says where a plane is NOW
+            txt = open(f, errors="ignore").read().strip()
+            if not txt: continue
+            stamp = dt.datetime.fromtimestamp(os.path.getmtime(f)).strftime("%H:%M"); norm = _say_norm(txt.lower()); said_txt = txt[:110] + ("..." if len(txt) > 110 else "")
+            for tel, nums in live.items():
+                if not tel: continue
+                for mm in re.finditer(r"\b" + re.escape(tel) + r" ?(\d{1,5})(?!\d)", norm):
+                    said = mm.group(1).lstrip("0") or "0"; how = ""
+                    if said in nums: cs = nums[said]
+                    else:
+                        near = [n for n in nums if len(n) >= 2 and len(said) >= 2 and _digits_close(said, n)]
+                        if len(near) != 1: continue
+                        cs = nums[near[0]]; how = f" (the transcript has {mm.group(1)} for {re.sub(r'^[A-Z]+', '', cs)}; no other {tel.title()} flight in the air has a number that close)"
+                    if cs not in out: out[cs] = f'{stamp} on {mhz:.3f} - "{said_txt}"{how}'
+    except Exception: pass
+    return out
 _LAST_UREQ = {"target": None, "t": 0.0}
 def sdrt_user_start(target):
     # (v173/v177) a double tap (or two devices) used to launch SDRTrunk twice 2 s apart - the second start killed the first. v173 compared
@@ -1786,6 +1830,34 @@ def route_places(route):
     stops = [p.strip() for p in re.split(r"→|->", route or "") if p.strip()]
     out = [(airport(p) if p != "?" else None) or {"code": p, "where": "", "name": ""} for p in stops]
     return out if any(o["name"] for o in out) else []
+def route_ends(x):
+    """(v214) Where the aircraft is coming from and going to, for the panel that opens on a click - always an answer (Matt, 13 Nov:
+    "I need to know where it's going/coming from when I click the airplane, it's just that simple"). Two kinds of knowledge, and the
+    panel says which is which:
+      table - the route the open tables have for the callsign, when it fits where the aircraft is (route_fit)
+      seen  - what the aircraft itself shows: on approach to Pearson -> it is going to Pearson; just off Pearson -> it came from
+              Pearson (the same for Billy Bishop). This needs no table and is right when the tables are empty or stale.
+    When the two disagree about the same end, what is seen wins and the table's route is dropped as another leg of the flight number.
+    -> {"from": place|None, "to": place|None, "from_src": "table"|"seen"|"", "to_src": ..., "via": [places], "note": text}"""
+    pl = [o for o in (x.get("places") or []) if o]
+    e = {"from": None, "to": None, "from_src": "", "to_src": "", "via": [], "note": ""}
+    if len(pl) >= 2: e.update({"from": pl[0], "to": pl[-1], "from_src": "table", "to_src": "table", "via": pl[1:-1]})
+    p = x.get("phase") or ""; why = x.get("why") or ""
+    ap = airport("CYYZ") if "YYZ" in p else (airport("CYTZ") if "YTZ" in p else None)
+    end = "to" if p.startswith("arriving") else ("from" if p.startswith("departing") else "")
+    if ap and end:
+        if e[end] and e[end].get("code") != ap["code"]:                          # the table's route does not end / begin here: another leg
+            e.update({"from": None, "to": None, "from_src": "", "to_src": "", "via": []})
+            e["note"] = f"The route on file for {x.get('callsign') or 'this flight'} ({x.get('route')}) is another leg of the flight number, so it is not shown."
+        if not e[end]: e[end] = {k: ap[k] for k in ("code", "where", "name")}; e[end + "_src"] = "seen"
+    elif x.get("on_ground") and not e["from"] and not e["to"] and ("Pearson" in why or "Billy Bishop" in why):
+        e["note"] = "On the ground at " + ("Toronto Pearson" if "Pearson" in why else "Billy Bishop Toronto City") + "; nothing says whether it has just arrived or is about to leave."
+    if not e["note"] and x.get("route_file") and not (e["from"] and e["to"]):
+        e["note"] = f"The route on file for this callsign ({x['route_file']}) does not fit where the aircraft is - another leg of the flight number - so it is not shown."
+    if not e["note"] and not (e["from"] and e["to"]):
+        cs = x.get("callsign") or ""
+        e["note"] = ("The open route tables (hexdb.io, adsbdb.com) have no route for " + cs + ".") if re.fullmatch(r"[A-Z]{3}\d{1,4}[A-Z]{0,2}", cs) else "It is flying under its registration, not a flight number: no table lists a route for that."
+    return e
 def route_second(callsign):
     """(v213) A second opinion on a route, asked only when the first (hexdb) does not fit where the aircraft is: adsbdb.com's
     callsign table. Neither is right every time - hexdb's entry for CJT620 was last updated in November 2018 - and on the night
@@ -1856,17 +1928,25 @@ def aircraft_now(max_age=10):
         except Exception: pass
         asked = 0
         for x in out:                                                            # (v212) before anything is worked out from the route: does it fit where the aircraft is?
-            if x.get("route"):
-                try:
-                    filed = x["route"]; x["route"], x["_places"] = route_fit(filed, x.get("lat"), x.get("lon"))
-                    if not x["route"]:
-                        x["route_file"] = filed
-                        known = x["callsign"] in _AC.get("routes2", {})
-                        if known or asked < 2:                                   # (v213) a second source, at most two new lookups a refresh
-                            asked += 0 if known else 1
-                            r2, pl2 = route_fit(route_second(x["callsign"]), x.get("lat"), x.get("lon"))
-                            if r2 and pl2 and any(o.get("name") for o in pl2): x["route"], x["_places"] = r2, pl2; x.pop("route_file", None)
-                except Exception: pass
+            try:
+                filed = x.get("route") or ""
+                if filed:
+                    x["route"], x["_places"] = route_fit(filed, x.get("lat"), x.get("lon"))
+                    if x["route"]: continue
+                    x["route_file"] = filed
+                # (v214) the second table (adsbdb.com) is asked whenever the first has nothing that fits. Until now it was asked only
+                # when hexdb's route was WRONG, never when hexdb had none: at 02:10 on 13 Nov hexdb had no entry for four of the five
+                # flights in the air (CPA075, CSJ725, ABX3163, CSJ672) and adsbdb had three of them. Airline callsigns only, at most
+                # three new lookups a refresh (each can take 3 s), every answer kept 45 min.
+                cs = x.get("callsign") or ""
+                if not re.fullmatch(r"[A-Z]{3}\d{1,4}[A-Z]{0,2}", cs): continue
+                known = cs in _AC.get("routes2", {})
+                if not known and asked >= 3: continue
+                asked += 0 if known else 1
+                raw2 = route_second(cs); r2, pl2 = route_fit(raw2, x.get("lat"), x.get("lon"))
+                if r2 and pl2 and any(o.get("name") for o in pl2): x["route"], x["_places"] = r2, pl2; x.pop("route_file", None)
+                elif raw2 and not x.get("route_file"): x["route_file"] = raw2
+            except Exception: pass
         try:
             import asr_atc
             spoken = {x["callsign"]: asr_atc.spoken(x["callsign"]) for x in out if x["callsign"]}
@@ -1893,11 +1973,17 @@ def aircraft_now(max_age=10):
             x["fr24"] = fr24_link(x)
             try: x["places"] = x.pop("_places", None) or route_places(x.get("route"))    # (v209) where it is coming from and going to, in words
             except Exception: x["places"] = []
+            try: x["ends"] = route_ends(x)
+            except Exception: x["ends"] = None
+            # (v214) not everything with a transponder is an aircraft: Pearson's tugs and service vehicles send ADS-B too (category
+            # C1 / C2, type "SERV"), and some things on the ground are in no table at all. They were drawn as airliners and counted.
+            x["kind"] = "vehicle" if ((x.get("category") or "") in ("C1", "C2") or "SERV" in ((x.get("type") or "").upper(), (x.get("reg") or "").upper())) else ("unknown" if (x.get("on_ground") and not x.get("type") and not x.get("category")) else "")
             x["alt_m"] = round(x["alt_ft"] / 3.281) if x["alt_ft"] else None
         try: air_log(out)
         except Exception: pass
         arrivals = sorted([x for x in out if x.get("eta_min") is not None and "YYZ" in (x.get("phase") or "")], key=lambda x: x["eta_min"])[:8]
-        data = {"t": time.time(), "n": len(out), "aircraft": out[:60], "spoken": spoken, "home": HOME_LL, "source": name,
+        out.sort(key=lambda x: bool(x.get("kind")))                              # aircraft first (the order among them unchanged), vehicles and unknowns after
+        data = {"t": time.time(), "n": len(out), "n_air": sum(1 for x in out if not x.get("kind")), "aircraft": out[:60], "spoken": spoken, "home": HOME_LL, "source": name,
                 "arrivals": [{"callsign": x["callsign"] or x["icao"], "icao": x["icao"], "type": x["type"], "route": x.get("route", ""), "eta_min": x["eta_min"], "runway": x["runway"], "alt_ft": x["alt_ft"], "km": x["km"], "freqs": (x.get("freqs") or [])[:2]} for x in arrivals],
                 "helis": [{"callsign": x["callsign"] or x["icao"], "icao": x["icao"], "type": x["type"], "operator": x.get("operator", ""), "km": x["km"], "bearing": x["bearing"], "alt_ft": x["alt_ft"]} for x in out if x.get("heli")][:8],
                 "sources_tried": errs, "emergencies": [x["callsign"] or x["icao"] for x in out if x["emergency"]]}
@@ -2135,26 +2221,7 @@ class H2(v1.H):
             return
         if u.path == "/api/recent_text":
             # callsign -> "HH:MM on 132.800" for aircraft named in today's airband transcripts (spoken form match)
-            out = {}
-            try:
-                import asr_atc
-                ac = aircraft_now().get("aircraft", []); spoken = {x["callsign"]: asr_atc.spoken(x["callsign"]).lower() for x in ac if x["callsign"]}
-                for f in sorted(glob.glob(os.path.join(HERE, "scan_*", "recordings", "*.txt")), key=os.path.getmtime, reverse=True)[:80]:
-                    try: mhz = float(os.path.basename(f).split("_")[0])
-                    except ValueError: continue
-                    if not 108 <= mhz <= 137: continue
-                    txt = open(f, errors="ignore").read().lower()
-                    if not txt: continue
-                    stamp = dt.datetime.fromtimestamp(os.path.getmtime(f)).strftime("%H:%M")
-                    if time.time() - os.path.getmtime(f) > 900: continue                 # (v180) only the last 15 min says where a plane is NOW
-                    norm = _say_norm(txt)
-                    for cs, sp in spoken.items():
-                        if cs in out: continue
-                        m = re.match(r"([A-Z]{3})(\d+)", cs)                               # (v180) the WHOLE flight number has to be heard: the old test
-                        if not m or sp == cs.lower(): continue                             # ("air canada two") matched every Air Canada 2xx on the air
-                        tel = _say_norm(sp.rsplit(" ", len(m.group(2)))[0]) if len(sp.split()) > len(m.group(2)) else ""
-                        if tel and re.search(r"\b" + re.escape(tel) + r" ?" + m.group(2).lstrip("0") + r"(?!\d)", norm): out[cs] = f"{stamp} on {mhz:.3f}"
-            except Exception: pass
+            out = air_heard()
             return self.send(json.dumps(out), "application/json")
         if u.path == "/api/aircraft":
             return self.send(json.dumps(dict(aircraft_now(), voice=airband_voice())), "application/json")   # (v182) + when speech was last confirmed per airband channel
@@ -2355,7 +2422,7 @@ main{padding:16px 18px 130px;max-width:1400px;width:100%;margin:0 auto}
 .toolbar{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:10px}.chip{padding:5px 11px;border-radius:999px;border:1px solid var(--line);background:var(--card);color:var(--mute);font-size:.8rem;cursor:pointer;user-select:none}.chip.on{background:var(--acc);color:#04130a;border-color:var(--acc);font-weight:600}
 .tablewrap{border:1px solid var(--line);border-radius:14px;overflow:auto;background:var(--card)}
 table{border-collapse:separate;border-spacing:0;width:100%;min-width:860px}th{position:sticky;top:0;background:var(--card2);font-size:.72rem;color:var(--mute);text-transform:uppercase;letter-spacing:.07em;text-align:left;padding:10px 12px;border-bottom:1px solid var(--line);cursor:pointer;user-select:none;white-space:nowrap}
-.play.stopb{background:#b33b3b;color:#fff;border-color:#b33b3b}.tx{color:var(--ink);font-size:.86rem;line-height:1.35;margin:4px 0 6px;font-style:italic}tr.prev td{opacity:.6}tr.prev .play{opacity:1}tr.hot td{opacity:1}td.heard{white-space:nowrap!important;line-height:1.3}/* (v211) each of its lines stays on one line at every window width: wrapped word by word it made every row seven lines tall */.heard b{font-family:var(--mono);font-weight:500}.heard .hv,.heard .hs{font:700 .6rem/1 var(--mono);letter-spacing:.08em;text-transform:uppercase;padding:2px 5px;border-radius:4px;vertical-align:middle;white-space:nowrap}
+.play.stopb{background:#b33b3b;color:#fff;border-color:#b33b3b}.tx{color:var(--ink);font-size:.86rem;line-height:1.35;margin:4px 0 6px;font-style:italic}tr.prev td{opacity:.6}tr.prev .play{opacity:1}tr.hot td{opacity:1}td.heard{white-space:nowrap!important;line-height:1.3}.snr{white-space:nowrap}/* (v211) each of its lines stays on one line at every window width: wrapped word by word it made every row seven lines tall */.heard b{font-family:var(--mono);font-weight:500}.heard .hv,.heard .hs{font:700 .6rem/1 var(--mono);letter-spacing:.08em;text-transform:uppercase;padding:2px 5px;border-radius:4px;vertical-align:middle;white-space:nowrap}
 .heard .hv{color:#04130a;background:var(--acc)}.heard .hs{color:var(--mute);border:1px solid var(--line)}tr.vnow td{background:rgba(61,220,132,.07)}.btnlink{display:inline-flex;align-items:center;padding:7px 12px;border:1px solid var(--line);border-radius:9px;color:var(--ink);text-decoration:none;font-size:.9rem;margin-right:10px}.btnlink:hover{border-color:var(--acc)}.spark{display:flex;align-items:flex-end;gap:1px;height:28px}.spark i{flex:1;background:var(--acc);border-radius:1px 1px 0 0;min-width:1px}.hod{display:flex;gap:2px;align-items:flex-end}.hod span{flex:1;display:flex;flex-direction:column;align-items:center;justify-content:flex-end}.hod i{display:block;width:100%;background:var(--acc2,#5aa9ff);border-radius:2px 2px 0 0}.hod b{font-size:.55rem;color:var(--dim);font-weight:500;height:10px}.dig{display:grid;gap:14px}.dig .card{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:14px 16px}.dig h3{margin:0 0 6px}.steps{margin:6px 0 12px 18px;color:var(--ink);line-height:1.5}.vtag{display:inline-block;padding:3px 8px;border-radius:999px;font-size:.74rem;font-weight:600;white-space:nowrap}.vtag.v1{background:rgba(61,220,132,.18);color:var(--acc);border:1px solid #1f5c3a}.vtag.v2{background:rgba(61,220,132,.08);color:var(--acc);border:1px solid #1f5c3a}.vtag.v4{color:#c9a3ff;border-color:#8a5cf6;background:rgba(138,92,246,.12)}.vtag.v3{background:transparent;color:var(--mute);border:1px solid var(--line)}.heard b.hot{color:var(--acc)}th.asc:after{content:" ▲"}th.desc:after{content:" ▼"}th:hover{color:var(--ink)}
 td{padding:9px 12px;border-bottom:1px solid var(--line);white-space:nowrap;vertical-align:middle}tr.row{cursor:pointer;transition:background .15s}tr.row:hover td{background:rgba(90,169,255,.06)}tr.row.playing td{background:rgba(61,220,132,.08)}tr.row.quiet .f,tr.row.quiet .nm{opacity:.55}
 tr.row.new td{}td .chg{}
@@ -2701,13 +2768,18 @@ const CATS=['All','Ham repeater','Ham','Airport','FRS/GMRS','Retail','City servi
 let hideDig=true;try{hideDig=localStorage.getItem('hidedig')!=='0';}catch(e){}
 async function appRestart(f){if(f&&!confirm('Restart the dashboard right now? Anything playing stops.'))return;const r=await (await fetch('/api/restart?force='+f)).json();toast('restart '+r.when+' - the page reconnects by itself');}
 const SPEC={key:null,pin:false,data:null,t:0};
-let AIRLAST=null;async function loadAir(){try{const a=await (await fetch('/api/aircraft')).json();AIRLAST=a;$('#aircount').textContent=a.n||0;$('#airsrc').textContent=a.source?('via '+a.source):'';let heard={};try{const s=await (await fetch('/api/recent_text')).json();heard=s||{};}catch(e){}
+// (v214) where an aircraft is coming from and going to (x.ends, from the server: the route tables, or what the aircraft itself shows)
+function endsShort(x){const e=x.ends;if(!e||(!e.from&&!e.to))return esc(x.route||'');const n=o=>o?esc(String(o.where||o.code||'').split(',')[0])+(o.code?' <span class="mute">'+esc(o.code)+'</span>':''):'?';return n(e.from)+' → '+n(e.to);}
+function airEnds(x){const e=x.ends;if(!e)return (x.places||[]).map((o,i,a)=>`<div class="sub" style="margin-top:2px">${i===0?'from':(i===a.length-1?'to':'via')} <b>${esc(o.where||o.code)}</b>${o.name?' · '+esc(o.name):''}${o.where?' ('+esc(o.code)+')':''}</div>`).join('');
+ const row=(k,o,s)=>`<div class="sub" style="margin-top:2px">${k} ${o?`<b>${esc(o.where||o.code)}</b>${o.name?' · '+esc(o.name):''}${o.where&&o.code?' ('+esc(o.code)+')':''}${s==='seen'?' <span class="mute">- seen: '+(k==='to'?'it is on approach there':'it has just taken off there')+'</span>':''}`:'<span class="mute">not known</span>'}</div>`;
+ return row('from',e.from,e.from_src)+(e.via||[]).map(o=>row('via',o,'table')).join('')+row('to',e.to,e.to_src)+(e.note?`<div class="sub mute" style="margin-top:2px">${esc(e.note)}</div>`:'');}
+let AIRLAST=null;async function loadAir(){try{const a=await (await fetch('/api/aircraft')).json();AIRLAST=a;$('#aircount').textContent=(a.n_air!=null?a.n_air:(a.n||0))+((a.n_air!=null&&a.n>a.n_air)?' aircraft + '+(a.n-a.n_air)+' ground vehicles / not identified':'');$('#airsrc').textContent=a.source?('via '+a.source):'';let heard={};try{const s=await (await fetch('/api/recent_text')).json();heard=s||{};}catch(e){}
  $('#airemerg').innerHTML=(a.emergencies||[]).length?`<p style="color:var(--red);font-weight:600">⚠ Emergency squawk: ${a.emergencies.map(esc).join(', ')}</p>`:'';
  const hel=(a.helis||[]);
  $('#airboard').innerHTML=(hel.length?`<div class="card" style="padding:8px 12px"><b>🚁 Helicopters</b> ${hel.map(x=>`<button class="ghost" style="padding:2px 8px;margin-left:6px" onclick="openAir('${esc(x.icao)}')">${esc(x.callsign)} <span class="sv">${esc(x.type||'')}${x.operator?' · '+esc(x.operator):''} · ${x.km} km ${['N','NE','E','SE','S','SW','W','NW'][Math.round((x.bearing||0)/45)%8]}${x.alt_ft?' · '+x.alt_ft.toLocaleString()+' ft':''}</span></button>`).join('')}</div>`:'');
  const dirn=b=>['N','NE','E','SE','S','SW','W','NW'][Math.round(b/45)%8];
  const vr=x=>x.vrate?(x.vrate>200?' ↑':x.vrate<-200?' ↓':''):'';
- $('#airrows').innerHTML=(a.aircraft||[]).length?a.aircraft.map(x=>`<tr class="acrow" data-icao="${esc(x.icao)}" style="cursor:pointer${x.emergency?';color:var(--red)':''}"><td><a href="${x.fr24}" target="_blank" rel="noopener" style="color:var(--acc);font-family:var(--mono)">${esc(x.callsign||x.icao)}</a>${x.heli?' 🚁':''}${x.on_ground?' <span class="tag">ground</span>':''}${x.emergency?' <span class="tag" style="background:var(--red);color:#fff">'+esc(x.squawk)+'</span>':''}</td><td class="sv">${esc((a.spoken||{})[x.callsign]||'')}</td><td class="sv">${esc(x.route||'')}</td><td class="sv" title="${esc(x.desc||'')}">${esc(x.type||'')}${x.reg?' <span class="mute">'+esc(x.reg)+'</span>':''}${x.operator?'<br><span class="mute" style="font-size:.85em">'+esc(x.operator)+'</span>':''}</td><td>${x.km} km ${dirn(x.bearing)}</td><td class="sv">${x.alt_ft?x.alt_ft.toLocaleString()+' ft'+vr(x):'—'}</td><td class="sv">${x.speed_kt?x.speed_kt+' kt':'—'}</td><td class="sv">${x.track}°</td><td class="sv">${heard[x.callsign]?'✓ '+esc(heard[x.callsign]):''}</td></tr>`).join(''):`<tr><td colspan="9" class="empty">${a.error?'no ADS-B source reachable ('+esc(a.error)+')':'nothing airborne within 60 nm right now'}</td></tr>`;$$('#airrows tr.acrow').forEach(r=>r.onclick=e=>{if(e.target.closest('a'))return;openAir(r.dataset.icao);});capList($('#airrows').closest('table'),'tbody>tr','air');followTick();}catch(e){$('#airrows').innerHTML='<tr><td colspan="9" class="empty">'+esc(e.message)+'</td></tr>';}}
+ $('#airrows').innerHTML=(a.aircraft||[]).length?a.aircraft.map(x=>`<tr class="acrow" data-icao="${esc(x.icao)}" style="cursor:pointer${x.emergency?';color:var(--red)':''}"><td><a href="${x.fr24}" target="_blank" rel="noopener" style="color:var(--acc);font-family:var(--mono)">${esc(x.callsign||x.icao)}</a>${x.heli?' 🚁':''}${x.kind==='vehicle'?' <span class="tag">ground vehicle</span>':(x.kind==='unknown'?' <span class="tag">on the ground, not identified</span>':(x.on_ground?' <span class="tag">ground</span>':''))}${x.emergency?' <span class="tag" style="background:var(--red);color:#fff">'+esc(x.squawk)+'</span>':''}</td><td class="sv">${esc((a.spoken||{})[x.callsign]||'')}</td><td class="sv">${endsShort(x)}</td><td class="sv" title="${esc(x.desc||'')}">${esc(x.type||'')}${x.reg?' <span class="mute">'+esc(x.reg)+'</span>':''}${x.operator?'<br><span class="mute" style="font-size:.85em">'+esc(x.operator)+'</span>':''}</td><td>${x.km} km ${dirn(x.bearing)}</td><td class="sv">${x.alt_ft?x.alt_ft.toLocaleString()+' ft'+vr(x):'—'}</td><td class="sv">${x.speed_kt?x.speed_kt+' kt':'—'}</td><td class="sv">${x.track}°</td><td class="sv">${heard[x.callsign]?'✓ '+esc(heard[x.callsign]):''}</td></tr>`).join(''):`<tr><td colspan="9" class="empty">${a.error?'no ADS-B source reachable ('+esc(a.error)+')':'nothing airborne within 60 nm right now'}</td></tr>`;$$('#airrows tr.acrow').forEach(r=>r.onclick=e=>{if(e.target.closest('a'))return;openAir(r.dataset.icao);});capList($('#airrows').closest('table'),'tbody>tr','air');followTick();}catch(e){$('#airrows').innerHTML='<tr><td colspan="9" class="empty">'+esc(e.message)+'</td></tr>';}}
 setInterval(()=>{if(tab==='air')loadAir();},10000);
 // ---- (v132) aircraft detail drawer + one-tap tune. Any element can call openAir(icao) or openAirCs(callsign); the Monitor panel's
 // "nearest now" links are hooked by delegation so a tap opens the drawer instead of leaving for Flightradar24.
@@ -2723,7 +2795,7 @@ async function openAir(icao){const a=await airData();const x=(a&&a.aircraft||[])
  const fq=(x.freqs||[]);const hot=new Set(((typeof S!=='undefined'&&S&&S.hits)||[]).filter(h=>h.mhz<137&&(h.recent||0)>0).map(h=>(+h.mhz).toFixed(4)));
  $('#dinfo').style.display='none';$('#dactive').style.display='none';const d=$('#dair');d.style.display='';
  d.innerHTML=`<h3 style="font-family:var(--mono)">${esc(x.callsign||x.icao)} ${x.emergency?'<span class="tag" style="background:var(--red);color:#fff">SQUAWK '+esc(x.squawk)+'</span>':''}</h3>
- <div class="sub">${esc(x.operator||'')}${x.operator&&(x.type||x.desc)?' · ':''}${esc(x.desc||x.type||'')}${x.reg?' · '+esc(x.reg):''}${x.route&&!(x.places||[]).length?' · <b>'+esc(x.route)+'</b>':''}</div>${(x.places||[]).map((o,i,a)=>`<div class="sub" style="margin-top:2px">${i===0?'from':(i===a.length-1?'to':'via')} <b>${esc(o.where||o.code)}</b>${o.name?' · '+esc(o.name):''}${o.where?' ('+esc(o.code)+')':''}</div>`).join('')}
+ <div class="sub">${esc(x.operator||'')}${x.operator&&(x.type||x.desc)?' · ':''}${esc(x.desc||x.type||'')}${x.reg?' · '+esc(x.reg):''}</div>${airEnds(x)}
  <div class="btns" style="margin:10px 0 12px;flex-wrap:wrap">${fq.length?`<button class="pri" onclick="tuneAir(${fq[0][0]},'${esc(fq[0][1])}')">▶ Tune now · ${esc(fq[0][1])} ${fq[0][0].toFixed(3)}</button>`:''}${fq.slice(1).map(f=>`<button class="ghost${hot.has(f[0].toFixed(4))?' hot':''}" onclick="tuneAir(${f[0]},'${esc(f[1])}')" title="${f[0].toFixed(3)} AM${uv32(f[0])?' · '+uv32(f[0]):''}">▶ ${esc(f[1])}${uv32(f[0])?' <span class="sv">'+uv32(f[0]).replace('UV-32 ch ','#')+'</span>':''}</button>`).join('')}<a class="ghost" style="padding:6px 10px;border:1px solid var(--line);border-radius:8px;color:var(--acc2)" href="${x.fr24}" target="_blank" rel="noopener">Flightradar24 ↗</a></div>
  <div class="sub" style="margin-bottom:10px"><b>${esc(x.phase||'')}</b> · ${esc(x.why||'')}</div>
  <ul id="dlines"><li><b>Position</b> ${x.km} km ${['N','NE','E','SE','S','SW','W','NW'][Math.round((x.bearing||0)/45)%8]} of home · ${x.lat.toFixed(3)}, ${x.lon.toFixed(3)}</li>
@@ -3004,8 +3076,18 @@ async function loadAlerts(q){const r=await (await fetch('/api/alerts'+(q||''))).
  $$('.aldel').forEach(a=>a.onclick=e=>{e.preventDefault();loadAlerts('?del='+a.dataset.id);});
  $('#allog').innerHTML=r.log.length?'<h4 style="margin:10px 0 6px">Fired</h4>'+r.log.map(x=>`<div class="sv">${x.time} · ${esc(x.detail)}</div>`).join(''):'';}
 $('#aladd').onclick=()=>{const v=$('#alval').value.trim();if(!v)return;loadAlerts('?add='+$('#alkind').value+'&value='+encodeURIComponent(v));$('#alval').value='';toast('alert added');};
-async function loadRecs(){loadAlerts();const r=await (await fetch('/api/recordings')).json();const el=$('#recs');if(!r.length){el.innerHTML='<div class="empty">No recordings yet. Every transmission that opens the squelch while you listen is saved here.</div>';return;}
- el.innerHTML=r.map(x=>`<div class="rec"><div><span class="f">${x.mhz}</span><br><span class="sv">${esc(x.name)}</span></div><div class="sv">${x.time} · ${x.secs} s${x.text?'<div class="tx">“'+esc(x.text)+'”'+agreeTag(x.agree)+'</div>':''}</div><audio controls preload="none" src="/rec/${encodeURIComponent(x.file)}"></audio><button class="ghost" onclick="delRec('${x.file}')">Delete</button></div>`).join('');capList(el,'.rec','rec');}
+// (v214) The tag behind a transcript. Airband clips are read by the ATC-trained model and the tag has to say what THAT means: the old
+// tag only compared two engines, so a call the ATC model read with confidence was marked "? uncertain" whenever the general engines
+// could not make it out - which on airband is the normal case.
+function recTag(x){const a=x.asr;if(!a||!a.air)return agreeTag(x.agree);const T=(c,t,tip)=>' <span class="tag" style="'+c+'" title="'+tip+'">'+t+'</span>',pc=a.conf!=null?Math.round(a.conf*100)+'%':'';
+ if(a.unsure)return T('border-color:#6b5520;color:var(--warn)','? unsure',a.atc?('the ATC model was not sure of this one'+(pc?' (confidence '+pc+')':'')+' and no other engine heard the same'):'the ATC model found no speech in it; the two general engines agree with each other');
+ if((x.agree||0)>=0.5)return T('border-color:#1f5c3a;color:var(--acc)','✓ engines agree','the ATC model and a second engine wrote the same thing ('+Math.round(x.agree*100)+'% of the words)');
+ return T('border-color:#1f5c3a;color:var(--acc)','ATC model','read by the model trained on air traffic radio'+(pc?', confidence '+pc:'')+'; the general-purpose engines could not make this one out');}
+let REC_ALL=false;
+async function loadRecs(){loadAlerts();const all=await (await fetch('/api/recordings')).json();const el=$('#recs');const quiet=all.filter(x=>x.done&&!x.text).length,r=REC_ALL?all:all.filter(x=>!(x.done&&!x.text));
+ const note=quiet?`<div class="sv" style="padding:8px 12px;border-bottom:1px solid var(--line)">${quiet} clip${quiet>1?'s':''} with nobody talking (noise, a kerchunk, an open carrier) ${REC_ALL?'shown':'hidden'} · <a href="#" onclick="REC_ALL=!REC_ALL;loadRecs();return false" style="color:var(--acc)">${REC_ALL?'hide':'show'}</a></div>`:'';
+ if(all.length&&!r.length){el.innerHTML=note+'<div class="empty">No clip with speech in it yet.</div>';return;}if(!r.length){el.innerHTML='<div class="empty">No recordings yet. Every transmission that opens the squelch while you listen is saved here.</div>';return;}
+ el.innerHTML=note+r.map(x=>`<div class="rec"><div><span class="f">${x.mhz}</span><br><span class="sv">${esc(x.name)}</span></div><div class="sv">${x.time} · ${x.secs} s${x.text?'<div class="tx">“'+esc(x.text.replace(/^\(unsure\) /,''))+'”'+recTag(x)+'</div>':'<div class="sv" style="opacity:.65">'+(x.done?'nobody talking in it':'transcript on its way…')+'</div>'}</div><audio controls preload="none" src="/rec/${encodeURIComponent(x.file)}"></audio><button class="ghost" onclick="delRec('${x.file}')">Delete</button></div>`).join('');capList(el,'.rec','rec');}
 async function delRec(f){await fetch('/delrec?f='+encodeURIComponent(f));loadRecs();toast('deleted');}
 async function loadDebug(){try{const d=await (await fetch('/debug')).json();const NL=String.fromCharCode(10);$('#dbgsum').textContent='scan '+(d.paused?'PAUSED (listening)':'running')+' · '+d.folder+' · recent USB errors: '+d.usb_errors_recent+(d.player.mhz?' · player on '+d.player.mhz:'');
  let t='WHAT HAPPENED (events.log, newest last)'+NL+((d.events||[]).join(NL)||'(nothing yet)')+NL+NL+'PROCESSES'+NL+(d.procs||'(none)')+NL+NL+'rtl_fm (listener)'+NL+d.fm_log;for(const k in d.logs)t+=NL+NL+'── '+k+NL+d.logs[k];$('#dbgout').textContent=t;}catch(e){$('#dbgout').textContent='debug failed: '+e;}}

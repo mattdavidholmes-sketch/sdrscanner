@@ -81,6 +81,7 @@
 .acsel .rt .st i{flex:0 0 32px;font-style:normal;color:#8a95a6;font-size:.68rem;text-transform:uppercase;letter-spacing:.06em}
 .acsel .rt .st b{font-size:.98rem}
 .acsel .rt .st span{display:block;color:#8a95a6;font-size:.82rem}
+.acsel .rt .st b.unk{color:#8a95a6;font-weight:500}.acsel .rt .rn{margin-top:5px;padding-top:6px;border-top:1px solid #2a3140;color:#8a95a6;font-size:.8rem;line-height:1.35}.acsel .rt .rn a{color:#7fb4ff;white-space:nowrap}
 .acsel .grid{display:grid;grid-template-columns:1fr 1fr;gap:6px;margin:8px 0}
 .acsel .grid div{border:1px solid #2a3140;border-radius:9px;padding:6px 9px;background:#161b24;min-width:0}
 .acsel .grid i{display:block;font-style:normal;color:#8a95a6;font-size:.66rem;text-transform:uppercase;letter-spacing:.07em}
@@ -104,6 +105,7 @@
 .maptools button{background:rgba(21,27,37,.92);border:1px solid #34405a;color:#e6ebf2;padding:6px 9px;font-size:12px;line-height:1;border-radius:8px;min-height:30px}
 .maptools button.on{border-color:var(--acc,#3ddc84);color:var(--acc,#3ddc84)}
 .maplegend{position:absolute;left:10px;bottom:10px;z-index:1100;display:flex;flex-wrap:wrap;gap:3px 10px;max-width:calc(100% - 120px);padding:5px 9px;border-radius:8px;background:rgba(11,14,19,.82);border:1px solid rgba(255,255,255,.12);color:#c6cfdb;font-size:11px;line-height:1.3;pointer-events:none}
+@media(min-width:761px){.acsel:not([hidden])~.maplegend{left:356px;max-width:calc(100% - 370px)}}@media(max-width:760px){.acsel:not([hidden])~.maplegend{display:none}}
 .maplegend i{display:inline-block;width:9px;height:9px;border-radius:50%;margin-right:4px;vertical-align:-1px}
 .airside{min-width:0}.airside h4{margin:2px 0 6px;font-size:.78rem;letter-spacing:.04em;text-transform:uppercase;color:var(--mute,#8a95a6);font-weight:600}
 .airpanel .who{display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:6px;margin-bottom:10px}
@@ -147,7 +149,7 @@
  const q=s=>document.querySelector(s);const tabAir=q('#tab-air');if(!tabAir)return;
  const E=s=>String(s==null?'':s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
  const LS={get:(k,d)=>{try{return localStorage.getItem(k)||d;}catch(e){return d;}},set:(k,v)=>{try{localStorage.setItem(k,v);}catch(e){}}};
- const YYZ=[43.6777,-79.6248],YTZ=[43.6275,-79.3962],D2R=Math.PI/180;
+ const YYZ=[43.6777,-79.6248],YTZ=[43.6275,-79.3962],D2R=Math.PI/180,HAM=[43.1736,-79.9350],YKF=[43.4608,-80.3786];   // (v214) + Hamilton, Kitchener-Waterloo
  const dirn=b=>['N','NE','E','SE','S','SW','W','NW'][Math.round((b||0)/45)%8];
  const ft=v=>v!=null?Number(v).toLocaleString()+' ft':'—';
  const arrow=x=>x.vrate>200?' ↑':(x.vrate<-200?' ↓':'');
@@ -160,10 +162,12 @@
   arr:[[132.800,'YYZ ARR 3','Arrival'],[124.475,'YYZ ARR 1','Arrival 2'],[125.400,'YYZ ARR 2','Arrival 3']],
   depN:[127.575,'YYZ DEP 1','Departure North'],depS:[128.800,'YYZ DEP 2','Departure South'],
   gndN:[121.650,'YYZ GND N','Ground North'],gndS:[121.900,'YYZ GND S','Ground South'],apron:[122.825,'YYZ APRON','Apron'],
-  ytzTwr:[118.200,'YTZ TWR','Billy Bishop Tower'],ytzGnd:[121.700,'YTZ GND','Billy Bishop Ground'],vfr:[133.400,'TOR VFR','VFR advisory'],
+  ytzTwr:[118.200,'YTZ TWR','Billy Bishop Tower'],ytzGnd:[121.700,'YTZ GND','Billy Bishop Ground'],vfr:[133.400,'TOR VFR','Terminal · East Satellite (VFR advisory)'],
+  // (v214) Toronto Terminal's other satellite positions (Wikipedia "Toronto Area Control Centre")
+  satW:[119.300,'TML W SAT','Terminal · West Satellite'],satHam:[119.700,'TML HAMILT','Terminal · Hamilton'],satKW:[128.275,'TML KITCH','Terminal · Kitchener-Waterloo'],
   // (v210) Toronto Centre, the enroute sectors around Toronto (canairradio.ca/yyz.html, radioreference.com/db/subcat/69789): west / east of Pearson, low / high
   ctr:{wl:[[132.475,'CTR HAMILT','Centre · Hamilton sector (west, low)'],[133.300,'CTR GRIMSB','Centre · Grimsby sector (west, low)']],wh:[[125.775,'CTR CENTRA','Centre · Centralia sector (west, high)'],[134.925,'CTR OAKVIL','Centre · Oakville sector (west, high)']],el:[[124.925,'CTR E RDR','Centre · East Radar (east, low)'],[127.000,'CTR SIMCOE','Centre · Simcoe sector (east, low)'],[134.250,'CTR E RDR2','Centre · East Radar, Peterborough site (east, low)']],eh:[[134.575,'CTR BARRIE','Centre · Barrie sector (east, high)']]}};
- const ALLCH=[CH.twrN,CH.twrS,CH.depN,CH.depS,CH.gndN,CH.gndS,CH.apron,CH.ytzTwr,CH.ytzGnd,CH.vfr].concat(CH.arr,CH.ctr.wl,CH.ctr.wh,CH.ctr.el,CH.ctr.eh);
+ const ALLCH=[CH.twrN,CH.twrS,CH.depN,CH.depS,CH.gndN,CH.gndS,CH.apron,CH.ytzTwr,CH.ytzGnd,CH.vfr,CH.satW,CH.satHam,CH.satKW].concat(CH.arr,CH.ctr.wl,CH.ctr.wh,CH.ctr.el,CH.ctr.eh);
 
  // ---- geometry. Runway ends from OurAirports (public domain): [end, lat, lon, opposite end, lat, lon]
  const RW=[['05',43.67390,-79.66390,'23',43.69470,-79.63330],['06L',43.66105,-79.62343,'24R',43.67898,-79.59737],['06R',43.65830,-79.62193,'24L',43.67529,-79.59724],
@@ -272,7 +276,8 @@
    const brg=(Math.atan2(y,xx)/D2R+360)%360;return [d,Math.abs((tr-brg+540)%360-180)];};
   const [dz,az]=geo(YYZ),[dt,at]=geo(YTZ);
   if(!toYTZ&&!fromYTZ){if(toYYZ&&alt<12000&&vr<=100&&dz<60)return 'arriving YYZ';if(fromYYZ&&alt<12000&&vr>100&&dz<45)return 'departing YYZ';
-   if(!toYYZ&&!fromYYZ&&!(f==='ga'||f==='heli'||x.category==='A7')){if(dz<45&&alt<9000&&vr<=0&&az<50)return 'arriving YYZ';if(dz<35&&alt<9000&&vr>200&&az>110)return 'departing YYZ';}}
+   if(!toYYZ&&!fromYYZ&&!(f==='ga'||f==='heli'||x.category==='A7')){if(dz<45&&alt<9000&&vr<=0&&az<50)return 'arriving YYZ';if(dz<35&&alt<9000&&vr>200&&az>110)return 'departing YYZ';
+    if(x.type&&!small&&dz<60&&dz<km([x.lat,x.lon],HAM)&&alt<10000&&(vr<-300||(alt<8000&&vr<=100&&dz<40)))return 'arriving YYZ';}}   // (v214) downwind: pointing away from the field, coming down
   if(small||toYTZ||fromYTZ){if((toYTZ||(!fromYTZ&&vr<=0&&at<55))&&dt<28&&alt<6000)return 'arriving YTZ';if((fromYTZ||(vr>200&&at>110))&&dt<20&&alt<6000)return 'departing YTZ';}
   return vr>300?'climbing':(vr<-300?'descending':'level');}
  const ph=p=>/arriving/.test(p||'')?'arr':(/departing/.test(p||'')?'dep':'');
@@ -281,21 +286,29 @@
 
  // ---- which channel it is on, most likely first. This is worked out from where the aircraft is - it is NOT read off the radio.
  // The only proof is hearing the callsign on a channel (HEARD, from the transcripts); the card says which of the two it is showing.
- function freqs(x){const p=phase(x),alt=x.alt_ft||0,dz=km([x.lat,x.lon],YYZ),dt=km([x.lat,x.lon],YTZ);
+ function freqs(x){const p=phase(x),alt=x.alt_ft||0,dz=km([x.lat,x.lon],YYZ),dt=km([x.lat,x.lon],YTZ),hr=new Date().getHours(),night=hr>=23||hr<7,ARR=night?[CH.depS].concat(CH.arr):CH.arr;   // (v214) overnight Pearson works its arrivals on 128.800 (follow_traffic.py _arr)
   if(x.on_ground){if(dz<4)return{why:'on the ground at Pearson',f:[x.lat>YYZ[0]?CH.gndN:CH.gndS,CH.apron]};if(dt<2)return{why:'on the ground at Billy Bishop',f:[CH.ytzGnd]};return{why:'on the ground',f:[]};}
   if(/YTZ/.test(p))return{why:p.replace('YTZ','Billy Bishop'),f:[CH.ytzTwr]};
   if(/arriving YYZ/.test(p)){const r=linedUp(x,false);
    if((r&&r.out<13)||(dz<14&&alt<3500)){const t=r?towerFor(r.n):[CH.twrN,CH.twrS];return{rwy:r&&r.n,why:(r?'final for runway '+r.n+', '+r.out.toFixed(0)+' km out':'short final')+' - with the tower',f:t};}
-   return{rwy:r&&r.n,why:(r?'lined up for runway '+r.n+', '+r.out.toFixed(0)+' km out':'on approach')+' - with Toronto Arrival',f:CH.arr};}
+   return{rwy:r&&r.n,why:(r?'lined up for runway '+r.n+', '+r.out.toFixed(0)+' km out':'on approach')+' - with Toronto Arrival'+(night?' (overnight: on 128.800 with Departure)':''),f:ARR};}
   if(/departing YYZ/.test(p)){
    if(dz<9&&alt<3000){const r=linedUp(x,true);return{dep:r&&r.n,why:'just airborne'+(r?' off runway '+r.n:'')+' - with the tower',f:r?towerFor(r.n):[CH.twrN,CH.twrS]};}
    const north=x.lat>YYZ[0];return{why:'climbing out, '+(north?'north':'south')+' of the field - with Toronto Departure',f:north?[CH.depN,CH.depS]:[CH.depS,CH.depN]};}
-  if(alt<4000&&dz>10&&dt>6&&light(x))return{why:'low and local - VFR advisory',f:[CH.vfr]};
-  if(alt<6000&&dz<30&&!light(x)&&(x.vrate||0)<=300)return{why:'low near Pearson, being vectored - probably with Toronto Arrival',f:CH.arr};
+  // (v214) low and neither arriving nor departing - the same rules, in the same order, as _helpers/follow_traffic.py detail()
+  const lt=light(x),vr=x.vrate||0,north=x.lat>YYZ[0];
+  if(lt&&alt<3600&&dz<=13)return{why:"crossing Pearson's control zone - with the tower (best guess)",f:north?[CH.twrN,CH.twrS]:[CH.twrS,CH.twrN]};
+  if(lt&&alt<3000&&dt<=9)return{why:"in Billy Bishop's control zone - with its tower (best guess)",f:[CH.ytzTwr]};
+  const dh=km([x.lat,x.lon],HAM),dk=km([x.lat,x.lon],YKF),sat=Math.min(dh,dk)<30,K=CH.ctr,west=x.lon<YYZ[1];
+  if(alt<7000&&(lt||sat||dz>=50)){
+   if(dz>75&&!sat)return{why:(p||'enroute')+" - low and far out: with another airport's controller, not known here (Centre's low sectors are a guess)",f:west?K.wl.concat(K.wh):K.el.concat(K.eh)};
+   const s=(sat&&dh<=dk)?['Hamilton',[CH.satHam,CH.satW]]:(sat?['Kitchener-Waterloo',[CH.satKW,CH.satW]]:(x.lon>=YYZ[1]?['the east side',[CH.vfr,CH.satW]]:['the west side',[CH.satW,CH.vfr]]));
+   return{why:'low and '+(lt?'local':'away from Pearson')+" - probably with Toronto Terminal's satellite controller for "+s[0],f:s[1]};}
+  if(alt<10000&&dz<50&&!lt){if(vr>300)return{why:'climbing near Pearson - probably with Toronto Departure',f:north?[CH.depN,CH.depS]:[CH.depS,CH.depN]};
+   return{why:'low near Pearson, being vectored - probably with Toronto Arrival',f:ARR};}
   // (v210) enroute: Toronto Centre. Its side of Pearson, and the low sectors first below 18,000 ft (where Canadian high-level airspace
   // begins - the sectors' real limits are not in the sources used). pick() then prefers the one where voices were heard lately.
-  const K=CH.ctr,west=x.lon<YYZ[1],high=alt>=18000,ord=west?(high?K.wh.concat(K.wl):K.wl.concat(K.wh)):(high?K.eh.concat(K.el):K.el.concat(K.eh));
-  if(alt<5000&&dz>=30)return{why:(p||'enroute')+" - low and away from Pearson: with another airport's controller, not known here (Centre's low sectors are a guess)",f:ord};   // (v213)
+  const high=alt>=18000,ord=west?(high?K.wh.concat(K.wl):K.wl.concat(K.wh)):(high?K.eh.concat(K.el):K.el.concat(K.eh));
   return{why:(p||'enroute')+' - with Toronto Centre, '+(west?'west':'east')+' side (which sector is a best guess)',f:ord};}
  window.__ft={phase,freqs};                                             // the Monitor card reads this to put callsigns on its channel tiles
  const listen=(f,n)=>{if(typeof P!=='undefined'&&P.play)P.play(+f,'am',n||String(f));};
@@ -392,7 +405,11 @@
   mapEl.addEventListener('click',ev=>{const l=ev.target.closest('a[data-f],a[data-more]');if(!l)return;ev.preventDefault();if(l.dataset.f)listen(l.dataset.f,l.dataset.n);else if(typeof openAir==='function'){if(wrap.classList.contains('full'))full(false);openAir(l.dataset.more);}});}
  function paintRunways(use){const dark=THEME==='dark';ENDS.forEach(e=>{if(!e.line)return;const on=!!use[e.n];e.line.setStyle(on?{color:dark?'#3ddc84':'#0a9c4a',weight:2.5,opacity:.95}:{color:dark?'#9aa7b8':'#55606e',weight:1,opacity:.28});});
   ENDS.forEach(e=>{if(!e.tag)return;const pair=ENDS.filter(o=>o.n.slice(0,2)===e.n.slice(0,2));const el=e.tag.getElement();if(el)el.classList.toggle('on',pair.some(o=>use[o.n]));});}
- function icon(x){const p=ph(phase(x)),outline=x.emergency?'#ff5c5c':(p==='arr'?'#3ddc84':(p==='dep'?'#5aa9ff':'#1a1a1a')),fill=x.on_ground?'#b8961a':'#ffd21f',sz=Math.max(16,Math.round(planPx(drawnType(x))*(x.on_ground?.7:1)));   // (v210) drawn by wingspan, not by what it is doing
+ // (v214) Pearson's tugs and service vehicles carry transponders too (the server marks them kind:'vehicle'; kind:'unknown' = on the
+ // ground and in no table). They were drawn as airliners, a pile of them on the apron. Now: a small square or dot.
+ const dot=x=>!!x.kind;
+ function icon(x){if(dot(x))return L.divIcon({className:'plane gv',iconSize:[11,11],iconAnchor:[5,5],html:`<i style="display:block;width:7px;height:7px;margin:1px;border:1px solid #10151d;background:${x.kind==='vehicle'?'#9a8a4a':'#7d8794'};border-radius:${x.kind==='vehicle'?'1px':'50%'}"></i>`});
+  const p=ph(phase(x)),outline=x.emergency?'#ff5c5c':(p==='arr'?'#3ddc84':(p==='dep'?'#5aa9ff':'#1a1a1a')),fill=x.on_ground?'#b8961a':'#ffd21f',sz=Math.max(16,Math.round(planPx(drawnType(x))*(x.on_ground?.7:1)));   // (v210) drawn by wingspan, not by what it is doing
   return L.divIcon({className:'plane',iconSize:[sz,sz],iconAnchor:[sz/2,sz/2],html:`<svg viewBox="0 0 64 64" style="width:${sz-4}px;height:${sz-4}px;opacity:${x.on_ground?.75:1};transform:rotate(${x.track||0}deg)">${planOf(drawnType(x)).split(/(?=M)/).filter(Boolean).map(d=>`<path fill="${fill}" stroke="${outline}" stroke-width="${outline==='#1a1a1a'?1.5:3}" stroke-linejoin="round" paint-order="stroke" d="${d}"/>`).join('')}</svg>`});}
  const role=f=>E(f[2]||f[1]);
  // (v209) the route in words: city and airport, one line per stop (the server sends x.places; the bare codes stay as the fallback)
@@ -412,7 +429,7 @@
    let o=MK[x.icao];
    if(!o){o=MK[x.icao]={m:L.marker(ll,{icon:icon(x),zIndexOffset:p?500:0}).addTo(layer),pts:[],ik:'',lk:'',lh:''};o.m.on('click',()=>select(x.icao,false));}
    else o.m.setLatLng(ll);
-   o.x=x;const ik=[(drawnType(x)||''),Math.round((x.track||0)/5),p,x.on_ground?1:0,x.emergency?1:0].join();if(ik!==o.ik){o.ik=ik;o.m.setIcon(icon(x));o.m.setZIndexOffset(p?500:0);}
+   o.x=x;const ik=[x.kind||'',(drawnType(x)||''),Math.round((x.track||0)/5),p,x.on_ground?1:0,x.emergency?1:0].join();if(ik!==o.ik){o.ik=ik;o.m.setIcon(icon(x));o.m.setZIndexOffset(p?500:0);}
    const last=o.pts[o.pts.length-1];if(!last||last[0]!==x.lat||last[1]!==x.lon){o.pts.push(ll);if(o.pts.length>40)o.pts.shift();}
    if(o.pts.length>1){if(!o.trail)o.trail=L.polyline(o.pts,{weight:1.5,opacity:.65,interactive:false}).addTo(layer);else o.trail.setLatLngs(o.pts);o.trail.setStyle({color:col});}
    const lk=x.on_ground?'':(p||'oth'),lh=tagHtml(x,p);
@@ -434,16 +451,23 @@
  // ---- (v212) the selected aircraft's panel. Everything about it in one place, and the channels it is most likely on as buttons:
  // the first one is the pick (heard there / the only one with voices lately / the best guess), the rest follow.
  let SPOKEN={},SELK='';const selEl=q('#acsel');
+ // (v214) Where it is coming from and going to: always there, second thing in the panel. x.ends is the server's answer (dashboard2
+ // route_ends): the open route tables when they have the flight and it fits where the aircraft is; otherwise what the aircraft itself
+ // shows - on approach to Pearson means it is going to Pearson, whatever the tables do or do not say. Each end says which it is.
+ const endsTxt=x=>{const e=x.ends;if(!e||(!e.from&&!e.to))return '';const c=o=>o?String(o.where||o.code||'').split(',')[0]+(o.code?' '+o.code:''):'?';return c(e.from)+' → '+c(e.to);};
+ function routeHTML(x){const pl=x.places||[],e=x.ends||(pl.length>1?{from:pl[0],to:pl[pl.length-1],via:pl.slice(1,-1),from_src:'table',to_src:'table',note:''}:{from:null,to:null,via:[],note:x.route||''});
+  const st=(k,o,s)=>`<div class="st"><i>${k}</i><div>${o?`<b>${E(o.where||o.code)}</b><span>${o.name?E(o.name)+' ':''}${o.where&&o.code?'('+E(o.code)+')':''}${s==='seen'?' · seen: '+(k==='to'?'it is on approach there':'it has just taken off there'):''}</span>`:'<b class="unk">not known</b>'}</div></div>`;
+  return `<h5>Route</h5><div class="rt">${st('from',e.from,e.from_src)}${(e.via||[]).map(o=>st('via',o,'table')).join('')}${st('to',e.to,e.to_src)}${e.note?`<div class="rn">${E(e.note)}${x.fr24&&!(e.from&&e.to)?` <a href="${E(x.fr24)}" target="_blank" rel="noopener">Look it up on Flightradar24 ↗</a>`:''}</div>`:''}</div>`;}
  function selHTML(x){const pk=pick(x),fr=pk.fr,p=phase(x),pl=x.places||[],cur=(typeof P!=='undefined'&&P.cur)?P.cur.mhz:null;
   const big=`<svg viewBox="0 0 64 64" style="transform:rotate(${x.track||0}deg)">${planOf(drawnType(x)).split(/(?=M)/).filter(Boolean).map(d=>`<path fill="#ffd21f" stroke="#10151d" stroke-width="1.2" stroke-linejoin="round" paint-order="stroke" d="${d}"/>`).join('')}</svg>`;
   const stop=(o,i)=>`<div class="st"><i>${i===0?'from':(i===pl.length-1?'to':'via')}</i><div><b>${E(o.where||o.code)}</b><span>${o.name?E(o.name)+' ':''}${o.where?'('+E(o.code)+')':''}</span></div></div>`;
   const cell=(k,v)=>`<div><i>${k}</i><b>${v}</b></div>`,sp=SPOKEN[x.callsign];
   return `<button class="x" data-x="1" title="close">×</button>
    <div class="cs">${E(x.callsign||x.icao)}${x.emergency?`<span class="emg">SQUAWK ${E(x.squawk||'')}</span>`:''}</div>${sp&&sp!==x.callsign?`<div class="said">on the radio: "${E(sp)}"</div>`:''}
-   <div class="pic">${big}<div class="ty"><b>${doubt(x)?'Type not certain':E(x.desc||x.type||'type not known')}</b><span class="mu">${doubt(x)?'on file as '+E(x.desc||x.type)+' ('+E(x.reg||'')+'), which cannot fly at '+(x.speed_kt||0)+' kt - the table is out of date for this aircraft':[x.type,x.reg,x.operator].filter(Boolean).map(E).join(' · ')}</span></div></div>
+   <div class="pic">${big}<div class="ty"><b>${x.kind==='vehicle'?'Airport ground vehicle':(x.kind==='unknown'?'On the ground, not identified':(doubt(x)?'Type not certain':E(x.desc||x.type||'type not known')))}</b><span class="mu">${doubt(x)?'on file as '+E(x.desc||x.type)+' ('+E(x.reg||'')+'), which cannot fly at '+(x.speed_kt||0)+' kt - the table is out of date for this aircraft':[x.type,x.reg,x.operator].filter(Boolean).map(E).join(' · ')}</span></div></div>
+   ${x.kind?'':routeHTML(x)}
    <div class="doing">${E(fr.why&&fr.why!==p?fr.why:p)}</div>
    <h5>${pk.list.length?'Listen to it':'No channel to offer for it'}</h5><div class="ch">${pk.list.map((f,i)=>`<button data-f="${f[0]}" data-n="${E(f[1])}" class="${i===0?'pk':''}${cur!=null&&Math.abs(cur-f[0])<0.003?' on':''}"><span>${cur!=null&&Math.abs(cur-f[0])<0.003?'■':'▶'}</span><b>${f[0].toFixed(3)}</b><span>${role(f)}</span>${i===0&&pk.note?`<small>${E(pk.note)}</small>`:''}</button>`).join('')}</div>
-   ${pl.length?`<h5>Route</h5><div class="rt">${pl.map(stop).join('')}</div>`:(x.route?`<h5>Route</h5><div class="rt">${E(x.route)}</div>`:(x.route_file?`<h5>Route</h5><div class="mu">The route on file for this callsign (${E(x.route_file)}) does not fit where the aircraft is, so it is not shown.</div>`:''))}
    <div class="grid">${cell('Altitude',x.on_ground?'on the ground':ft(x.alt_ft))}${cell('Climb / descent',x.vrate?(x.vrate>0?'↑ ':'↓ ')+Math.abs(x.vrate)+' ft/min':'level')}${cell('Speed',(x.speed_kt||0)+' kt')}${cell('Heading',(x.track||0)+'°')}${cell('From home',x.km+' km '+dirn(x.bearing))}${cell('Squawk',E(x.squawk||'—'))}</div>
    ${HEARD[x.callsign]?`<h5>Heard on the radio</h5><div class="mu">${E(HEARD[x.callsign])}</div>`:''}
    <div class="lk">${x.fr24?`<a href="${E(x.fr24)}" target="_blank" rel="noopener">Flightradar24 ↗</a>`:''}<a href="#" data-more="${E(x.icao)}">full details…</a></div>`;}
@@ -467,7 +491,8 @@
  q('#apfull').onclick=()=>full(!wrap.classList.contains('full'));
  document.addEventListener('keydown',e=>{if(e.key==='Escape'&&wrap.classList.contains('full'))full(false);});
  wrap.querySelectorAll('button[data-go]').forEach(b=>b.onclick=()=>{if(!MAP)return;const g=b.dataset.go;
-  if(g==='home')MAP.setView(HOME,11);else if(g==='yyz')MAP.setView(YYZ,11);else{const pts=Object.values(MK).map(o=>o.m.getLatLng());if(pts.length)MAP.fitBounds(L.latLngBounds(pts).pad(.12));}});
+  if(g==='home')MAP.setView(HOME,11,{animate:false});else if(g==='yyz')MAP.setView(YYZ,11,{animate:false});else{const pts=Object.values(MK).filter(o=>!dot(o.x)).map(o=>o.m.getLatLng());if(pts.length)MAP.fitBounds(L.latLngBounds(pts).pad(.12),{animate:false});}
+  if(!selEl.hidden){const r=selEl.getBoundingClientRect(),b=mapEl.getBoundingClientRect();MAP.panBy(innerWidth>760?[-(r.right-b.left)/2,0]:[0,(b.bottom-r.top)/2],{animate:false});}});   // (v214) clear of the open panel
  addEventListener('resize',()=>{if(MAP)MAP.invalidateSize();});
 
  // ---- the list beside the map
@@ -478,13 +503,13 @@
  function who(a){const air=(a.aircraft||[]).filter(x=>x.lat!=null&&!x.on_ground);
   const work=air.filter(x=>ph(phase(x))).sort((p,r)=>(ph(phase(p))==='arr'?0:1)-(ph(phase(r))==='arr'?0:1)||(p.eta_min??99)-(r.eta_min??99)||p.km-r.km).slice(0,14);
   const rest=air.filter(x=>!ph(phase(x))).slice(0,work.length>5?8:14);
-  q('#apn').textContent=(a.n||0)+' tracked · '+work.length+' working YYZ/YTZ';
+  const nv=(a.aircraft||[]).filter(dot).length,na=a.n_air!=null?a.n_air:(a.n||0)-nv;q('#apn').textContent=na+' aircraft · '+work.length+' working YYZ/YTZ'+(nv?' · '+nv+' ground vehicles / not identified':'');
   q('#apsrc').textContent=(a.source?'feed: '+a.source:'')+(a.age!=null?' · '+a.age+' s ago':'')+(a.error?' · '+a.error:'');q('#apsrc').classList.toggle('err',!!a.error);
   const cards=work.map(x=>{const p=ph(phase(x)),pk=pick(x),fr=pk.fr,rt=routeOk(x,p),eta=(p==='arr'&&x.eta_min!=null)?' · lands in about '+Math.max(1,Math.round(x.eta_min))+' min':'';
-   return `<div class="ac ${p}${x.emergency?' emg':''}${x.icao===SEL?' sel':''}" data-icao="${E(x.icao)}"><div class="l1"><b>${E(x.callsign||x.icao)}</b><span class="sv">${E(x.type||'')}${rt?' · '+E(rt):''}</span><span class="sv ds">${x.km} km ${dirn(x.bearing)} · ${ft(x.alt_ft)}${arrow(x)}</span></div>`+
+   return `<div class="ac ${p}${x.emergency?' emg':''}${x.icao===SEL?' sel':''}" data-icao="${E(x.icao)}"><div class="l1"><b>${E(x.callsign||x.icao)}</b><span class="sv">${E(x.type||'')}${endsTxt(x)?' · '+E(endsTxt(x)):(rt?' · '+E(rt):'')}</span><span class="sv ds">${x.km} km ${dirn(x.bearing)} · ${ft(x.alt_ft)}${arrow(x)}</span></div>`+
     `<div><span class="ph">${E(phase(x))}</span> <span class="sv">· ${E(fr.why)}${eta}${x.emergency?' · <b style="color:#ff5c5c">SQUAWK '+E(x.squawk)+'</b>':''}</span></div>`+
     (pk.list.length?`<div class="fq">${fbtn(pk.list[0],'pk'+(pk.conf==='heard'?' sure':''),'▶ <b>'+pk.list[0][0].toFixed(3)+'</b> '+role(pk.list[0]))}${pk.list.length>1?'<span class="cf">or</span>'+pk.list.slice(1).map(f=>fbtn(f,'alt','<b>'+f[0].toFixed(3)+'</b>')).join(''):''}${pk.note?`<span class="cf${pk.conf==='heard'?' ok':''}">${E(pk.note)}</span>`:''}</div>`:'')+`</div>`;}).join('');
-  const rows=rest.map(x=>{const fr=freqs(x);return `<div class="ov${x.icao===SEL?' sel':''}" data-icao="${E(x.icao)}"><b>${E(x.callsign||x.icao)}</b><span class="sv">${E(x.type||'')}${x.route?' · '+E(x.route):''} · ${E(phase(x))}</span><span class="sv ds">${x.km} km ${dirn(x.bearing)} · ${ft(x.alt_ft)}${arrow(x)}</span>${fr.f.length?fbtn(fr.f[0],'alt','▶ <b>'+fr.f[0][0].toFixed(3)+'</b>'):''}</div>`;}).join('');
+  const rows=rest.map(x=>{const fr=freqs(x);return `<div class="ov${x.icao===SEL?' sel':''}" data-icao="${E(x.icao)}"><b>${E(x.callsign||x.icao)}</b><span class="sv">${E(x.type||'')}${endsTxt(x)?' · '+E(endsTxt(x)):(x.route?' · '+E(x.route):'')} · ${E(phase(x))}</span><span class="sv ds">${x.km} km ${dirn(x.bearing)} · ${ft(x.alt_ft)}${arrow(x)}</span>${fr.f.length?fbtn(fr.f[0],'alt','▶ <b>'+fr.f[0][0].toFixed(3)+'</b>'):''}</div>`;}).join('');
   const k=cards+'|'+rows;if(k===WHOK)return;WHOK=k;
   q('#apwho').innerHTML=cards||'<div class="sv" style="padding:4px 2px">Nobody on approach or departure right now.</div>';
   q('#apresth').style.display=rows?'':'none';q('#aprest').style.display=rows?'':'none';q('#aprest').innerHTML=rows;}

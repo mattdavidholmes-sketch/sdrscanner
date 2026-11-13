@@ -1111,23 +1111,29 @@ def alerts_check_text(mhz, name, text):
 
 def transcript_path(wav): return wav[:-4] + ".txt"
 
-KEEP_RECORDINGS = 40
-def prune_recordings(keep=KEEP_RECORDINGS):
-    """Disk guard: keep only the newest `keep` voice clips (with their transcripts) across every scan folder and delete the rest.
-    A clip still being written (touched in the last 60 s) is never removed."""
+KEEP_RECORDINGS = 40; KEEP_QUIET = 10
+def prune_recordings(keep=KEEP_RECORDINGS, keep_quiet=KEEP_QUIET):
+    """Disk guard: keep the newest `keep` clips that have somebody talking in them (or have not been read yet) and the newest
+    `keep_quiet` clips in which the transcriber found nobody (their .txt is there and empty); delete the rest, across every scan
+    folder. (v214) Until now it was simply the newest 40 of everything, and at night most of what opens the squelch is noise: on
+    13 Nov, 9 of the 12 newest clips were noise or a kerchunk, each one pushing a real call out of the list. A clip still being
+    written (touched in the last 60 s) is never removed."""
     try:
         files = sorted(glob.glob(os.path.join(HERE, "scan_*", "recordings", "*.wav")), key=os.path.getmtime, reverse=True)
-        gone = 0
-        for f in files[keep:]:
+        gone = 0; said = 0; quiet = 0
+        for f in files:
             try:
-                if time.time() - os.path.getmtime(f) < 60: continue
+                tp = transcript_path(f)
+                if os.path.exists(tp) and os.path.getsize(tp) == 0: quiet += 1; over = quiet > keep_quiet
+                else: said += 1; over = said > keep
+                if not over or time.time() - os.path.getmtime(f) < 60: continue
                 os.remove(f); gone += 1
                 os.makedirs(os.path.join(HERE, "transcripts_archive"), exist_ok=True)
-                for ext in (".txt", ".asr.json", ".json"):                     # (v154) the audio is capped at 40 clips, the TRANSCRIPTS are kept for good ((v210) with what each engine wrote)
+                for ext in (".txt", ".asr.json", ".json"):                     # (v154) the audio is capped, the TRANSCRIPTS are kept for good ((v210) with what each engine wrote)
                     try: shutil.move(f[:-4] + ext, os.path.join(HERE, "transcripts_archive", os.path.basename(f)[:-4] + ext))
                     except OSError: pass
             except OSError: pass
-        if gone: say(f"recordings: kept the newest {keep}, deleted {gone} older clips")
+        if gone: say(f"recordings: kept the newest {keep} with speech and {keep_quiet} without, deleted {gone} older clips")
         return gone
     except Exception: return 0
 def housekeeping():
