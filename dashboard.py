@@ -664,6 +664,12 @@ def tunable(mhz, mode):
     return mode == "monitor" or 24.0 <= float(mhz) <= 1766.0
 def play_mac(mhz, mode, manual, name, cat="All", resume=False):
     if not tunable(mhz, mode): return False, f"{mhz} MHz is outside the dongle's range (24-1766 MHz)"
+    # (v219) "(playing on the Mac)" is what a page calls a channel it found playing and did not start itself. Until now the page
+    # sent that back as the channel's name when the squelch, the output or the Mac button was touched: on 13 Nov from 10:16 the
+    # log, the player and every recording of 128.800 were named "(playing on the Mac)". The name the listen was started with stands.
+    if (name or "").startswith("(playing on") or name == "(another device)":
+        name = (LAST_PLAY.get("name") or "") if abs((LAST_PLAY.get("mhz") or 0) - mhz) < 0.0026 else ""
+        if name.startswith("("): name = ""
     # (v134) a repeat of the channel that is already playing (double tap, several open pages, a retry) must not restart the receiver -
     # every restart was a 1-3 s hole in the audio. Same frequency, same mode, same squelch within the last 10 min -> just say ok.
     with _lock: cur = dict(_player)
@@ -2022,6 +2028,7 @@ class H(BaseHTTPRequestHandler):
                                                        "dongle_lost": DONGLE["lost"], "dongle_note": DONGLE["note"], "resume": LAST_PLAY.get("mhz") if DONGLE["lost"] else None}), "application/json")
             mt = ses.meter()
             return self.send(json.dumps({"playing": m, "open": mt["open"], "level": mt["level"], "zcr": mt["zcr"], "thresh": mt["thresh"], "floor": 0, "mode": ses.mode,
+                                         "name": (LAST_PLAY.get("name") or "") if abs((LAST_PLAY.get("mhz") or 0) - (m or 0)) < 0.0026 else "",      # (v219) what the channel playing on the Mac is called
                                          "auto": ses.gate.manual is None, "tones": mt["tones"], "tone_now": mt["tone_now"], "paused": True, "fm": mt["err"] or last_fm_error(),
                                          "data": mt.get("data", False), "monitor": mt.get("monitor"), "air": mt.get("air"),
                                          "denoise_off": mt.get("denoise_off", False)}), "application/json")   # (v170) diagnostic only - never affects playback
