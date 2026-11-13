@@ -930,22 +930,28 @@ async function info(tr){const mhz=parseFloat(tr.dataset.mhz);const nxt=tr.nextEl
 document.getElementById('rows').addEventListener('click',e=>{if(e.target.closest('button'))return;const tr=e.target.closest('tr');if(tr&&tr.dataset.mhz)info(tr);});
 // Web Audio streaming player: fetch raw PCM, schedule buffers back to back. Works in Safari, Chrome and iOS.
 let actx=null,gainNode=null,nextT=0,abort=null,bytesIn=0;
-var PO={nextT:0,rate:{},m:9,s:0,n:0,aPrev:null,tWin:0,gaps:0};
+var PO={nextT:0,rate:{},m:9,tWin:0,t0:0,got:0,mode:0,gaps:0,changes:0};
 function playout(ctx,ab,src,kind){
- /* (v204) Queue one piece of audio. The radio does not hand over audio at exactly the speed it is played: single channels come in
-    lumps of a third of a second, and at the airband receiver's dongle rate about 5% of the samples are lost on this Mac's USB path.
-    The old player kept 0.4 s in hand and, when that ran out, jumped ahead - a gap, heard as a click, every few seconds.
-    Now: 0.8 s in hand, and the playing speed follows the source (the cushion's average over 3 s says whether it is draining or
-    growing; the speed moves by a fraction of a percent at a time) so it neither runs dry nor piles up. The speed found is
-    remembered per kind of listen. A real stall still restarts the cushion, with a 10 ms fade-in instead of a hard edge. */
+ /* Queue one piece of audio (v204, speed control redone in v205).
+    The radio does not always hand over audio at the speed it is played: at the airband receiver's dongle rate about 5% of the
+    samples are lost on this Mac's USB path, and single FM channels arrive in lumps of a third of a second. A player that only
+    queues pieces back to back runs dry and leaves holes (the clicks of 12 Nov).
+    0.8 s is kept in hand. The playing speed stays exactly where it is while the cushion is between 0.35 and 1.2 s - lumps move
+    it around inside that band and must not move the pitch. Only when it leaves the band is the speed set, once, to what the
+    source has actually delivered since the listen began (audio received / time passed), a hair to the side so the cushion
+    walks back to the middle, then held again. The speed found is remembered per kind of listen. */
  var now=ctx.currentTime,r=PO.rate[kind]||1;
- if(PO.nextT<now+0.03){if(PO.nextT>0)PO.gaps++;PO.nextT=now+0.8;PO.m=9;PO.s=0;PO.n=0;PO.aPrev=null;PO.tWin=now;
+ if(PO.nextT<now+0.03){if(PO.nextT>0)PO.gaps++;PO.nextT=now+0.8;PO.m=9;PO.tWin=now;PO.t0=now;PO.got=0;PO.mode=0;
   var ch=ab.getChannelData(0),k=Math.min(240,ch.length);for(var i=0;i<k;i++)ch[i]*=i/k;}
- var lead=PO.nextT-now;if(lead<PO.m)PO.m=lead;PO.s+=lead;PO.n++;
- if(now-PO.tWin>=3&&PO.n>2){var W=now-PO.tWin,a=PO.s/PO.n;
-  if(PO.aPrev!==null)r+=0.3*(a-PO.aPrev)/W;
-  r+=0.02*(PO.m-0.45);r=Math.max(0.92,Math.min(1.03,r));PO.rate[kind]=r;PO.aPrev=a;PO.m=9;PO.s=0;PO.n=0;PO.tWin=now;}
- src.playbackRate.value=r;src.start(PO.nextT);PO.nextT+=ab.duration/r;}
+ var lead=PO.nextT-now;if(lead<PO.m)PO.m=lead;
+ if(now-PO.tWin>=2){var T=now-PO.t0,est=T>=6?PO.got/T:0,r0=r;
+  if(est>0.9&&est<1.06){
+   if(PO.mode===0){if(PO.m<0.35){PO.mode=-1;r=est-0.012;}else if(PO.m>1.2){PO.mode=1;r=est+0.012;}}
+   else if(PO.mode===-1){if(PO.m>0.6){PO.mode=0;r=est;}else r=est-0.012;}
+   else{if(PO.m<0.9){PO.mode=0;r=est;}else r=est+0.012;}
+   r=Math.max(0.92,Math.min(1.04,r));if(Math.abs(r-r0)>0.0005){PO.changes++;PO.rate[kind]=r;}else r=r0;}
+  PO.m=9;PO.tWin=now;}
+ src.playbackRate.value=r;src.start(PO.nextT);PO.nextT+=ab.duration/r;PO.got+=ab.duration;}
 function ensureCtx(){if(!actx){actx=new (window.AudioContext||window.webkitAudioContext)();gainNode=actx.createGain();gainNode.connect(actx.destination);}
  if(actx.state!=='running')actx.resume();gainNode.gain.value=parseFloat(document.getElementById('vol').value);}
 document.getElementById('vol').addEventListener('input',e=>{if(gainNode)gainNode.gain.value=parseFloat(e.target.value);});
