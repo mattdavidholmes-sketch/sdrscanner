@@ -215,6 +215,7 @@ class Channel:
         self.pinned = False                        # set when the carrier never dropped for 20 s: a beacon / ATIS / data, not a conversation
         self.pin_why = ""                          # (v193) why it was pinned, for the log line
         self.rx = None; self.rx_was = False; self.rx_voice = 0     # (v196) airband.AmRx for this AM channel; its squelch last block; blocks with speech on the carrier
+        self.rec_gate = False; self.rec_below = 0  # (v215) squelch held open: is the automatic squelch open (the recorder follows that one)
         self.rx_scan = False                       # (v197) part of a scan: nothing is played until speech shows on the carrier, and a carrier that never stops is locked out
         self.cnr_hist = []                         # (v200) the last second of the receiver's carrier figure (None = no carrier line in that block)
         self.cv_max = 0.0; self.data_end = False   # (v193) FM: the most speech-like the envelope got during this opening; the data detector ended it without any
@@ -424,7 +425,17 @@ class Channel:
                     self.pending.append(pcm); self.pending = self.pending[-12:]
                     return bytes(len(pcm)), True
                 if self.pending: pcm = b"".join(self.pending) + pcm; self.pending = []
-            if self.rec: self.rec.feed(pcm, True)
+            # (v215) Squelch held open by hand: the loudspeaker gets everything, the recorder only what the automatic squelch would
+            # have opened on (open at its threshold, shut after two blocks without a usable carrier). On 13 Nov two listens with
+            # the squelch held open - 128.800 for 26 s, 118.200 for 50 s - were each saved whole, as one clip of hiss.
+            rec_on = True
+            if getattr(rx, "always", False):
+                if not self.rec_gate: self.rec_gate = bool(rx.line_db >= rx.LINE_DB and rx.cnr_db >= rx.threshold); self.rec_below = 0
+                else:
+                    self.rec_below = 0 if self.carrier else self.rec_below + 1
+                    if self.rec_below >= 2: self.rec_gate = False
+                rec_on = self.rec_gate
+            if self.rec: self.rec.feed(pcm, rec_on)
             return pcm, True
         self.open_blocks = 0; self.pending = []
         if self.open_since is not None:

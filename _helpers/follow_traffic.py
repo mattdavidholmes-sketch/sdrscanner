@@ -23,7 +23,7 @@ CH = {"twrN": (118.700, "YYZ TWR N"), "twrS": (118.350, "YYZ TWR S"), "arr": [(1
       "ytzTwr": (118.200, "YTZ TWR"), "ytzGnd": (121.700, "YTZ GND"), "vfr": (133.400, "TOR VFR"),
       # (v214) Toronto Terminal's satellite positions (Wikipedia "Toronto Area Control Centre": East Satellite 133.400 - the "vfr" entry
       # above -, West Satellite 119.300, West Satellite (Hamilton) 119.700, West Satellite (Kitchener) 128.275)
-      "satW": (119.300, "TML W SAT"), "satHam": (119.700, "TML HAMILT"), "satKW": (128.275, "TML KITCH"),
+      "satW": (119.300, "YYZ VFR"), "satHam": (119.700, "TML HAMILT"), "satKW": (128.275, "TML KITCH"),
       # (v212) Toronto Centre around Toronto: west / east of Pearson, low / high sectors (the same table as dashboard.TOR_CENTRE; sources there)
       "ctr": {"wl": [(132.475, "CTR HAMILT"), (133.300, "CTR GRIMSB")], "wh": [(125.775, "CTR CENTRA"), (134.925, "CTR OAKVIL")],
               "el": [(124.925, "CTR E RDR"), (127.000, "CTR SIMCOE"), (134.250, "CTR E RDR2")], "eh": [(134.575, "CTR BARRIE")]}}
