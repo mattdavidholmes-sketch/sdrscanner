@@ -30,8 +30,17 @@ PROMPT = ("Air traffic control, Toronto Pearson tower, ground, departure, arriva
 
 ADSB_CACHE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "diag", "adsb.json")
 def adsb_callsigns(max_age=300):
-    """Aircraft currently over the GTA (OpenSky, anonymous API, cached 5 min): their callsigns prime the recogniser so
-    'Jazz four seven two' is heard as a callsign and not random words. Any failure -> empty list, never an error."""
+    """Aircraft in the air around Toronto right now: their callsigns prime the recogniser so 'Jazz four seven two' is heard as a
+    callsign and not random words. (v210) Asked of the app itself first - it already tracks every aircraft within 60 nm, nearest
+    first, and that list does not depend on OpenSky letting an anonymous caller in. Then OpenSky (cached 5 min). Any failure ->
+    empty list, never an error."""
+    try:
+        import json as _j, urllib.request as _u
+        with _u.urlopen("http://127.0.0.1:8765/api/aircraft", timeout=4) as r: a = _j.load(r).get("aircraft") or []
+        cs = [(x.get("callsign") or "").strip() for x in sorted(a, key=lambda x: x.get("km") or 1e9) if not x.get("on_ground")]
+        cs = [c for i, c in enumerate(cs) if c and c not in cs[:i]]
+        if cs: return cs
+    except Exception: pass
     try:
         import json as _j
         if os.path.exists(ADSB_CACHE) and time.time() - os.path.getmtime(ADSB_CACHE) < max_age:
@@ -49,7 +58,13 @@ def adsb_callsigns(max_age=300):
 AIRLINES = {"ACA": "Air Canada", "JZA": "Jazz", "WJA": "WestJet", "POE": "Porter", "FLE": "Flair", "SWG": "Sunwing", "TSC": "Air Transat",
             "WSW": "Swoop", "DAL": "Delta", "UAL": "United", "AAL": "American", "BAW": "Speedbird", "ROU": "Rouge", "CJT": "Cargojet",
             "FDX": "FedEx", "UPS": "UPS", "SKV": "Sky Regional", "KLM": "KLM", "DLH": "Lufthansa", "AFR": "Air France", "EIN": "Shamrock",
-            "JBU": "JetBlue", "SWA": "Southwest", "ASA": "Alaska", "GGN": "Air Georgian", "ETD": "Etihad", "UAE": "Emirates", "QTR": "Qatari"}
+            "JBU": "JetBlue", "SWA": "Southwest", "ASA": "Alaska", "GGN": "Air Georgian", "ETD": "Etihad", "UAE": "Emirates", "QTR": "Qatari",
+            # (v210) more of the telephony names heard at Pearson
+            "WEN": "Encore", "MAL": "Morningstar", "THY": "Turkish", "ELY": "El Al", "TAP": "Air Portugal", "ICE": "Iceair", "AMX": "Aeromexico",
+            "CPA": "Cathay", "KAL": "Korean Air", "ANA": "All Nippon", "EVA": "Eva", "AIC": "Air India", "PIA": "Pakistan", "LOT": "LOT", "SWR": "Swiss",
+            "AUA": "Austrian", "SAS": "Scandinavian", "ETH": "Ethiopian", "MSR": "Egyptair", "RJA": "Jordanian", "SVA": "Saudia", "AVA": "Avianca",
+            "CMP": "Copa", "CES": "China Eastern", "CHH": "Hainan", "CCA": "Air China", "EDV": "Endeavor", "RPA": "Brickyard", "SKW": "SkyWest",
+            "ENY": "Envoy", "JIA": "Blue Streak", "PDT": "Piedmont", "GJS": "Lindbergh"}
 def spoken(cs):
     """ACA123 -> 'Air Canada one two three' (how the controller says it)."""
     import re as _re
@@ -92,7 +107,16 @@ def main(files):
             segs, info = model.transcribe(load16k(p), language="en", beam_size=5, temperature=0.0, initial_prompt=prompt,
                                           condition_on_previous_text=False, vad_filter=True,
                                           vad_parameters=dict(min_silence_duration_ms=400), no_speech_threshold=0.6, word_timestamps=True)
-            segs = list(segs); text = " ".join(s.text.strip() for s in segs).strip()
+            segs = list(segs)
+            # (v210) a stretch the model itself was not sure of is left out: its mean word probability is under 0.4 where it wrote a
+            # tail onto a call that had ended ("... cleared to land on cimber three three zero") or a single word over a noise burst
+            def _p(s): return sum(w.probability for w in (s.words or [])) / max(1, len(s.words or []))
+            segs = [s for s in segs if (s.words and _p(s) >= 0.4)]
+            text = " ".join(s.text.strip() for s in segs).strip()
+            # the model learned its airlines from European and Asian recordings and writes "air china" for the airline it hears
+            # all day at Pearson; unless an Air China flight really is in the air here, that is Air Canada
+            if "air china" in text.lower() and not any(c.startswith("CCA") for c in live):
+                import re as _re; text = _re.sub(r"(?i)air china", "air canada", text)
             # (v203) how sure the model was: the mean probability it gave the words it wrote. On 40 clips of 128.800 (11 Nov) the two
             # transmissions it read the same way through two different receive chains scored 0.64-0.75; what it wrote on carriers
             # with no speech on them at all ("United four five zero", "heading flight level eight three") scored 0.28-0.61, or was

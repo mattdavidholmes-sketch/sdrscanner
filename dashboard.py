@@ -1123,7 +1123,7 @@ def prune_recordings(keep=KEEP_RECORDINGS):
                 if time.time() - os.path.getmtime(f) < 60: continue
                 os.remove(f); gone += 1
                 os.makedirs(os.path.join(HERE, "transcripts_archive"), exist_ok=True)
-                for ext in (".txt", ".json"):                                  # (v154) the audio is capped at 40 clips, the TRANSCRIPTS are kept for good
+                for ext in (".txt", ".asr.json", ".json"):                     # (v154) the audio is capped at 40 clips, the TRANSCRIPTS are kept for good ((v210) with what each engine wrote)
                     try: shutil.move(f[:-4] + ext, os.path.join(HERE, "transcripts_archive", os.path.basename(f)[:-4] + ext))
                     except OSError: pass
             except OSError: pass
@@ -1415,6 +1415,12 @@ CP_ETOBICOKE = [(m, "fm", n) for m, n in (
 # while both are quiet.
 YYZ_DEP = [(127.575, "am", "YYZ DEP 1"), (128.800, "am", "YYZ DEP 2")]
 YYZ_ARR = [(132.800, "am", "YYZ ARR 3"), (124.475, "am", "YYZ ARR 1"), (125.400, "am", "YYZ ARR 2")]
+# (v210) Toronto Centre: the enroute sectors around Toronto, as a Monitor bank and as named channels (Matt, 13 Nov: the aircraft tab
+# said "with Toronto Centre (not in the bank)"). Names are short and upper-case like the rest of the airband set (they are also the
+# CHIRP names, 10 characters at most). Frequencies and sector names: canairradio.ca/yyz.html; the West Low ones also
+# radioreference.com/db/subcat/69789. From here it is mostly the aircraft that are heard - the controllers' transmitters are at
+# Pearson, St. Catharines and Peterborough and reach this antenna as weakly as Pearson's own do.
+TOR_CENTRE = [(132.475, "am", "CTR HAMILT"), (133.300, "am", "CTR GRIMSB"), (125.775, "am", "CTR CENTRA"), (134.925, "am", "CTR OAKVIL"), (124.925, "am", "CTR E RDR"), (127.000, "am", "CTR SIMCOE"), (134.250, "am", "CTR E RDR2"), (134.575, "am", "CTR BARRIE")]
 def yyz_arrivals():
     """Overnight Pearson combines its terminal sectors: on 11 Nov 2026 at 01:22 an inbound flight was cleared down to 3,000 ft on 128.800,
     the 'departure' frequency, and after midnight it was the only terminal channel with voice. So from 23:00 to 07:00 the departure
@@ -1463,6 +1469,7 @@ def monitor_list(cat="All", minutes=30, limit=30):
     lo = lockouts()
     if cat == "YYZ Arrivals": return [c for c in yyz_arrivals() if round(c[0], 4) not in lo]       # (v190)
     if cat == "YYZ Departures": return [c for c in YYZ_DEP if round(c[0], 4) not in lo]           # (v190)
+    if cat == "Toronto Centre": return [c for c in TOR_CENTRE if round(c[0], 4) not in lo]        # (v210)
     if cat == "TTC Etobicoke": return [c for c in TTC_ETOB if round(c[0], 4) not in lo]            # (v153)
     if cat == "Union Station": return [c for c in UNION_STATION if round(c[0], 4) not in lo]       # (v157)
     if cat == "CP Etobicoke Yard": return [c for c in CP_ETOBICOKE if round(c[0], 4) not in lo]   # (v158)
@@ -1749,29 +1756,137 @@ def parakeet_ok():
         except Exception: _pk["ok"] = False
         _pk["t"] = time.time()
     return _pk["ok"]
+_NUMW = {"zero": "0", "oh": "0", "one": "1", "two": "2", "three": "3", "tree": "3", "four": "4", "five": "5", "fife": "5", "six": "6", "seven": "7", "eight": "8",
+         "nine": "9", "niner": "9", "ten": "10", "eleven": "11", "twelve": "12", "thirteen": "13", "fourteen": "14", "fifteen": "15", "sixteen": "16", "seventeen": "17",
+         "eighteen": "18", "nineteen": "19", "twenty": "20", "thirty": "30", "forty": "40", "fifty": "50", "sixty": "60", "seventy": "70", "eighty": "80", "ninety": "90",
+         "hundred": "00", "thousand": "000"}
+def _asr_tokens(text):
+    """A transcript as comparable tokens: words lower-cased, every number as its digits. The ATC model writes "one five zero",
+    Whisper writes "150", Parakeet "one fifty" - the same thing heard, and until v210 counted as three different words."""
+    out = []
+    for w in re.findall(r"[a-z']+|\d+", (text or "").lower()):
+        w = _NUMW.get(w, w)
+        if w.isdigit(): out.extend(w)
+        else: out.append(w)
+    return out
 def _agreement(a, b):
-    """word-level overlap of two transcripts, 0..1"""
-    wa = set(re.findall(r"[a-z0-9']+", (a or "").lower())); wb = set(re.findall(r"[a-z0-9']+", (b or "").lower()))
-    if not wa or not wb: return 0.0
-    return len(wa & wb) / max(1, min(len(wa), len(wb)))
+    """How far two transcripts say the same thing, 0..1: tokens in common (counted, numbers by digit) over the shorter one.
+    (v210) Was a comparison of word sets with no idea of numbers - on airband, where half of every call is numbers, the ATC model
+    and the other engines could not agree even when they had heard the same call."""
+    ta, tb = _asr_tokens(a), _asr_tokens(b)
+    if len(ta) < 2 or len(tb) < 2: return 0.0
+    ca = {}
+    for t in ta: ca[t] = ca.get(t, 0) + 1
+    hit = 0
+    for t in tb:
+        if ca.get(t, 0) > 0: ca[t] -= 1; hit += 1
+    return hit / min(len(ta), len(tb))
+_ASR_EMPTY = {"", "you", "thank you", "thanks for watching", "bye", "yeah", "okay", "ok", "okay so", "so", "hello", "oh", "hmm", "uh", "i", "the"}
+def asr_junk(text):
+    """What a speech recogniser writes when it was given noise: nothing, one of its stock phrases ("Thank you."), or a phrase
+    going round in circles ("go back, go back, go back", "five five five five five ..."). Such a text is treated as no text."""
+    toks = re.findall(r"[a-z0-9']+", (text or "").lower())
+    if " ".join(toks) in _ASR_EMPTY: return True
+    if len(toks) >= 6:
+        for n in (1, 2, 3, 4):                                                # the same 1-4 words over and over: 3 times in a row (a single word: 5)
+            need = 5 if n == 1 else 3                                         # ... AND that run is a good part of the text. A call that
+            for i in range(0, len(toks) - n * need + 1):                      # ends "bye bye, bye bye" is a call.
+                k = 1
+                while toks[i:i + n] == toks[i + k * n:i + (k + 1) * n]: k += 1
+                if k >= need and (n * k >= 0.4 * len(toks) or n * k >= 12): return True
+        if len(toks) >= 9 and len(set(toks)) / len(toks) < 0.34: return True
+    return False
 _TX_FAIL = {}
 def clean_for_asr(src):
-    """(v168) Band-limit to the voice band with a steep sinc filter (kills out-of-band hiss far better than a soft
-    highpass/lowpass), compand to lift quiet radio speech out of the noise floor without clipping the loud parts,
-    then normalize to -1 dBFS - rtl_fm's own output is quiet (comment above: noise ~400, signal ~2000 of 32767),
-    and ASR is measurably more accurate on a clip that is both cleaner and consistently loud. Falls back to the
-    raw clip untouched if sox is missing or the clean pass errors - never blocks a transcript on this step."""
+    """(v168) Band-limit to the voice band with a steep sinc filter, compand to lift quiet radio speech out of the noise floor
+    without clipping the loud parts, then normalize to -1 dBFS. Stock Whisper reads rtl_fm's quiet output better that way. Falls
+    back to the raw clip if sox is missing or errors. (v210) The cleaned copy is written to the temp folder: it used to sit beside
+    the recording as X_clean.wav, where the worker itself and the Recordings tab could take it for a recording."""
     try:
         if not shutil.which("sox"): return src
-        out = src[:-4] + "_clean.wav"
+        import tempfile
+        out = os.path.join(tempfile.gettempdir(), "sdrscanner_asr_" + os.path.basename(src)[:-4] + "_clean.wav")
         r = subprocess.run(["sox", src, out, "sinc", "300-3400", "gain", "-6",
                              "compand", "0.02,0.20", "6:-70,-60,-20", "-5", "-90", "0.1",
                              "norm", "-1"], capture_output=True, text=True, timeout=20)
         return out if r.returncode == 0 and os.path.exists(out) and os.path.getsize(out) > 44 else src
     except Exception:
         return src
+def _asr_engine(script, path, timeout):
+    """Run asr_atc.py / asr_parakeet.py on one file -> its JSON answer ({} when it gave none). (v210) The answer is matched to the
+    path that was PASSED. The old code passed the cleaned copy and then looked for the recording's own name in the answer, so
+    every result of both engines was thrown away whenever the clean-up step worked - which is always. Only stock Whisper's
+    text ever reached the page; the ATC model and the cross-check had been running for nothing."""
+    try:
+        pr = subprocess.run(["nice", "-n", "15", sys.executable, os.path.join(HERE, script), path], capture_output=True, text=True, timeout=timeout, cwd=HERE)
+        for line in pr.stdout.splitlines():
+            try: j = json.loads(line)
+            except ValueError: continue
+            if isinstance(j, dict) and j.get("file") == path: return j
+    except Exception as e:
+        try:
+            with open(os.path.join(HERE, "transcribe.log"), "a") as lf: lf.write(f"{dt.datetime.now():%H:%M:%S} {script} {e!r}\n")
+        except Exception: pass
+    return {}
+def transcribe_clip(f, wb, model):
+    """One recording -> (text for the .txt, details for the .asr.json or None, whisper's return code).
+    Airband (108-137 MHz): the ATC-trained model is the reader, on the recording as it is (the receiver has already filtered and
+    levelled it; on 31 clips, 13 Nov, a second clean-up pass made no measurable difference to this model: mean word confidence
+    0.66 against 0.65). Its voice detector is the judge of whether anybody spoke: on the ten clips where it found no speech,
+    the model with the detector switched off wrote fluent phraseology every time ("cleared to land", "radar contact runway
+    three one"). Parakeet and stock Whisper are the cross-check. What is shown:
+      the ATC text ................ when it heard speech; "(unsure)" in front when its own confidence is low (< 0.62, or under
+                                    five words) AND no other engine heard the same thing (agreement < 0.5)
+      Whisper's text, "(unsure)" .. when the ATC model heard no speech but Whisper and Parakeet agree with each other
+      nothing ..................... otherwise. A lone guess from one general-purpose engine is not shown any more: that is
+                                    where "Welcome back, go back, go back" and "Prime Minister Venta" came from.
+    Everything else: Whisper is the reader, Parakeet the cross-check, as before - except that the cross-check now arrives."""
+    try: clip_mhz = float(os.path.basename(f).split("_")[0])
+    except ValueError: clip_mhz = 0.0
+    air = 108 <= clip_mhz <= 137
+    cf = clean_for_asr(f)
+    try:
+        # low priority, 4 threads: transcription must never make the dashboard or the player sluggish
+        r = subprocess.run(["nice", "-n", "15", wb, "-m", model, "-f", cf, "-nt", "-np", "-l", "en", "-t", "4", "-bs", "5", "-bo", "5", "--prompt", WHISPER_PROMPT],
+                           capture_output=True, text=True, timeout=300)
+        if r.returncode != 0 and not r.stdout.strip(): return None, None, r                 # unreadable right now (still being finalised)
+        txt = " ".join(line.strip() for line in r.stdout.splitlines() if line.strip())
+        txt = re.sub(r"\[.*?\]|\(.*?\)|\*.*?\*", "", txt).strip()                           # drop [BLANK_AUDIO], (music), *noise* markers
+        low = txt.lower()
+        if len(txt) < 3 or low.startswith("toronto pearson tower, arrival"): txt = ""       # echoed prompt
+        if sum(1 for w in ("tower", "arrival", "departure", "runway", "dispatch", "repeater") if w in low) >= 4 and len(txt) > 150: txt = ""   # prompt echoed back
+        if asr_junk(txt): txt = ""
+        alt = ""
+        if parakeet_ok():
+            alt = (_asr_engine("asr_parakeet.py", f, 300).get("text") or "").strip()
+            if asr_junk(alt): alt = ""
+        try:
+            base = os.path.basename(f); alerts_check_text(float(base.split("_")[0]), base.split("_")[1] if "_" in base else "", alt or txt)
+        except Exception: pass
+        if air and atc_ok():
+            j = _asr_engine("asr_atc.py", f, 600)
+            atc = (j.get("text") or "").strip(); conf = j.get("conf"); words = j.get("words") or 0
+            if asr_junk(atc) or words < 2: atc = ""                            # one word is not a call
+            both = _agreement(txt, alt)
+            if atc:
+                agree = max(_agreement(atc, txt), _agreement(atc, alt))
+                unsure = conf is not None and (conf < 0.62 or words < 5) and agree < 0.5
+                return ("(unsure) " if unsure else "") + atc, {"atc": atc, "whisper": txt, "parakeet": alt, "agree": round(agree, 2), "conf": conf, "words": words,
+                                                                 "unsure": unsure, "engines": 3 if alt else 2}, r
+            if txt and alt and both >= 0.5 and len(_asr_tokens(txt)) >= 3:
+                return "(unsure) " + txt, {"atc": "", "whisper": txt, "parakeet": alt, "agree": round(both, 2), "conf": None, "words": 0, "unsure": True, "engines": 3}, r
+            return "", {"atc": "", "whisper": txt, "parakeet": alt, "agree": round(both, 2), "conf": None, "words": 0, "unsure": False, "engines": 3, "nothing": True}, r
+        if parakeet_ok():
+            # whisper large-v3-turbo with the radio vocabulary reads hissy speech far better than Parakeet; Parakeet is the
+            # independent cross-check (the "2 engines agree" tag)
+            return (txt if txt else alt), {"whisper": txt, "parakeet": alt, "agree": round(_agreement(txt, alt), 2)}, r
+        return txt, None, r
+    finally:
+        if cf != f:
+            try: os.remove(cf)
+            except Exception: pass
 def transcribe_worker():
-    """Turns every recording longer than 1.5 s into a .txt blurb with whisper.cpp (if installed - Install transcription.command)."""
+    """Turns every recording into a .txt blurb (whisper.cpp, plus the ATC model and Parakeet when installed - see transcribe_clip)."""
     while True:
         time.sleep(4)
         try:
@@ -1782,73 +1897,25 @@ def transcribe_worker():
             # every scan folder, newest clips first: a chip or a restart starts a new folder and its clips must still get transcripts
             for f in sorted(glob.glob(os.path.join(HERE, "scan_*", "recordings", "*.wav")), key=os.path.getmtime, reverse=True)[:40]:
                 tp = transcript_path(f)
-                if os.path.exists(tp): continue
-                st = os.stat(f)
+                if os.path.exists(tp) or f.endswith("_clean.wav"): continue
+                try: st = os.stat(f)
+                except OSError: continue                                        # pruned between the listing and now
                 if time.time() - st.st_mtime < 3: continue                     # still being written
-                if st.st_size < 44 + RATE * 2 * 2.0: open(tp, "w").write(""); continue
-                cf = clean_for_asr(f)
-                # low priority, 4 threads: transcription must never make the dashboard or the player sluggish
-                r = subprocess.run(["nice", "-n", "15", wb, "-m", model, "-f", cf, "-nt", "-np", "-l", "en", "-t", "4", "-bs", "5", "-bo", "5", "--prompt", WHISPER_PROMPT],
-                                   capture_output=True, text=True, timeout=300)
-                if r.returncode != 0 and not r.stdout.strip():             # unreadable right now (still being finalised): retry later, give up after 3 tries
+                try: air = 108 <= float(os.path.basename(f).split("_")[0]) <= 137
+                except ValueError: air = False
+                # (v210) an airband call is often over in a second and a half ("Jazz 205, contact departure"): those are read too.
+                # Elsewhere two seconds stays the floor (repeater kerchunks, squelch tails).
+                if st.st_size < 44 + RATE * 2 * (1.0 if air else 2.0): open(tp, "w").write(""); continue
+                text, info, r = transcribe_clip(f, wb, model)
+                if text is None:                                                # unreadable right now: retry later, give up after 3 tries
                     _TX_FAIL[f] = _TX_FAIL.get(f, 0) + 1
                     if _TX_FAIL[f] < 3: continue
-                txt = " ".join(line.strip() for line in r.stdout.splitlines() if line.strip())
-                txt = re.sub(r"\[.*?\]|\(.*?\)|\*.*?\*", "", txt).strip()             # drop [BLANK_AUDIO], (music), *noise* markers
-                low = txt.lower()
-                if len(txt) < 3 or low in ("you", "thank you.", "thanks for watching.", "bye.") or low.startswith("toronto pearson tower, arrival"): txt = ""   # hallucinations / echoed prompt
-                if sum(1 for w in ("tower", "arrival", "departure", "runway", "dispatch", "repeater") if w in low) >= 4 and len(txt) > 150: txt = ""   # prompt echoed back
-                # airband: the ATC-fine-tuned Whisper (asr_atc.py) is the primary engine when installed - measured 15% WER vs 95% for stock
-                atc = ""; atc_conf = None; atc_words = 0
-                try: clip_mhz = float(os.path.basename(f).split("_")[0])
-                except ValueError: clip_mhz = 0.0
-                if 108 <= clip_mhz <= 137 and atc_ok():
-                    try:
-                        pr = subprocess.run(["nice", "-n", "15", sys.executable, os.path.join(HERE, "asr_atc.py"), cf], capture_output=True, text=True, timeout=600, cwd=HERE)
-                        for line in pr.stdout.splitlines():
-                            try:
-                                j = json.loads(line)
-                                if j.get("file") == f: atc = (j.get("text") or "").strip(); atc_conf = j.get("conf"); atc_words = j.get("words") or 0
-                            except ValueError: pass
-                    except Exception as e:
-                        with open(os.path.join(HERE, "transcribe.log"), "a") as lf: lf.write(f"{dt.datetime.now():%H:%M:%S} atc {e!r}\n")
-                # second engine (Parakeet, if installed): the better of the two becomes the transcript, the other the cross-check
-                alt = ""
-                if parakeet_ok():
-                    try:
-                        pr = subprocess.run(["nice", "-n", "15", sys.executable, os.path.join(HERE, "asr_parakeet.py"), cf], capture_output=True, text=True, timeout=300, cwd=HERE)
-                        for line in pr.stdout.splitlines():
-                            try:
-                                j = json.loads(line)
-                                if j.get("file") == f: alt = (j.get("text") or "").strip()
-                            except ValueError: pass
-                    except Exception as e:
-                        with open(os.path.join(HERE, "transcribe.log"), "a") as lf: lf.write(f"{dt.datetime.now():%H:%M:%S} parakeet {e!r}\n")
-                try:
-                    base = os.path.basename(f); alerts_check_text(float(base.split("_")[0]), base.split("_")[1] if "_" in base else "", alt or txt)
-                except Exception: pass
-                if atc:
-                    agree = _agreement(atc, txt or alt) if (txt or alt) else 0.0
-                    # (v203) The ATC model writes fluent radio phraseology even when it heard next to nothing. When it was not sure of
-                    # its own words (mean word probability under 0.62) or wrote fewer than five, and no second engine heard the same
-                    # thing, the transcript says "(unsure)" in front. Nothing is hidden.
-                    unsure = atc_conf is not None and (atc_conf < 0.62 or atc_words < 5) and agree < 0.5
-                    open(tp, "w").write(("(unsure) " if unsure else "") + atc)
-                    json.dump({"atc": atc, "whisper": txt, "parakeet": alt, "agree": round(agree, 2), "conf": atc_conf, "words": atc_words, "unsure": unsure}, open(tp[:-4] + ".asr.json", "w"))
-                elif alt:
-                    agree = _agreement(txt, alt)
-                    # measured on real Pearson clips: whisper large-v3-turbo with the radio vocabulary reads hissy airband far better
-                    # than Parakeet; Parakeet is the independent cross-check (the "2 engines agree" tag)
-                    primary = txt if txt else alt
-                    open(tp, "w").write(primary)
-                    json.dump({"whisper": txt, "parakeet": alt, "agree": round(agree, 2)}, open(tp[:-4] + ".asr.json", "w"))
-                else:
-                    open(tp, "w").write(txt)
-                if r.returncode != 0:
+                    text = ""
+                if not os.path.exists(f): continue                              # pruned while it was being read: leave no orphan transcript
+                open(tp, "w").write(text)
+                if info is not None: json.dump(info, open(tp[:-4] + ".asr.json", "w"))
+                if r is not None and r.returncode != 0:
                     with open(os.path.join(HERE, "transcribe.log"), "a") as lf: lf.write(f"{dt.datetime.now():%H:%M:%S} {os.path.basename(f)} rc={r.returncode} {r.stderr[-300:]}\n")
-                if cf != f:
-                    try: os.remove(cf)
-                    except Exception: pass
                 if busy: break                                                   # keep the CPU for live audio while listening
         except Exception as e:
             try:

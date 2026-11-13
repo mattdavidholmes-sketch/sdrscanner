@@ -23,6 +23,8 @@ AIRPORTS = {
     ],
     "YOO Oshawa (~50 km - out of range from Mississauga)": [("ATIS/AWOS", 125.675), ("Ground", 118.400), ("Tower / MF", 120.100), ("Toronto Arr/Dep", 133.400)],
     "CNC3 Brampton (~15 km)": [("ATF / UNICOM", 123.300)],
+    # (v210) canairradio.ca/yyz.html; the West Low sectors also radioreference.com/db/subcat/69789
+    "Toronto Centre (enroute control - from here mostly the aircraft are heard)": [("Hamilton sector (west, low)", 132.475), ("Grimsby sector (west, low)", 133.300), ("Centralia sector (west, high)", 125.775), ("Oakville sector (west, high)", 134.925), ("East Radar (east, low)", 124.925), ("Simcoe sector (east, low)", 127.000), ("East Radar, Peterborough site (east, low)", 134.250), ("Barrie sector (east, high)", 134.575)],
     "Common": [("Guard / emergency", 121.500), ("London FIC flight plans", 123.150), ("Toronto VFR", 133.400)],
 }
 FRSGMRS = [(f"FRS {i}", f) for i, f in enumerate([462.5625,462.5875,462.6125,462.6375,462.6625,462.6875,462.7125,467.5625,467.5875,467.6125,467.6375,467.6625,467.6875,467.7125], 1)]

@@ -128,8 +128,10 @@
   arr:[[132.800,'YYZ ARR 3','Arrival'],[124.475,'YYZ ARR 1','Arrival 2'],[125.400,'YYZ ARR 2','Arrival 3']],
   depN:[127.575,'YYZ DEP 1','Departure North'],depS:[128.800,'YYZ DEP 2','Departure South'],
   gndN:[121.650,'YYZ GND N','Ground North'],gndS:[121.900,'YYZ GND S','Ground South'],apron:[122.825,'YYZ APRON','Apron'],
-  ytzTwr:[118.200,'YTZ TWR','Billy Bishop Tower'],ytzGnd:[121.700,'YTZ GND','Billy Bishop Ground'],vfr:[133.400,'TOR VFR','VFR advisory']};
- const ALLCH=[CH.twrN,CH.twrS,CH.depN,CH.depS,CH.gndN,CH.gndS,CH.apron,CH.ytzTwr,CH.ytzGnd,CH.vfr].concat(CH.arr);
+  ytzTwr:[118.200,'YTZ TWR','Billy Bishop Tower'],ytzGnd:[121.700,'YTZ GND','Billy Bishop Ground'],vfr:[133.400,'TOR VFR','VFR advisory'],
+  // (v210) Toronto Centre, the enroute sectors around Toronto (canairradio.ca/yyz.html, radioreference.com/db/subcat/69789): west / east of Pearson, low / high
+  ctr:{wl:[[132.475,'CTR HAMILT','Centre · Hamilton sector (west, low)'],[133.300,'CTR GRIMSB','Centre · Grimsby sector (west, low)']],wh:[[125.775,'CTR CENTRA','Centre · Centralia sector (west, high)'],[134.925,'CTR OAKVIL','Centre · Oakville sector (west, high)']],el:[[124.925,'CTR E RDR','Centre · East Radar (east, low)'],[127.000,'CTR SIMCOE','Centre · Simcoe sector (east, low)'],[134.250,'CTR E RDR2','Centre · East Radar, Peterborough site (east, low)']],eh:[[134.575,'CTR BARRIE','Centre · Barrie sector (east, high)']]}};
+ const ALLCH=[CH.twrN,CH.twrS,CH.depN,CH.depS,CH.gndN,CH.gndS,CH.apron,CH.ytzTwr,CH.ytzGnd,CH.vfr].concat(CH.arr,CH.ctr.wl,CH.ctr.wh,CH.ctr.el,CH.ctr.eh);
 
  // ---- geometry. Runway ends from OurAirports (public domain): [end, lat, lon, opposite end, lat, lon]
  const RW=[['05',43.67390,-79.66390,'23',43.69470,-79.63330],['06L',43.66105,-79.62343,'24R',43.67898,-79.59737],['06R',43.65830,-79.62193,'24L',43.67529,-79.59724],
@@ -168,6 +170,60 @@
   [/^(CRJ|E13|E14|ERJ|MD8|MD9|DC9|B712|B717|F100|F70|GLF|GL[0-9]|GLEX|CL[36]|C25|C5[0-9]|C68|C75|LJ|FA[5-9]|F2TH|F900|H25|HA4T|E35L|E50P|E55P|E545|E550|PRM1|BE40|ASTR|G150|G280|WW24|SBR|YK4)/,'rear'],
   [/^(C1[05-9]|C2[0-1]|C3[0-9]|P28|PA2|PA3[0-4]|PA44|SR2|DA4|DA6|BE3|BE5|BE9|M20|RV|GLID|AA5|AC|BL8|C7|CH7|DV20|P2|EVOT|ULAC|HXB|LNC)/,'ga']];
  const fam=t=>{t=(t||'').toUpperCase();for(const [re,f] of T)if(re.test(t))return f;return 'narrow';};
+ // ---- (v210) Every aircraft drawn to its own plan (top view, nose up, 64x64 box): real wingspan, real length, its engine layout.
+ // SPEC: ICAO type designator -> [wingspan m, length m, layout]. Layouts: n2 narrow-body twin, w2 wide-body twin, w4 four engines,
+ // r2 engines on the rear fuselage (regional and business jets), p2 twin turboprop, p4 four turboprops, p1 single turboprop,
+ // g1 piston single, g2 piston twin, h helicopter (span = rotor diameter). Dimensions: manufacturers' published figures, rounded.
+ const SPEC={A318:[34.1,31.4,'n2'],A319:[35.8,33.8,'n2'],A320:[35.8,37.6,'n2'],A321:[35.8,44.5,'n2'],A19N:[35.8,33.8,'n2'],A20N:[35.8,37.6,'n2'],A21N:[35.8,44.5,'n2'],
+  B733:[28.9,33.4,'n2'],B734:[28.9,36.4,'n2'],B735:[28.9,31,'n2'],B736:[35.8,31.2,'n2'],B737:[35.8,33.6,'n2'],B738:[35.8,39.5,'n2'],B739:[35.8,42.1,'n2'],B37M:[35.9,35.6,'n2'],B38M:[35.9,39.5,'n2'],B39M:[35.9,42.2,'n2'],B3XM:[35.9,43.8,'n2'],
+  B752:[38,47.3,'n2'],B753:[38,54.4,'n2'],BCS1:[35.1,35,'n2'],BCS3:[35.1,38.7,'n2'],E170:[26,29.9,'n2'],E75L:[28.7,31.7,'n2'],E75S:[28.7,31.7,'n2'],E190:[28.7,36.2,'n2'],E195:[28.7,38.7,'n2'],E290:[33.7,36.2,'n2'],E295:[35.1,41.5,'n2'],
+  B762:[47.6,48.5,'w2'],B763:[47.6,54.9,'w2'],B764:[51.9,61.4,'w2'],B772:[60.9,63.7,'w2'],B77L:[64.8,63.7,'w2'],B773:[60.9,73.9,'w2'],B77W:[64.8,73.9,'w2'],B788:[60.1,56.7,'w2'],B789:[60.1,62.8,'w2'],B78X:[60.1,68.3,'w2'],
+  A306:[44.8,54.1,'w2'],A310:[43.9,46.7,'w2'],A332:[60.3,58.8,'w2'],A333:[60.3,63.7,'w2'],A338:[64,58.8,'w2'],A339:[64,63.7,'w2'],A359:[64.8,66.8,'w2'],A35K:[64.8,73.8,'w2'],MD11:[51.7,61.6,'w2'],DC10:[50.4,55.5,'w2'],
+  A342:[60.3,59.4,'w4'],A343:[60.3,63.7,'w4'],A345:[63.5,67.9,'w4'],A346:[63.5,75.4,'w4'],A388:[79.8,72.7,'w4'],B744:[64.4,70.7,'w4'],B748:[68.4,76.3,'w4'],B74S:[59.6,56.3,'w4'],A124:[73.3,69.1,'w4'],C17:[51.8,53,'w4'],IL76:[50.5,46.6,'w4'],
+  CRJ1:[21.2,26.8,'r2'],CRJ2:[21.2,26.8,'r2'],CRJ7:[23.2,32.3,'r2'],CRJ9:[24.9,36.2,'r2'],CRJX:[26.2,39.1,'r2'],E135:[20,26.3,'r2'],E145:[20,29.9,'r2'],E45X:[20,29.9,'r2'],B712:[28.4,37.8,'r2'],MD82:[32.8,45,'r2'],MD83:[32.8,45,'r2'],MD88:[32.8,45,'r2'],
+  GLF4:[23.7,26.9,'r2'],GLF5:[28.5,29.4,'r2'],GLF6:[30.4,30.4,'r2'],GLEX:[28.7,30.3,'r2'],GL5T:[28.7,29.5,'r2'],GL7T:[31.7,33.9,'r2'],CL30:[19.5,20.9,'r2'],CL35:[21,20.9,'r2'],CL60:[19.6,20.9,'r2'],
+  C25A:[15.1,14.5,'r2'],C25B:[16.3,15.6,'r2'],C25C:[15.5,16.3,'r2'],C510:[13.2,12.4,'r2'],C525:[14.3,13,'r2'],C550:[15.9,14.4,'r2'],C560:[15.9,14.9,'r2'],C56X:[17.2,16,'r2'],C680:[19.2,19.4,'r2'],C68A:[22,19,'r2'],C700:[21,22.3,'r2'],C750:[19.4,22,'r2'],
+  LJ35:[12,14.8,'r2'],LJ45:[14.6,17.7,'r2'],LJ60:[13.4,17.9,'r2'],LJ75:[15.5,17.7,'r2'],F2TH:[19.3,20.2,'r2'],F900:[19.3,20.2,'r2'],FA7X:[26.2,23.4,'r2'],FA8X:[26.3,24.5,'r2'],E50P:[12.3,12.8,'r2'],E55P:[15.9,15.6,'r2'],E545:[20.3,20.7,'r2'],E550:[20.3,20.7,'r2'],
+  PC24:[17,16.8,'r2'],H25B:[15.7,15.6,'r2'],BE40:[13.3,14.8,'r2'],G280:[19.2,20.3,'r2'],HA4T:[18.8,21.1,'r2'],
+  DH8A:[25.9,22.3,'p2'],DH8B:[25.9,22.3,'p2'],DH8C:[27.4,25.7,'p2'],DH8D:[28.4,32.8,'p2'],AT43:[24.6,22.7,'p2'],AT45:[24.6,22.7,'p2'],AT46:[24.6,22.7,'p2'],AT72:[27.1,27.2,'p2'],AT75:[27.1,27.2,'p2'],AT76:[27.1,27.2,'p2'],
+  B190:[17.6,17.6,'p2'],BE20:[16.6,13.3,'p2'],B350:[17.7,14.2,'p2'],BE9L:[15.3,10.8,'p2'],SW4:[17.4,18.1,'p2'],SF34:[21.4,19.7,'p2'],DHC6:[19.8,15.8,'p2'],E120:[19.8,20,'p2'],PA31:[12.4,10,'g2'],C130:[40.4,29.8,'p4'],C30J:[40.4,29.8,'p4'],P3:[30.4,35.6,'p4'],
+  PC12:[16.3,14.4,'p1'],C208:[15.9,11.5,'p1'],TBM7:[12.7,10.6,'p1'],TBM8:[12.8,10.7,'p1'],TBM9:[12.8,10.7,'p1'],DHC2:[14.6,9.2,'p1'],DHC3:[17.7,12.8,'p1'],PA46:[13.1,8.8,'p1'],
+  C150:[10.2,7.3,'g1'],C152:[10.2,7.3,'g1'],C172:[11,8.3,'g1'],C177:[10.8,8.3,'g1'],C182:[11,8.8,'g1'],C206:[11,8.6,'g1'],C210:[11.2,8.6,'g1'],P28A:[9.1,7.3,'g1'],P28B:[10.7,7.5,'g1'],P28R:[10.7,7.5,'g1'],PA32:[11,8.4,'g1'],
+  SR20:[11.7,7.9,'g1'],SR22:[11.7,7.9,'g1'],DA20:[10.9,7.2,'g1'],DA40:[11.9,8.1,'g1'],M20P:[11,8.2,'g1'],BE35:[10.2,8.1,'g1'],BE36:[10.2,8.4,'g1'],DV20:[10.9,7.2,'g1'],
+  PA34:[11.9,8.7,'g2'],PA44:[11.8,8.4,'g2'],DA42:[13.4,8.6,'g2'],DA62:[14.6,9.2,'g2'],BE58:[11.5,9.1,'g2'],BE55:[11.5,8.5,'g2'],C310:[11.3,9.7,'g2'],C340:[11.6,10.5,'g2'],C421:[12.5,11.1,'g2'],
+  R22:[7.7,8.7,'h'],R44:[10.1,11.7,'h'],R66:[10.1,11.7,'h'],B06:[10.2,12,'h'],B407:[10.7,12.7,'h'],B412:[14,17.1,'h'],B429:[11,13,'h'],EC35:[10.2,12.2,'h'],EC45:[11,13,'h'],EC30:[10.7,12.6,'h'],AS50:[10.7,12.9,'h'],AS55:[10.7,12.9,'h'],
+  A109:[11,13,'h'],A139:[13.8,16.7,'h'],S76:[13.4,16,'h'],S92:[17.2,20.9,'h'],H60:[16.4,19.8,'h']};
+ const FAMSPEC={narrow:[35.8,38,'n2'],wide:[60.3,63,'w2'],quad:[66,72,'w4'],rear:[23,29,'r2'],prop:[27,27,'p2'],ga:[11,8.3,'g1'],heli:[11,13,'h']};
+ const specOf=t=>SPEC[(t||'').toUpperCase()]||FAMSPEC[fam(t)];
+ const PLANS={};
+ function planOf(t){const sp=specOf(t),key=sp.join();if(PLANS[key])return PLANS[key];
+  const [S,L,lay]=sp;if(lay==='h')return PLANS[key]=SIL.heli;
+  const k=60/Math.max(S,L),n=v=>(Math.round(v*10)/10),cx=32,l=L*k,b=S*k/2,y0=32-l/2,y1=32+l/2,jet=/^[nwr]/.test(lay);
+  const fwm={n2:3.9,w2:5.8,w4:6.3,r2:2.6,p2:2.7,p4:3.4,p1:1.7,g1:1.25,g2:1.35}[lay],w=Math.max(fwm*k,2.4),h=w/2;
+  const sw=Math.tan(({n2:27,w2:32,w4:34,r2:24,p2:3,p4:3,p1:2,g1:0,g2:1}[lay])*Math.PI/180);
+  const cr=b*2*({n2:.19,w2:.20,w4:.21,r2:.20,p2:.115,p4:.13,p1:.12,g1:.145,g2:.15}[lay]),ct=cr*(jet?.26:(lay[0]==='p'?.55:.9));
+  const yr=y0+l*({n2:.36,w2:.35,w4:.33,r2:.44,p2:.36,p4:.30,p1:.27,g1:.25,g2:.27}[lay]);                 // wing leading edge at the fuselage
+  const le=x=>yr+sw*(x-h);                                                                                 // leading edge y at a distance x from the centre line
+  const P=[];
+  // fuselage: round nose, parallel sides, tapered tail
+  P.push(`M${cx} ${n(y0)}Q${n(cx+h)} ${n(y0)} ${n(cx+h)} ${n(y0+1.5*w)}L${n(cx+h)} ${n(y1-2.4*w)}Q${n(cx+h*.9)} ${n(y1-.4*w)} ${cx} ${n(y1)}Q${n(cx-h*.9)} ${n(y1-.4*w)} ${n(cx-h)} ${n(y1-2.4*w)}L${n(cx-h)} ${n(y0+1.5*w)}Q${n(cx-h)} ${n(y0)} ${cx} ${n(y0)}z`);
+  // wings
+  for(const s of [1,-1])P.push(`M${n(cx+s*h*.6)} ${n(yr)}L${n(cx+s*b)} ${n(le(b))}L${n(cx+s*b)} ${n(le(b)+ct)}L${n(cx+s*h*.6)} ${n(yr+cr)}z`);
+  // tailplane (a T-tail sits at the very end)
+  const tb=b*(jet?.36:.34),ty=lay==='r2'?y1-cr*.62:y1-cr*(jet?.78:.62),tsw=jet?sw*1.05:0.05,tc=cr*(jet?.5:.48);
+  for(const s of [1,-1])P.push(`M${n(cx+s*h*.3)} ${n(ty)}L${n(cx+s*tb)} ${n(ty+tsw*tb)}L${n(cx+s*tb)} ${n(ty+tsw*tb+tc*.45)}L${n(cx+s*h*.3)} ${n(ty+tc)}z`);
+  // engines
+  const nac=(x,ya,len,d)=>P.push(`M${n(x-d/2)} ${n(ya+d*.3)}Q${n(x-d/2)} ${n(ya)} ${n(x)} ${n(ya)}Q${n(x+d/2)} ${n(ya)} ${n(x+d/2)} ${n(ya+d*.3)}L${n(x+d/2)} ${n(ya+len)}L${n(x-d/2)} ${n(ya+len)}z`);
+  const prop=(x,y,r)=>P.push(`M${n(x-r)} ${n(y-.5)}L${n(x+r)} ${n(y-.5)}L${n(x+r)} ${n(y+.5)}L${n(x-r)} ${n(y+.5)}z`);
+  if(lay==='n2'||lay==='w2'||lay==='w4'){const d=Math.max((lay==='n2'?2.2:3.2)*k,2),len=d*1.9;
+   for(const f of (lay==='w4'?[.34,.62]:[.33]))for(const s of [1,-1]){const x=h+f*(b-h);nac(cx+s*x,le(x)-len*.62,len,d);}}
+  if(lay==='r2'){const d=Math.max(1.5*k,1.8),len=d*2.4;for(const s of [1,-1])nac(cx+s*(h+d*.62),y0+l*.68,len,d);}
+  if(lay==='p2'||lay==='p4'||lay==='g2'){const d=Math.max((lay==='g2'?.9:1.3)*k,1.8),len=cr*1.25,r=Math.max((lay==='g2'?1:1.95)*k,2.4);
+   for(const f of (lay==='p4'?[.3,.58]:[.3]))for(const s of [1,-1]){const x=h+f*(b-h);nac(cx+s*x,le(x)-len*.45,len,d);prop(cx+s*x,le(x)-len*.45-.4,r);}}
+  if(lay==='p1'||lay==='g1')prop(cx,y0+.3,Math.max((lay==='p1'?1.35:.95)*k,2.6));
+  return PLANS[key]=P.join('');}
+ // drawn size on the map: by the real wingspan, so a 787 is plainly bigger than an A320 and a Cessna is small but still findable
+ const planPx=t=>{const [S,L]=specOf(t);return Math.round(Math.min(66,Math.max(20,15+Math.max(S,L)*.62)));};
 
  // ---- what the aircraft is doing: the server's answer when it sends one, else worked out here from altitude, climb, distance and heading
  function phase(x){if(x.phase)return x.phase;if(x.on_ground)return 'on the ground';const alt=x.alt_ft||0,vr=x.vrate||0,tr=x.track||0,f=fam(x.type),rt=(x.route||'');
@@ -197,7 +253,10 @@
    const north=x.lat>YYZ[0];return{why:'climbing out, '+(north?'north':'south')+' of the field - with Toronto Departure',f:north?[CH.depN,CH.depS]:[CH.depS,CH.depN]};}
   if(alt<4000&&dz>10&&dt>6&&light(x))return{why:'low and local - VFR advisory',f:[CH.vfr]};
   if(alt<6000&&dz<30&&!light(x)&&(x.vrate||0)<=300)return{why:'low near Pearson, being vectored - probably with Toronto Arrival',f:CH.arr};
-  return{why:(p||'enroute')+' - with Toronto Centre (not in the bank)',f:[]};}
+  // (v210) enroute: Toronto Centre. Its side of Pearson, and the low sectors first below 18,000 ft (where Canadian high-level airspace
+  // begins - the sectors' real limits are not in the sources used). pick() then prefers the one where voices were heard lately.
+  const K=CH.ctr,west=x.lon<YYZ[1],high=alt>=18000,ord=west?(high?K.wh.concat(K.wl):K.wl.concat(K.wh)):(high?K.eh.concat(K.el):K.el.concat(K.eh));
+  return{why:(p||'enroute')+' - with Toronto Centre, '+(west?'west':'east')+' side (which sector is a best guess)',f:ord};}
  window.__ft={phase,freqs};                                             // the Monitor card reads this to put callsigns on its channel tiles
  const listen=(f,n)=>{if(typeof P!=='undefined'&&P.play)P.play(+f,'am',n||String(f));};
 
@@ -293,8 +352,8 @@
   mapEl.addEventListener('click',ev=>{const l=ev.target.closest('a[data-f],a[data-more]');if(!l)return;ev.preventDefault();if(l.dataset.f)listen(l.dataset.f,l.dataset.n);else if(typeof openAir==='function'){if(wrap.classList.contains('full'))full(false);openAir(l.dataset.more);}});}
  function paintRunways(use){const dark=THEME==='dark';ENDS.forEach(e=>{if(!e.line)return;const on=!!use[e.n];e.line.setStyle(on?{color:dark?'#3ddc84':'#0a9c4a',weight:2.5,opacity:.95}:{color:dark?'#9aa7b8':'#55606e',weight:1,opacity:.28});});
   ENDS.forEach(e=>{if(!e.tag)return;const pair=ENDS.filter(o=>o.n.slice(0,2)===e.n.slice(0,2));const el=e.tag.getElement();if(el)el.classList.toggle('on',pair.some(o=>use[o.n]));});}
- function icon(x){const p=ph(phase(x)),outline=x.emergency?'#ff5c5c':(p==='arr'?'#3ddc84':(p==='dep'?'#5aa9ff':'#1a1a1a')),fill=x.on_ground?'#b8961a':'#ffd21f',sz=x.on_ground?20:(p?40:32);
-  return L.divIcon({className:'plane',iconSize:[sz,sz],iconAnchor:[sz/2,sz/2],html:`<svg viewBox="0 0 64 64" style="width:${sz-4}px;height:${sz-4}px;opacity:${x.on_ground?.75:1};transform:rotate(${x.track||0}deg)">${SIL[fam(x.type)].split(/(?=M)/).filter(Boolean).map(d=>`<path fill="${fill}" stroke="${outline}" stroke-width="${outline==='#1a1a1a'?1.5:3}" stroke-linejoin="round" paint-order="stroke" d="${d}"/>`).join('')}</svg>`});}
+ function icon(x){const p=ph(phase(x)),outline=x.emergency?'#ff5c5c':(p==='arr'?'#3ddc84':(p==='dep'?'#5aa9ff':'#1a1a1a')),fill=x.on_ground?'#b8961a':'#ffd21f',sz=Math.max(16,Math.round(planPx(x.type)*(x.on_ground?.7:1)));   // (v210) drawn by wingspan, not by what it is doing
+  return L.divIcon({className:'plane',iconSize:[sz,sz],iconAnchor:[sz/2,sz/2],html:`<svg viewBox="0 0 64 64" style="width:${sz-4}px;height:${sz-4}px;opacity:${x.on_ground?.75:1};transform:rotate(${x.track||0}deg)">${planOf(x.type).split(/(?=M)/).filter(Boolean).map(d=>`<path fill="${fill}" stroke="${outline}" stroke-width="${outline==='#1a1a1a'?1.5:3}" stroke-linejoin="round" paint-order="stroke" d="${d}"/>`).join('')}</svg>`});}
  const role=f=>E(f[2]||f[1]);
  // (v209) the route in words: city and airport, one line per stop (the server sends x.places; the bare codes stay as the fallback)
  function stops(x){const p=x.places||[];if(!p.length)return x.route?' · '+E(x.route):'';return p.map((o,i)=>`<br><span class="mu">${i===0?'from':(i===p.length-1?'to':'via')}</span> <b>${E(o.where||o.code)}</b>${o.name?' · '+E(o.name):''}${o.where?' ('+E(o.code)+')':''}`).join('');}
@@ -313,7 +372,7 @@
    let o=MK[x.icao];
    if(!o){o=MK[x.icao]={m:L.marker(ll,{icon:icon(x),zIndexOffset:p?500:0}).addTo(layer),pts:[],ik:'',lk:'',lh:''};o.m.bindPopup('',{maxWidth:290,autoPan:false});o.m.on('click',()=>select(x.icao,false));}
    else o.m.setLatLng(ll);
-   o.x=x;const ik=[fam(x.type),Math.round((x.track||0)/5),p,x.on_ground?1:0,x.emergency?1:0].join();if(ik!==o.ik){o.ik=ik;o.m.setIcon(icon(x));o.m.setZIndexOffset(p?500:0);}
+   o.x=x;const ik=[(x.type||''),Math.round((x.track||0)/5),p,x.on_ground?1:0,x.emergency?1:0].join();if(ik!==o.ik){o.ik=ik;o.m.setIcon(icon(x));o.m.setZIndexOffset(p?500:0);}
    const last=o.pts[o.pts.length-1];if(!last||last[0]!==x.lat||last[1]!==x.lon){o.pts.push(ll);if(o.pts.length>40)o.pts.shift();}
    if(o.pts.length>1){if(!o.trail)o.trail=L.polyline(o.pts,{weight:1.5,opacity:.65,interactive:false}).addTo(layer);else o.trail.setLatLngs(o.pts);o.trail.setStyle({color:col});}
    const lk=x.on_ground?'':(p||'oth'),lh=tagHtml(x,p);

@@ -163,6 +163,10 @@ REFERENCE = {
     127.575: ("YYZ DEP 1", "", "", 0),  128.800: ("YYZ DEP 2", "", "", 0),
     122.825: ("YYZ APRON", "", "", 0),  122.275: ("YYZ APRN N", "", "", 0), 122.075: ("YYZ APRN S", "", "", 0),
     131.175: ("YYZ PAD", "", "", 0),    119.300: ("YYZ VFR", "", "", 0),    133.400: ("TOR VFR", "", "", 0),
+    # (v210) Toronto Centre sectors around Toronto (canairradio.ca/yyz.html; West Low also radioreference.com/db/subcat/69789)
+    132.475: ("CTR HAMILT", "", "", 0),  133.300: ("CTR GRIMSB", "", "", 0),  125.775: ("CTR CENTRA", "", "", 0),
+    134.925: ("CTR OAKVIL", "", "", 0),  124.925: ("CTR E RDR", "", "", 0),  127.000: ("CTR SIMCOE", "", "", 0),
+    134.250: ("CTR E RDR2", "", "", 0),  134.575: ("CTR BARRIE", "", "", 0),
     145.110: ("VE3WOO", "82.5", "-", 0.6),   145.130: ("VA3GTU 2M", "103.5", "-", 0.6),
     145.230: ("VE3OBN", "103.5", "-", 0.6),  145.430: ("VE3MIS", "103.5", "-", 0.6),
     145.450: ("VE3YPL", "85.4", "-", 0.6),   146.805: ("VE3SKV", "110.9", "-", 0.6),
