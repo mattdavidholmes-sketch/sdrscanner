@@ -56,6 +56,14 @@ def phase(x):
     to_yyz = rt.rstrip().endswith("CYYZ"); to_ytz = rt.rstrip().endswith("CYTZ"); from_yyz = rt.lstrip().startswith("CYYZ"); from_ytz = rt.lstrip().startswith("CYTZ")
     dz, bz = _geo((x["lat"], x["lon"]), YYZ); dt, bt = _geo((x["lat"], x["lon"]), YTZ)
     az = abs((tr - bz + 540) % 360 - 180); at = abs((tr - bt + 540) % 360 - 180)
+    # (v221) The table's direction against what the aircraft is doing. 13 Nov 11:44: SKW6488, on file Chicago -> Toronto, was "on
+    # short final" at 675 ft and four minutes later at 7,625 ft, climbing: it had been taking off, the table has the inbound leg
+    # of that flight number. A firm climb close to Pearson voids "to Pearson", a firm descent voids "from Pearson"; the rules for
+    # an aircraft without a route then decide. And JZA541, on file "-> CYYZ", landed at Billy Bishop: a turboprop below 3,500 ft,
+    # nearer the island than Pearson and pointing at it, is the island's.
+    if to_yyz and vr > 300 and alt < 9000 and dz < 35: to_yyz = False
+    if from_yyz and vr < -300 and alt < 10000 and dz < 60: from_yyz = False
+    if to_yyz and _small(x.get("type")) and dt < dz and dt < 15 and alt < 3500 and at < 45: to_yyz = False; to_ytz = True
     if not (to_ytz or from_ytz):
         if to_yyz and alt < 12000 and vr <= 100 and dz < 60: return "arriving YYZ"
         if from_yyz and alt < 12000 and vr > 100 and dz < 45: return "departing YYZ"

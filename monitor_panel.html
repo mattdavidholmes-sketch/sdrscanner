@@ -271,10 +271,14 @@
  // ---- what the aircraft is doing: the server's answer when it sends one, else worked out here from altitude, climb, distance and heading
  function phase(x){if(x.phase)return x.phase;if(x.on_ground)return 'on the ground';const alt=x.alt_ft||0,vr=x.vrate||0,tr=x.track||0,f=fam(x.type),rt=(x.route||'');
   const small=(f==='prop'||f==='ga'||f==='heli');                       // Billy Bishop takes turboprops, GA and helicopters only
-  const toYYZ=/CYYZ\s*$/.test(rt)||/→\s*CYYZ/.test(rt),toYTZ=/CYTZ\s*$/.test(rt)||/→\s*CYTZ/.test(rt),fromYYZ=/^\s*CYYZ/.test(rt),fromYTZ=/^\s*CYTZ/.test(rt);
+  let toYYZ=/CYYZ\s*$/.test(rt)||/→\s*CYYZ/.test(rt),toYTZ=/CYTZ\s*$/.test(rt)||/→\s*CYTZ/.test(rt),fromYYZ=/^\s*CYYZ/.test(rt),fromYTZ=/^\s*CYTZ/.test(rt);
   const geo=ap=>{const d=km([x.lat,x.lon],ap);const dn=(ap[1]-x.lon)*D2R,y=Math.sin(dn)*Math.cos(ap[0]*D2R),xx=Math.cos(x.lat*D2R)*Math.sin(ap[0]*D2R)-Math.sin(x.lat*D2R)*Math.cos(ap[0]*D2R)*Math.cos(dn);
    const brg=(Math.atan2(y,xx)/D2R+360)%360;return [d,Math.abs((tr-brg+540)%360-180)];};
   const [dz,az]=geo(YYZ),[dt,at]=geo(YTZ);
+  // (v221) the table's direction against what the aircraft is doing - the same three lines as follow_traffic.py phase()
+  if(toYYZ&&vr>300&&alt<9000&&dz<35)toYYZ=false;
+  if(fromYYZ&&vr<-300&&alt<10000&&dz<60)fromYYZ=false;
+  if(toYYZ&&small&&dt<dz&&dt<15&&alt<3500&&at<45){toYYZ=false;toYTZ=true;}
   if(!toYTZ&&!fromYTZ){if(toYYZ&&alt<12000&&vr<=100&&dz<60)return 'arriving YYZ';if(fromYYZ&&alt<12000&&vr>100&&dz<45)return 'departing YYZ';
    if(!toYYZ&&!fromYYZ&&!(f==='ga'||f==='heli'||x.category==='A7')){if(dz<45&&alt<9000&&vr<=0&&az<50)return 'arriving YYZ';if(dz<35&&alt<9000&&vr>200&&az>110)return 'departing YYZ';
     if(x.type&&!small&&dz<60&&dz<km([x.lat,x.lon],HAM)&&alt<10000&&(vr<-300||(alt<8000&&vr<=100&&dz<40)))return 'arriving YYZ';}}   // (v214) downwind: pointing away from the field, coming down
