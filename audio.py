@@ -97,12 +97,22 @@ class ZcrSquelch:
         # (v178) look-ahead for AM: the output runs 2 blocks (0.2 s) behind the decision, so when the squelch opens the 0.2 s it
         # needed to make up its mind is played too instead of being lost (the first syllable of every airband call was clipped).
         self.look_n = 2 if mode == "am" else 0; self.look = []; self._aud = b""; self._closed = False
+        # (v216) Held open by hand: the loudspeaker gets everything, but a recording of it would be one long clip of hiss (13 Nov:
+        # 443.8375 for 20 s, saved whole). A second, automatic squelch listens to the same audio and the recorder goes by that one.
+        self.auto = ZcrSquelch(mode, None) if (manual == 0 and mode != "wbfm") else None
+    @property
+    def rec_open(self):
+        """what a recorder goes by: this squelch - or, when it is held open by hand, what the automatic squelch makes of the audio"""
+        return self.auto.open if self.auto is not None else self.open
     def set_wide(self, on=True):
         """Known or expected transmissions (directory channels, confirmed voice, a channel the user marked 'open more'):
         threshold 0.03 closer to the hiss (opens on weaker, noisier speech) and a 2.5 s hang so the reply is not clipped."""
         self.wide = bool(on); self.margin = (0.04 if self.mode != "am" else 0.03) if on else self._m0
+        if self.auto is not None: self.auto.set_wide(on)
         self.hang_blocks = (40 if on else 30) if self.mode == "am" else (25 if on else 15)
     def process(self, b):
+        if self.auto is not None:
+            self.auto.detect_data = self.detect_data; self.auto.process(b)
         out = self._proc(b)
         if not self.look_n or self.always or len(b) < 4: return out
         self.look.append([out, self._aud, self._closed])
@@ -352,7 +362,7 @@ class Session:
                 except Exception: pass
     def read(self, n=4800):
         b = self.sox.stdout.read(n)
-        if b and self.rec: self.rec.feed(b, self.gate.open, self.gate.data and not self.keep_all)
+        if b and self.rec: self.rec.feed(b, self.gate.rec_open, self.gate.data and not self.keep_all)       # (v216) rec_open: see ZcrSquelch
         return b
     def stop(self):
         self.alive = False

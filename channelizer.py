@@ -358,8 +358,9 @@ class Channel:
                 self.live = b""                                          # nothing to the speakers yet either: no 0.6 s noise burst on a false carrier
             else:
                 if self.rec:
-                    for b in self.pending: self.rec.feed(b, True)
-                    self.rec.feed(out, True)
+                    ro = g.rec_open                                      # (v216) squelch held open by hand: only what the automatic squelch would have opened on is recorded
+                    for b in self.pending: self.rec.feed(b, ro)
+                    self.rec.feed(out, ro)
                 self.live = b"".join(self.pending_raw) + gated           # confirmed: the held 0.6 s plays first, then live
                 self.pending = []; self.pending_raw = []
             self.max_mod = max(self.max_mod, self.voice_mod); self.open_n += 1; self.snr_sum += (self.pow_db - (self.floor_db or self.pow_db))
