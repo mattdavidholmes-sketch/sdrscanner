@@ -786,7 +786,8 @@ class Channelizer:
                 hist = [v for v in list(c0.cnr_hist) if v is not None]; steady = len(hist) >= max(3, len(c0.cnr_hist) // 2)
                 m["air"] = {"cnr_db": round(float(np.median(hist)), 1) if steady else round(rx.cnr_db, 1), "carrier": bool(steady or rx.open),
                             "open": bool(rx.open), "voice": bool(c0.confirmed),
-                            "mod": round(rx.mod, 2), "offset_hz": round(rx.f_off), "threshold_db": round(rx.threshold, 1), "held_open": bool(rx.always)}
+                            "mod": round(rx.mod, 2), "offset_hz": round(rx.f_off), "threshold_db": round(rx.threshold, 1), "held_open": bool(rx.always),
+                            "iq": self.iq, "iq_min": self.iq_min}                # (v206) the dashboard passes "air" and "monitor" on to /meter, nothing else
             return m
         n_all = sum(len(c) for _, c in self.groups)
         chans = []
@@ -799,7 +800,7 @@ class Channelizer:
             except Exception: pass
         m["monitor"] = {"mhz": self.mhz, "name": self.name, "n": n_all, "idx": (sum(len(c) for _, c in self.groups[:self.gi]) if self.gi >= 0 else 0), "heard": self.heard[-8:],
                         "group": self.gi + 1, "groups": len(self.groups), "load": round(self.load, 2), "engine": "channelizer", "chans": chans,
-                        "active": a.mhz if a else None, "center": round((self.center or 0) / 1e6, 4), "blocks": self.blocks, "audio": "sox" if self.sox is not None else "dsp",
+                        "active": a.mhz if a else None, "center": round((self.center or 0) / 1e6, 4), "blocks": self.blocks, "audio": "sox" if self.sox is not None else "dsp", "iq": self.iq, "iq_min": self.iq_min,
                         "lap_s": self.lap_s, "laps": self.laps, "hot": len([1 for t in list(self.hotwin.values()) if time.time() - t < 300]),
                         "span": ([round(self.groups[self.gi][1][0][0], 3), round(self.groups[self.gi][1][-1][0], 3)] if 0 <= self.gi < len(self.groups) else None)}
         return m
