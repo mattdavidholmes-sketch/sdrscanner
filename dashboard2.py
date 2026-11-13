@@ -1729,6 +1729,20 @@ def air_freqs(x):
     order = ((K["wh"] + K["wl"]) if high else (K["wl"] + K["wh"])) if west else ((K["eh"] + K["el"]) if high else (K["el"] + K["eh"]))
     return f"{p} - with Toronto Centre, {'west' if west else 'east'} side (which sector is a best guess)", order
 
+def fr24_link(x):
+    """(v212) A Flightradar24 address that opens something. Checked in a browser on 13 Nov:
+      flightradar24.com/CJT620             -> the live flight (an airline callsign that is in the air)
+      flightradar24.com/CFOCS              -> "404 - Page out of coverage" (a private aircraft flying under its registration;
+                                              the app used this form for every callsign, and the hex code for aircraft with none)
+      flightradar24.com/data/aircraft/c-focs -> the aircraft's own page, by registration
+      flightradar24.com/43.68,-79.63/10    -> the live map centred there
+    So: an airline-style callsign in the air gets the live flight; otherwise the aircraft's page when the registration is known;
+    otherwise the live map centred on where the aircraft is."""
+    cs = (x.get("callsign") or "").strip().upper(); reg = (x.get("reg") or "").strip().lower()
+    if re.fullmatch(r"[A-Z]{3}\d{1,4}[A-Z]{0,2}", cs) and not x.get("on_ground"): return f"https://www.flightradar24.com/{cs}"
+    if re.fullmatch(r"[a-z0-9]{1,2}-[a-z0-9]{2,5}|n[0-9][a-z0-9]{1,5}", reg): return f"https://www.flightradar24.com/data/aircraft/{reg}"
+    if x.get("lat") is not None and x.get("lon") is not None: return f"https://www.flightradar24.com/{x['lat']:.2f},{x['lon']:.2f}/11"
+    return "https://www.flightradar24.com/"
 _AP = {"d": None}
 def airport(code):
     """(v209) 'CYYZ' or 'YYZ' -> {"code": "YYZ", "where": "Toronto, ON", "name": "Toronto Pearson Intl"} or None. The table is
@@ -1740,11 +1754,31 @@ def airport(code):
     d = _AP["d"]; c = (code or "").strip().upper()
     e = d["icao"].get(c) or d["icao"].get(d["iata"].get(c, ""))
     if not e: return None
-    ia, city, name, country, reg = e
+    ia, city, name, country, reg = e[:5]
     short = re.sub(r"\s+International Airport$", " Intl", name); short = re.sub(r"\s+Airport$", "", short)
     tail = reg if (reg and country == "Canada") else (f"{reg}, USA" if (reg and country == "USA") else country)
     where = ", ".join(x for x in (city, tail) if x)
-    return {"code": ia or c, "where": where, "name": short}
+    return {"code": ia or c, "where": where, "name": short, "lat": e[5] if len(e) > 6 else None, "lon": e[6] if len(e) > 6 else None}
+def route_fit(route, lat, lon):
+    """(v212) Does the route on file fit where the aircraft is? The route comes from a table keyed by callsign alone, and airlines
+    reuse a flight number for several legs: on 13 Nov CJT620 was shown as Halifax -> St. John's while it climbed out over Lake
+    Ontario, 1,300 km west of Halifax (Matt: "this flight data cannot be correct"). A leg is believed only when the aircraft is
+    somewhere between its two airports: going A -> aircraft -> B is longer than A -> B by no more than 80 km plus 6 % of the leg
+    (never more than a quarter of the leg, never less than 80 km - room for a holding pattern or a downwind leg past the airport,
+    not for New York -> London seen over Toronto). Of several legs the one that fits best is the one shown. -> (route as shown, its stops); ("", []) when no leg fits; the route untouched
+    when an airport is not in the table and nothing can be checked."""
+    stops = [p.strip() for p in re.split(r"→|->", route or "") if p.strip()]
+    if lat is None or lon is None or len(stops) < 2: return route, route_places(route)
+    aps = [(airport(p) if p != "?" else None) for p in stops]; best = None; blind = False
+    for i in range(len(stops) - 1):
+        a, b = aps[i], aps[i + 1]
+        if not a or not b or a.get("lat") is None or b.get("lat") is None: blind = True; continue
+        ab = _dist_brg((a["lat"], a["lon"]), (b["lat"], b["lon"]))[0]
+        detour = _dist_brg((a["lat"], a["lon"]), (lat, lon))[0] + _dist_brg((lat, lon), (b["lat"], b["lon"]))[0] - ab
+        if detour <= max(80.0, min(0.25 * ab, 80.0 + 0.06 * ab)) and (best is None or detour < best[0]): best = (detour, i)
+    if best is not None:
+        i = best[1]; return f"{stops[i]} → {stops[i + 1]}", [aps[i], aps[i + 1]]
+    return (route, route_places(route)) if blind else ("", [])
 def route_places(route):
     """'CYYZ → LLBG' or 'YYZ → TLV' -> the same stops with city and airport name; [] when no stop is in the table."""
     stops = [p.strip() for p in re.split(r"→|->", route or "") if p.strip()]
@@ -1804,6 +1838,12 @@ def aircraft_now(max_age=10):
         out.sort(key=lambda x: (x["on_ground"], x["km"]))                     # airborne first, nearest first; Pearson ground traffic after
         try: aircraft_routes(out[:60])
         except Exception: pass
+        for x in out:                                                            # (v212) before anything is worked out from the route: does it fit where the aircraft is?
+            if x.get("route"):
+                try:
+                    filed = x["route"]; x["route"], x["_places"] = route_fit(filed, x.get("lat"), x.get("lon"))
+                    if not x["route"]: x["route_file"] = filed
+                except Exception: pass
         try:
             import asr_atc
             spoken = {x["callsign"]: asr_atc.spoken(x["callsign"]) for x in out if x["callsign"]}
@@ -1827,8 +1867,8 @@ def aircraft_now(max_age=10):
         for x in out:
             try: air_extras(x)
             except Exception: x["heli"] = False; x["eta_min"] = None; x["runway"] = ""
-            x["fr24"] = f"https://www.flightradar24.com/{x['callsign']}" if x["callsign"] else f"https://www.flightradar24.com/data/aircraft/{x['icao']}"
-            try: x["places"] = route_places(x.get("route"))                  # (v209) where it is coming from and going to, in words
+            x["fr24"] = fr24_link(x)
+            try: x["places"] = x.pop("_places", None) or route_places(x.get("route"))    # (v209) where it is coming from and going to, in words
             except Exception: x["places"] = []
             x["alt_m"] = round(x["alt_ft"] / 3.281) if x["alt_ft"] else None
         try: air_log(out)

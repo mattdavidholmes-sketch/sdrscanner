@@ -17,7 +17,10 @@ import math, sys, time
 YYZ = (43.6777, -79.6248); YTZ = (43.6275, -79.3962)
 CH = {"twrN": (118.700, "YYZ TWR N"), "twrS": (118.350, "YYZ TWR S"), "arr": [(132.800, "YYZ ARR 3"), (124.475, "YYZ ARR 1"), (125.400, "YYZ ARR 2")],
       "depN": (127.575, "YYZ DEP 1"), "depS": (128.800, "YYZ DEP 2"), "gndN": (121.650, "YYZ GND N"), "gndS": (121.900, "YYZ GND S"), "apron": (122.825, "YYZ APRON"),
-      "ytzTwr": (118.200, "YTZ TWR"), "ytzGnd": (121.700, "YTZ GND"), "vfr": (133.400, "TOR VFR")}
+      "ytzTwr": (118.200, "YTZ TWR"), "ytzGnd": (121.700, "YTZ GND"), "vfr": (133.400, "TOR VFR"),
+      # (v212) Toronto Centre around Toronto: west / east of Pearson, low / high sectors (the same table as dashboard.TOR_CENTRE; sources there)
+      "ctr": {"wl": [(132.475, "CTR HAMILT"), (133.300, "CTR GRIMSB")], "wh": [(125.775, "CTR CENTRA"), (134.925, "CTR OAKVIL")],
+              "el": [(124.925, "CTR E RDR"), (127.000, "CTR SIMCOE"), (134.250, "CTR E RDR2")], "eh": [(134.575, "CTR BARRIE")]}}
 RW = [("05", 43.67390, -79.66390, "23", 43.69470, -79.63330), ("06L", 43.66105, -79.62343, "24R", 43.67898, -79.59737), ("06R", 43.65830, -79.62193, "24L", 43.67529, -79.59724),
       ("15L", 43.69190, -79.64220, "33R", 43.67000, -79.61390), ("15R", 43.68580, -79.65170, "33L", 43.66750, -79.62830)]
 _KX = 111.32 * math.cos(math.radians(YYZ[0])); _KY = 110.57                # flat-earth km around the field: fine within 60 km
@@ -113,7 +116,12 @@ def detail(x):
         return f"climbing out, {'north' if north else 'south'} of the field - with Toronto Departure", [CH["depN"], CH["depS"]] if north else [CH["depS"], CH["depN"]], ""
     if alt < 4000 and dz > 10 and dt > 6 and _light(x): return "low and local - VFR advisory", [CH["vfr"]], ""
     if alt < 6000 and dz < 30 and not _light(x) and (x.get("vrate") or 0) <= 300: return "low near Pearson, being vectored - probably with Toronto Arrival", list(CH["arr"]), ""
-    return f"{p or 'enroute'} - with Toronto Centre (not in the bank)", [], ""
+    # (v212) enroute: Toronto Centre. THIS line wrote "with Toronto Centre (not in the bank)" into the Aircraft tab - v210 added the
+    # sectors everywhere else and left this file alone. Its side of Pearson, low sectors first below 18,000 ft (where Canadian
+    # high-level airspace begins; the sectors' real limits are not in the sources used).
+    K = CH["ctr"]; west = x["lon"] < YYZ[1]; high = alt >= 18000
+    order = ((K["wh"] + K["wl"]) if high else (K["wl"] + K["wh"])) if west else ((K["eh"] + K["el"]) if high else (K["el"] + K["eh"]))
+    return f"{p or 'enroute'} - with Toronto Centre, {'west' if west else 'east'} side (which sector is a best guess)", order, ""
 
 def freqs(x):
     """channels this aircraft is on right now, most likely first"""
@@ -135,7 +143,7 @@ def follow_list(limit=10):
         for x in ac:
             if x.get("lat") is None: continue
             parked = x.get("on_ground") and (x.get("speed_kt") or 0) < 5
-            for i, (f, n) in enumerate(freqs(x)):
+            for i, (f, n) in enumerate(c for c in freqs(x) if not c[1].startswith("CTR ")):   # (v212) the Follow bank stays on Pearson's and Billy Bishop's channels: Centre is its own bank
                 w = (3.0 if i == 0 else 1.0) * (2.0 if x.get("km", 99) < 15 else 1.0) * (0.15 if parked else 1.0)   # a parked aircraft is not talking
                 s = score.setdefault((f, n), 0.0); score[(f, n)] = s + w
     except Exception: pass

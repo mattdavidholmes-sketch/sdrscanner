@@ -39,7 +39,7 @@
    q('#monheard').querySelectorAll('button').forEach(b=>b.onclick=()=>listen(b.dataset.m,null,b.dataset.name));}
   const airband=chans.some(x=>x.mhz>=118&&x.mhz<137)||(mo.mhz>=118&&mo.mhz<137);
   if(airband){airPeek();const a=air;if(a&&a.aircraft){const near=a.aircraft.filter(x=>!x.on_ground).slice(0,4);
-   q('#monair').innerHTML='✈ nearest now: '+(near.length?near.map(x=>`<a href="https://www.flightradar24.com/${E(x.callsign||('data/aircraft/'+(x.reg||x.icao)))}" target="_blank" rel="noopener">${E(x.callsign||x.icao)}</a> ${x.km} km ${dirn(x.bearing)}${x.alt_ft!=null?' · '+Number(x.alt_ft).toLocaleString()+' ft':''}${x.vrate?' '+(x.vrate>0?'↑':'↓'):''}${x.route?' · '+E(x.route):''}`).join(' &nbsp;·&nbsp; '):'nothing airborne nearby')+(a.source?' <span class="sv">('+E(a.source)+')</span>':'');}}
+   q('#monair').innerHTML='✈ nearest now: '+(near.length?near.map(x=>`<a href="${E(x.fr24||'https://www.flightradar24.com/')}" target="_blank" rel="noopener">${E(x.callsign||x.icao)}</a> ${x.km} km ${dirn(x.bearing)}${x.alt_ft!=null?' · '+Number(x.alt_ft).toLocaleString()+' ft':''}${x.vrate?' '+(x.vrate>0?'↑':'↓'):''}${x.route?' · '+E(x.route):''}`).join(' &nbsp;·&nbsp; '):'nothing airborne nearby')+(a.source?' <span class="sv">('+E(a.source)+')</span>':'');}}
   else q('#monair').innerHTML='';
   // the player bar's level meter: the page's own meter() returns before updating it while monitoring
   const l=q('#lvl');if(l){const p=pct(m.level);const i=l.querySelector('i'),s=l.querySelector('s');if(i)i.style.width=p+'%';l.classList.toggle('open',!!m.open);peak=Math.max(p,peak*0.96);if(s)s.style.left=peak+'%';}
@@ -64,6 +64,38 @@
 .airpanel .airhead #apsrc{flex:1 1 90px;min-width:0}
 .airpanel .airbtns{display:flex;flex-wrap:wrap;gap:6px;margin-left:auto}.airpanel .airbtns button{white-space:nowrap;padding:7px 11px}
 .airsplit{display:grid;grid-template-columns:minmax(0,1fr);gap:10px}
+/* (v212) the selected aircraft: a panel on the map's left edge (a bottom sheet on a phone), as flight trackers do it */
+.acsel{position:absolute;z-index:1150;left:10px;top:10px;bottom:10px;width:min(336px,calc(100% - 20px));overflow:auto;-webkit-overflow-scrolling:touch;background:rgba(17,22,31,.97);color:#e6ebf2;border:1px solid #34405a;border-radius:12px;box-shadow:0 10px 30px rgba(0,0,0,.55);padding:12px 12px 10px;font:13px/1.4 -apple-system,system-ui,sans-serif}
+.acsel[hidden]{display:none}
+.acsel .x{position:absolute;right:4px;top:4px;border:0;background:none;color:#8a95a6;font-size:22px;line-height:1;padding:6px 10px;cursor:pointer;min-height:0}
+.acsel .cs{font:700 1.5rem/1.1 ui-monospace,Menlo,monospace;padding-right:34px}
+.acsel .said{color:#8a95a6;font-size:.84rem;margin-top:2px}
+.acsel .emg{display:inline-block;background:#ff5c5c;color:#fff;border-radius:5px;padding:1px 6px;font:700 .72rem ui-monospace,Menlo,monospace;margin-left:6px;vertical-align:middle}
+.acsel .pic{display:flex;align-items:center;gap:10px;margin:8px 0}
+.acsel .pic svg{width:72px;height:72px;flex:0 0 72px}
+.acsel .ty b{display:block;font-size:.95rem}
+.acsel .mu{color:#8a95a6}
+.acsel .doing{border-left:3px solid #5aa9ff;padding:2px 0 2px 9px;margin:2px 0 4px;color:#cfd6e2}
+.acsel .rt{border:1px solid #2a3140;border-radius:9px;padding:7px 10px;margin:8px 0;background:#161b24}
+.acsel .rt .st{display:flex;gap:8px;align-items:baseline;padding:2px 0}
+.acsel .rt .st i{flex:0 0 32px;font-style:normal;color:#8a95a6;font-size:.68rem;text-transform:uppercase;letter-spacing:.06em}
+.acsel .rt .st b{font-size:.98rem}
+.acsel .rt .st span{display:block;color:#8a95a6;font-size:.82rem}
+.acsel .grid{display:grid;grid-template-columns:1fr 1fr;gap:6px;margin:8px 0}
+.acsel .grid div{border:1px solid #2a3140;border-radius:9px;padding:6px 9px;background:#161b24;min-width:0}
+.acsel .grid i{display:block;font-style:normal;color:#8a95a6;font-size:.66rem;text-transform:uppercase;letter-spacing:.07em}
+.acsel .grid b{font:600 .98rem ui-monospace,Menlo,monospace;white-space:nowrap}
+.acsel h5{margin:11px 0 5px;font-size:.68rem;text-transform:uppercase;letter-spacing:.07em;color:#8a95a6;font-weight:600}
+.acsel .ch{display:flex;flex-direction:column;gap:5px}
+.acsel .ch button{display:flex;flex-wrap:wrap;align-items:baseline;gap:2px 8px;width:100%;text-align:left;padding:8px 10px;border-radius:9px;border:1px solid #2a3140;background:#161b24;color:#e6ebf2;cursor:pointer;font:inherit;min-height:0}
+.acsel .ch button:hover{border-color:#3ddc84}
+.acsel .ch button b{font-family:ui-monospace,Menlo,monospace;color:#3ddc84;font-size:1rem}
+.acsel .ch button.pk{border-color:#2d6b4a;background:#14221b}
+.acsel .ch button.on{background:#3ddc84;border-color:#3ddc84;color:#04130a}.acsel .ch button.on b,.acsel .ch button.on small{color:#04130a}
+.acsel .ch button small{flex:1 0 100%;color:#8a95a6;font-size:.78rem}
+.acsel .lk{display:flex;gap:14px;flex-wrap:wrap;margin-top:12px;padding-top:9px;border-top:1px solid #2a3140}
+.acsel .lk a{color:#3ddc84;text-decoration:none}
+@media(max-width:760px){.acsel{left:0;right:0;top:auto;bottom:0;width:auto;max-height:70%;border-radius:14px 14px 0 0;border-width:1px 0 0;padding:10px 12px}.acsel .pic{margin:5px 0}.acsel .pic svg{width:44px;height:44px;flex-basis:44px}.acsel .cs{font-size:1.25rem}}
 .airmapwrap{position:relative;isolation:isolate;border-radius:12px;overflow:hidden;border:1px solid var(--line,#2a3140);background:#0e131a;height:min(58vh,520px);min-height:300px}
 .airmapwrap .airmap{position:absolute;inset:0;background:#0e131a}
 .airmapwrap.full{position:fixed;inset:0;z-index:1000;height:auto;min-height:0;border:0;border-radius:0}
@@ -281,7 +313,7 @@
  const card=document.createElement('div');card.className='card airpanel';card.id='airpanel';
  card.innerHTML=`<div class="airhead"><h3>Aircraft <span id="apn" class="tag"></span><span id="aprw" class="tag rw" style="display:none" title="worked out from aircraft lined up with a runway right now (GPS position against the runway centreline)"></span></h3>
   <span class="sv" id="apsrc"></span><span class="airbtns" id="apbtns"><button class="ghost" id="apmon" title="Monitor on the whole Airport group: every YYZ/YTZ channel decoded at once">▶ All airport channels</button></span></div>
- <div class="airsplit"><div class="airmapwrap" id="airmapwrap"><div class="airmap" id="airmap"></div>
+ <div class="airsplit"><div class="airmapwrap" id="airmapwrap"><div class="airmap" id="airmap"></div><div class="acsel" id="acsel" hidden></div>
    <div class="maptools"><button data-go="home" title="centre the map on home">Home</button><button data-go="yyz" title="centre the map on Pearson">Pearson</button><button data-go="all" title="fit every aircraft on the map">All</button>
     <button id="aplabels" title="which aircraft get a name tag on the map"></button><button id="aptheme" title="switch between the dark and the light map"></button><button id="apfull" title="full-screen map">⤢</button></div>
    <div class="maplegend"><span><i style="background:#3ddc84"></i>arriving</span><span><i style="background:#5aa9ff"></i>departing</span><span><i style="background:#ffd21f"></i>passing</span><span><i style="background:none;border:1px dashed #3ddc84"></i>heard on air</span><span style="color:#3ddc84">- - runway in use</span></div></div>
@@ -331,7 +363,7 @@
  const lbl=(ll,text,cls)=>L.marker(ll,{interactive:false,keyboard:false,icon:L.divIcon({className:'maplbl '+(cls||''),html:'<span>'+text+'</span>',iconSize:[0,0]})});
  function paintStatic(){const dark=THEME==='dark';STATIC.forEach(s=>s.setStyle&&s.setStyle(s._st(dark)));}
  function initMap(a){HOME=(a.home&&a.home.length)?a.home:[43.6532,-79.3832];
-  MAP=L.map(mapEl,{zoomControl:true,attributionControl:true});MAP.attributionControl.setPrefix(false);
+  MAP=L.map(mapEl,{zoomControl:true,attributionControl:true});MAP.on('click',()=>{if(SEL)desel();});   // (v212) a click on the bare map closes the selected aircraft's panelMAP.attributionControl.setPrefix(false);
   MAP.fitBounds(L.latLngBounds([HOME,YYZ,YTZ]).pad(.55));FIRST=true;
   const add=(l,st)=>{if(st){l._st=st;STATIC.push(l);}return l.addTo(MAP);};
   // distance rings round home
@@ -370,19 +402,20 @@
   const seen=new Set(),use={},now=Date.now();
   (a.aircraft||[]).forEach(x=>{if(x.lat==null)return;seen.add(x.icao);const p=ph(phase(x)),ll=[x.lat,x.lon],col=x.emergency?'#ff5c5c':(p==='arr'?'#3ddc84':(p==='dep'?'#5aa9ff':'#8b949e'));
    let o=MK[x.icao];
-   if(!o){o=MK[x.icao]={m:L.marker(ll,{icon:icon(x),zIndexOffset:p?500:0}).addTo(layer),pts:[],ik:'',lk:'',lh:''};o.m.bindPopup('',{maxWidth:290,autoPan:false});o.m.on('click',()=>select(x.icao,false));}
+   if(!o){o=MK[x.icao]={m:L.marker(ll,{icon:icon(x),zIndexOffset:p?500:0}).addTo(layer),pts:[],ik:'',lk:'',lh:''};o.m.on('click',()=>select(x.icao,false));}
    else o.m.setLatLng(ll);
    o.x=x;const ik=[(x.type||''),Math.round((x.track||0)/5),p,x.on_ground?1:0,x.emergency?1:0].join();if(ik!==o.ik){o.ik=ik;o.m.setIcon(icon(x));o.m.setZIndexOffset(p?500:0);}
    const last=o.pts[o.pts.length-1];if(!last||last[0]!==x.lat||last[1]!==x.lon){o.pts.push(ll);if(o.pts.length>40)o.pts.shift();}
    if(o.pts.length>1){if(!o.trail)o.trail=L.polyline(o.pts,{weight:1.5,opacity:.65,interactive:false}).addTo(layer);else o.trail.setLatLngs(o.pts);o.trail.setStyle({color:col});}
    const lk=x.on_ground?'':(p||'oth'),lh=tagHtml(x,p);
    if(lk!==o.lk){o.lk=lk;o.m.unbindTooltip();if(lk)o.m.bindTooltip(lh,{permanent:true,direction:'right',offset:[p?17:13,0],className:'plabel '+lk});}else if(lk&&lh!==o.lh)o.m.setTooltipContent(lh);
-   o.lh=lh;o.m.setPopupContent(pop(x));
+   o.lh=lh;
    const heard=!!HEARD[x.callsign];if(heard&&!o.ring)o.ring=L.circleMarker(ll,{radius:19,color:'#3ddc84',weight:2,fill:false,dashArray:'3 4',interactive:false}).addTo(layer);else if(!heard&&o.ring){layer.removeLayer(o.ring);o.ring=null;}if(o.ring)o.ring.setLatLng(ll);
    // runway in use: anybody on approach lined up with a centreline, or just off the end of a runway
    if(!x.on_ground&&/YYZ/.test(phase(x))){if(p==='arr'){const r=linedUp(x,false);if(r&&r.out<32){use[r.n]=1;RWSEEN.land[r.n]=now;}}else if(p==='dep'&&(x.alt_ft||0)<3500){const r=linedUp(x,true);if(r)RWSEEN.dep[r.n]=now;}}
    if(x.emergency&&!EMG.has(x.icao)){EMG.add(x.icao);if(typeof toast==='function')toast('🚨 EMERGENCY squawk '+(x.squawk||'')+' - '+(x.callsign||x.icao)+' '+x.km+' km');}});
   for(const k in MK)if(!seen.has(k))drop(k);
+  SPOKEN=a.spoken||{};if(SEL&&!MK[SEL])desel();else paintSel();
   USE=use;paintRunways(use);
   if(FIRST){FIRST=false;const pts=[HOME,YYZ,YTZ].concat(Object.values(MK).filter(o=>ph(phase(o.x))&&!o.x.on_ground).map(o=>[o.x.lat,o.x.lon]));MAP.fitBounds(L.latLngBounds(pts).pad(.12),{maxZoom:11});}   // first view: home, both airports, everyone working them
   const recent=o=>Object.keys(o).filter(n=>now-o[n]<600000).sort(),ln=recent(RWSEEN.land),dp=recent(RWSEEN.dep),rw=q('#aprw');
@@ -390,11 +423,34 @@
   if(SEL&&MK[SEL]){if(!SELRING)SELRING=L.circleMarker(MK[SEL].m.getLatLng(),{radius:24,color:'#e6ebf2',weight:1.5,fill:false,interactive:false}).addTo(MAP);else SELRING.setLatLng(MK[SEL].m.getLatLng());}}
  function markSel(){document.querySelectorAll('#airside [data-icao]').forEach(el=>el.classList.toggle('sel',el.dataset.icao===SEL));if(!SEL&&SELRING){MAP.removeLayer(SELRING);SELRING=null;}}
  // pick an aircraft: from the list (the map goes to it) or on the map (the list marks it)
+ // ---- (v212) the selected aircraft's panel. Everything about it in one place, and the channels it is most likely on as buttons:
+ // the first one is the pick (heard there / the only one with voices lately / the best guess), the rest follow.
+ let SPOKEN={},SELK='';const selEl=q('#acsel');
+ function selHTML(x){const pk=pick(x),fr=pk.fr,p=phase(x),pl=x.places||[],cur=(typeof P!=='undefined'&&P.cur)?P.cur.mhz:null;
+  const big=`<svg viewBox="0 0 64 64" style="transform:rotate(${x.track||0}deg)">${planOf(x.type).split(/(?=M)/).filter(Boolean).map(d=>`<path fill="#ffd21f" stroke="#10151d" stroke-width="1.2" stroke-linejoin="round" paint-order="stroke" d="${d}"/>`).join('')}</svg>`;
+  const stop=(o,i)=>`<div class="st"><i>${i===0?'from':(i===pl.length-1?'to':'via')}</i><div><b>${E(o.where||o.code)}</b><span>${o.name?E(o.name)+' ':''}${o.where?'('+E(o.code)+')':''}</span></div></div>`;
+  const cell=(k,v)=>`<div><i>${k}</i><b>${v}</b></div>`,sp=SPOKEN[x.callsign];
+  return `<button class="x" data-x="1" title="close">×</button>
+   <div class="cs">${E(x.callsign||x.icao)}${x.emergency?`<span class="emg">SQUAWK ${E(x.squawk||'')}</span>`:''}</div>${sp&&sp!==x.callsign?`<div class="said">on the radio: "${E(sp)}"</div>`:''}
+   <div class="pic">${big}<div class="ty"><b>${E(x.desc||x.type||'type not known')}</b><span class="mu">${[x.type,x.reg,x.operator].filter(Boolean).map(E).join(' · ')}</span></div></div>
+   <div class="doing">${E(fr.why&&fr.why!==p?fr.why:p)}</div>
+   <h5>${pk.list.length?'Listen to it':'No channel to offer for it'}</h5><div class="ch">${pk.list.map((f,i)=>`<button data-f="${f[0]}" data-n="${E(f[1])}" class="${i===0?'pk':''}${cur!=null&&Math.abs(cur-f[0])<0.003?' on':''}"><span>${cur!=null&&Math.abs(cur-f[0])<0.003?'■':'▶'}</span><b>${f[0].toFixed(3)}</b><span>${role(f)}</span>${i===0&&pk.note?`<small>${E(pk.note)}</small>`:''}</button>`).join('')}</div>
+   ${pl.length?`<h5>Route</h5><div class="rt">${pl.map(stop).join('')}</div>`:(x.route?`<h5>Route</h5><div class="rt">${E(x.route)}</div>`:(x.route_file?`<h5>Route</h5><div class="mu">The route on file for this callsign (${E(x.route_file)}) does not fit where the aircraft is, so it is not shown.</div>`:''))}
+   <div class="grid">${cell('Altitude',x.on_ground?'on the ground':ft(x.alt_ft))}${cell('Climb / descent',x.vrate?(x.vrate>0?'↑ ':'↓ ')+Math.abs(x.vrate)+' ft/min':'level')}${cell('Speed',(x.speed_kt||0)+' kt')}${cell('Heading',(x.track||0)+'°')}${cell('From home',x.km+' km '+dirn(x.bearing))}${cell('Squawk',E(x.squawk||'—'))}</div>
+   ${HEARD[x.callsign]?`<h5>Heard on the radio</h5><div class="mu">${E(HEARD[x.callsign])}</div>`:''}
+   <div class="lk">${x.fr24?`<a href="${E(x.fr24)}" target="_blank" rel="noopener">Flightradar24 ↗</a>`:''}<a href="#" data-more="${E(x.icao)}">full details…</a></div>`;}
+ function paintSel(){const o=SEL&&MK[SEL];if(!o){selEl.hidden=true;SELK='';return;}const h=selHTML(o.x);if(h!==SELK){const y=selEl.scrollTop;SELK=h;selEl.innerHTML=h;selEl.scrollTop=y;}selEl.hidden=false;}
+ function desel(){SEL=null;SELK='';selEl.hidden=true;markSel();}
+ selEl.addEventListener('click',ev=>{const b=ev.target.closest('button[data-f]');if(b){if(typeof P!=='undefined'&&P.cur&&Math.abs(P.cur.mhz-(+b.dataset.f))<0.003&&P.stop)P.stop();else listen(b.dataset.f,b.dataset.n);setTimeout(()=>{SELK='';paintSel();},400);return;}
+  if(ev.target.closest('[data-x]')){desel();return;}const m=ev.target.closest('a[data-more]');if(m){ev.preventDefault();if(typeof openAir==='function'){if(wrap.classList.contains('full'))full(false);openAir(m.dataset.more);}}});
  function select(icao,fromList){const o=MK[icao];if(!o||!MAP)return;
-  if(fromList){if(wrap.getBoundingClientRect().bottom<120||wrap.getBoundingClientRect().top>innerHeight-120)wrap.scrollIntoView({behavior:'smooth',block:'center'});MAP.setView(o.m.getLatLng(),Math.max(MAP.getZoom(),11),{animate:true});}
-  o.m.openPopup();SEL=icao;if(SELRING)SELRING.setLatLng(o.m.getLatLng());else SELRING=L.circleMarker(o.m.getLatLng(),{radius:24,color:'#e6ebf2',weight:1.5,fill:false,interactive:false}).addTo(MAP);markSel();
+  if(fromList){if(wrap.getBoundingClientRect().bottom<120||wrap.getBoundingClientRect().top>innerHeight-120)wrap.scrollIntoView({behavior:'smooth',block:'center'});MAP.setView(o.m.getLatLng(),Math.max(MAP.getZoom(),11),{animate:false});}
+  SEL=icao;paintSel();if(SELRING)SELRING.setLatLng(o.m.getLatLng());else SELRING=L.circleMarker(o.m.getLatLng(),{radius:24,color:'#e6ebf2',weight:1.5,fill:false,interactive:false}).addTo(MAP);markSel();
   if(!fromList){const el=q('#airside [data-icao="'+icao+'"]');if(el&&innerWidth>=1000)el.scrollIntoView({block:'nearest',behavior:'smooth'});
-   const pe=o.m.getPopup().getElement();if(pe){const a=pe.getBoundingClientRect(),b=mapEl.getBoundingClientRect(),dx=a.left<b.left+8?a.left-b.left-8:(a.right>b.right-8?a.right-b.right+8:0),dy=a.top<b.top+48?a.top-b.top-48:0;if(dx||dy)MAP.panBy([dx,dy],{animate:true});}}}
+  }
+  // keep the aircraft clear of its own panel: left of the map on a wide screen, the bottom on a phone
+  const pt=MAP.latLngToContainerPoint(o.m.getLatLng()),r=selEl.getBoundingClientRect(),b=mapEl.getBoundingClientRect();
+  if(innerWidth>760){const edge=r.right-b.left+40;if(pt.x<edge)MAP.panBy([pt.x-edge-30,0],{animate:true});}else{const edge=r.top-b.top-40;if(pt.y>edge)MAP.panBy([0,pt.y-edge+30],{animate:true});}}
  // map tools
  const paintLbl=()=>{q('#aplabels').textContent='Tags: '+({airport:'airport',all:'all',off:'off'}[LBL]);};paintLbl();q('#aptheme').textContent=THEME==='dark'?'☀ Light':'☾ Dark';
  q('#aplabels').onclick=()=>{mapEl.classList.remove('lbl-'+LBL);LBL={airport:'all',all:'off',off:'airport'}[LBL];mapEl.classList.add('lbl-'+LBL);LS.set('airlbl',LBL);paintLbl();};
