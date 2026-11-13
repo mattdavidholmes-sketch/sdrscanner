@@ -934,7 +934,9 @@ def air_heard(window=900):
             stamp = dt.datetime.fromtimestamp(os.path.getmtime(f)).strftime("%H:%M"); norm = _say_norm(txt.lower()); said_txt = txt[:110] + ("..." if len(txt) > 110 else "")
             for tel, nums in live.items():
                 if not tel: continue
-                for mm in re.finditer(r"\b" + re.escape(tel) + r" ?(\d{1,5})(?!\d)", norm):
+                # (v217) the radio name with or without spaces inside it: at 04:21 on 13 Nov the recogniser wrote "good morning star
+                # eight zero eight two" four times for MAL8082, whose radio name is "Morningstar", and none of them matched
+                for mm in re.finditer(r"\b" + r" ?".join(re.escape(c) for c in tel.replace(" ", "")) + r" ?(\d{1,5})(?!\d)", norm):
                     said = mm.group(1).lstrip("0") or "0"; how = ""
                     if said in nums: cs = nums[said]
                     else:
