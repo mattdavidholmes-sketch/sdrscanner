@@ -219,7 +219,7 @@
   PC24:[17,16.8,'r2'],H25B:[15.7,15.6,'r2'],BE40:[13.3,14.8,'r2'],G280:[19.2,20.3,'r2'],HA4T:[18.8,21.1,'r2'],
   DH8A:[25.9,22.3,'p2'],DH8B:[25.9,22.3,'p2'],DH8C:[27.4,25.7,'p2'],DH8D:[28.4,32.8,'p2'],AT43:[24.6,22.7,'p2'],AT45:[24.6,22.7,'p2'],AT46:[24.6,22.7,'p2'],AT72:[27.1,27.2,'p2'],AT75:[27.1,27.2,'p2'],AT76:[27.1,27.2,'p2'],
   B190:[17.6,17.6,'p2'],BE20:[16.6,13.3,'p2'],B350:[17.7,14.2,'p2'],BE9L:[15.3,10.8,'p2'],SW4:[17.4,18.1,'p2'],SF34:[21.4,19.7,'p2'],DHC6:[19.8,15.8,'p2'],E120:[19.8,20,'p2'],PA31:[12.4,10,'g2'],C130:[40.4,29.8,'p4'],C30J:[40.4,29.8,'p4'],P3:[30.4,35.6,'p4'],
-  PC12:[16.3,14.4,'p1'],C208:[15.9,11.5,'p1'],TBM7:[12.7,10.6,'p1'],TBM8:[12.8,10.7,'p1'],TBM9:[12.8,10.7,'p1'],DHC2:[14.6,9.2,'p1'],DHC3:[17.7,12.8,'p1'],PA46:[13.1,8.8,'p1'],
+  PC12:[16.3,14.4,'p1'],C208:[15.9,11.5,'p1'],TBM7:[12.7,10.6,'p1'],TBM8:[12.8,10.7,'p1'],TBM9:[12.8,10.7,'p1'],DHC2:[14.6,9.2,'g1'],DHC3:[17.7,12.8,'g1'],PA46:[13.1,8.8,'p1'],
   C150:[10.2,7.3,'g1'],C152:[10.2,7.3,'g1'],C172:[11,8.3,'g1'],C177:[10.8,8.3,'g1'],C182:[11,8.8,'g1'],C206:[11,8.6,'g1'],C210:[11.2,8.6,'g1'],P28A:[9.1,7.3,'g1'],P28B:[10.7,7.5,'g1'],P28R:[10.7,7.5,'g1'],PA32:[11,8.4,'g1'],
   SR20:[11.7,7.9,'g1'],SR22:[11.7,7.9,'g1'],DA20:[10.9,7.2,'g1'],DA40:[11.9,8.1,'g1'],M20P:[11,8.2,'g1'],BE35:[10.2,8.1,'g1'],BE36:[10.2,8.4,'g1'],DV20:[10.9,7.2,'g1'],
   PA34:[11.9,8.7,'g2'],PA44:[11.8,8.4,'g2'],DA42:[13.4,8.6,'g2'],DA62:[14.6,9.2,'g2'],BE58:[11.5,9.1,'g2'],BE55:[11.5,8.5,'g2'],C310:[11.3,9.7,'g2'],C340:[11.6,10.5,'g2'],C421:[12.5,11.1,'g2'],
@@ -254,6 +254,13 @@
    for(const f of (lay==='p4'?[.3,.58]:[.3]))for(const s of [1,-1]){const x=h+f*(b-h);nac(cx+s*x,le(x)-len*.45,len,d);prop(cx+s*x,le(x)-len*.45-.4,r);}}
   if(lay==='p1'||lay==='g1')prop(cx,y0+.3,Math.max((lay==='p1'?1.35:.95)*k,2.6));
   return PLANS[key]=P.join('');}
+ // (v213) The type comes from a table keyed by the aircraft's hex code, and the table can be stale (a registration passed on to
+ // another aircraft): on 13 Nov CFOCS was drawn and described as a DHC-2 Beaver while doing 220 kt - Flightradar24 lists C-FOCS as
+ // a Cessna Citation. A type that cannot fly as fast as the aircraft is flying is not believed: the aircraft is drawn as a small
+ // jet and the panel says why. Limits are ground speeds with room for a tail wind.
+ const SLOW={DHC2:160,DHC3:160,C150:140,C152:140,C172:165,C177:175,C182:190,P28A:165,P28B:185,DA20:175,DV20:175,DA40:190,C208:220,DHC6:215,R22:130,R44:150,R66:160,B06:160};
+ const doubt=x=>{if(x.on_ground||!x.type)return false;const t=(x.type||'').toUpperCase(),lim=SLOW[t]||({g1:245,g2:275,h:205,p1:345,p2:435,p4:435}[specOf(t)[2]]);return !!(lim&&(x.speed_kt||0)>lim);};
+ const drawnType=x=>doubt(x)?'C56X':x.type;
  // drawn size on the map: by the real wingspan, so a 787 is plainly bigger than an A320 and a Cessna is small but still findable
  const planPx=t=>{const [S,L]=specOf(t);return Math.round(Math.min(66,Math.max(20,15+Math.max(S,L)*.62)));};
 
@@ -288,6 +295,7 @@
   // (v210) enroute: Toronto Centre. Its side of Pearson, and the low sectors first below 18,000 ft (where Canadian high-level airspace
   // begins - the sectors' real limits are not in the sources used). pick() then prefers the one where voices were heard lately.
   const K=CH.ctr,west=x.lon<YYZ[1],high=alt>=18000,ord=west?(high?K.wh.concat(K.wl):K.wl.concat(K.wh)):(high?K.eh.concat(K.el):K.el.concat(K.eh));
+  if(alt<5000&&dz>=30)return{why:(p||'enroute')+" - low and away from Pearson: with another airport's controller, not known here (Centre's low sectors are a guess)",f:ord};   // (v213)
   return{why:(p||'enroute')+' - with Toronto Centre, '+(west?'west':'east')+' side (which sector is a best guess)',f:ord};}
  window.__ft={phase,freqs};                                             // the Monitor card reads this to put callsigns on its channel tiles
  const listen=(f,n)=>{if(typeof P!=='undefined'&&P.play)P.play(+f,'am',n||String(f));};
@@ -384,8 +392,8 @@
   mapEl.addEventListener('click',ev=>{const l=ev.target.closest('a[data-f],a[data-more]');if(!l)return;ev.preventDefault();if(l.dataset.f)listen(l.dataset.f,l.dataset.n);else if(typeof openAir==='function'){if(wrap.classList.contains('full'))full(false);openAir(l.dataset.more);}});}
  function paintRunways(use){const dark=THEME==='dark';ENDS.forEach(e=>{if(!e.line)return;const on=!!use[e.n];e.line.setStyle(on?{color:dark?'#3ddc84':'#0a9c4a',weight:2.5,opacity:.95}:{color:dark?'#9aa7b8':'#55606e',weight:1,opacity:.28});});
   ENDS.forEach(e=>{if(!e.tag)return;const pair=ENDS.filter(o=>o.n.slice(0,2)===e.n.slice(0,2));const el=e.tag.getElement();if(el)el.classList.toggle('on',pair.some(o=>use[o.n]));});}
- function icon(x){const p=ph(phase(x)),outline=x.emergency?'#ff5c5c':(p==='arr'?'#3ddc84':(p==='dep'?'#5aa9ff':'#1a1a1a')),fill=x.on_ground?'#b8961a':'#ffd21f',sz=Math.max(16,Math.round(planPx(x.type)*(x.on_ground?.7:1)));   // (v210) drawn by wingspan, not by what it is doing
-  return L.divIcon({className:'plane',iconSize:[sz,sz],iconAnchor:[sz/2,sz/2],html:`<svg viewBox="0 0 64 64" style="width:${sz-4}px;height:${sz-4}px;opacity:${x.on_ground?.75:1};transform:rotate(${x.track||0}deg)">${planOf(x.type).split(/(?=M)/).filter(Boolean).map(d=>`<path fill="${fill}" stroke="${outline}" stroke-width="${outline==='#1a1a1a'?1.5:3}" stroke-linejoin="round" paint-order="stroke" d="${d}"/>`).join('')}</svg>`});}
+ function icon(x){const p=ph(phase(x)),outline=x.emergency?'#ff5c5c':(p==='arr'?'#3ddc84':(p==='dep'?'#5aa9ff':'#1a1a1a')),fill=x.on_ground?'#b8961a':'#ffd21f',sz=Math.max(16,Math.round(planPx(drawnType(x))*(x.on_ground?.7:1)));   // (v210) drawn by wingspan, not by what it is doing
+  return L.divIcon({className:'plane',iconSize:[sz,sz],iconAnchor:[sz/2,sz/2],html:`<svg viewBox="0 0 64 64" style="width:${sz-4}px;height:${sz-4}px;opacity:${x.on_ground?.75:1};transform:rotate(${x.track||0}deg)">${planOf(drawnType(x)).split(/(?=M)/).filter(Boolean).map(d=>`<path fill="${fill}" stroke="${outline}" stroke-width="${outline==='#1a1a1a'?1.5:3}" stroke-linejoin="round" paint-order="stroke" d="${d}"/>`).join('')}</svg>`});}
  const role=f=>E(f[2]||f[1]);
  // (v209) the route in words: city and airport, one line per stop (the server sends x.places; the bare codes stay as the fallback)
  function stops(x){const p=x.places||[];if(!p.length)return x.route?' · '+E(x.route):'';return p.map((o,i)=>`<br><span class="mu">${i===0?'from':(i===p.length-1?'to':'via')}</span> <b>${E(o.where||o.code)}</b>${o.name?' · '+E(o.name):''}${o.where?' ('+E(o.code)+')':''}`).join('');}
@@ -404,7 +412,7 @@
    let o=MK[x.icao];
    if(!o){o=MK[x.icao]={m:L.marker(ll,{icon:icon(x),zIndexOffset:p?500:0}).addTo(layer),pts:[],ik:'',lk:'',lh:''};o.m.on('click',()=>select(x.icao,false));}
    else o.m.setLatLng(ll);
-   o.x=x;const ik=[(x.type||''),Math.round((x.track||0)/5),p,x.on_ground?1:0,x.emergency?1:0].join();if(ik!==o.ik){o.ik=ik;o.m.setIcon(icon(x));o.m.setZIndexOffset(p?500:0);}
+   o.x=x;const ik=[(drawnType(x)||''),Math.round((x.track||0)/5),p,x.on_ground?1:0,x.emergency?1:0].join();if(ik!==o.ik){o.ik=ik;o.m.setIcon(icon(x));o.m.setZIndexOffset(p?500:0);}
    const last=o.pts[o.pts.length-1];if(!last||last[0]!==x.lat||last[1]!==x.lon){o.pts.push(ll);if(o.pts.length>40)o.pts.shift();}
    if(o.pts.length>1){if(!o.trail)o.trail=L.polyline(o.pts,{weight:1.5,opacity:.65,interactive:false}).addTo(layer);else o.trail.setLatLngs(o.pts);o.trail.setStyle({color:col});}
    const lk=x.on_ground?'':(p||'oth'),lh=tagHtml(x,p);
@@ -427,12 +435,12 @@
  // the first one is the pick (heard there / the only one with voices lately / the best guess), the rest follow.
  let SPOKEN={},SELK='';const selEl=q('#acsel');
  function selHTML(x){const pk=pick(x),fr=pk.fr,p=phase(x),pl=x.places||[],cur=(typeof P!=='undefined'&&P.cur)?P.cur.mhz:null;
-  const big=`<svg viewBox="0 0 64 64" style="transform:rotate(${x.track||0}deg)">${planOf(x.type).split(/(?=M)/).filter(Boolean).map(d=>`<path fill="#ffd21f" stroke="#10151d" stroke-width="1.2" stroke-linejoin="round" paint-order="stroke" d="${d}"/>`).join('')}</svg>`;
+  const big=`<svg viewBox="0 0 64 64" style="transform:rotate(${x.track||0}deg)">${planOf(drawnType(x)).split(/(?=M)/).filter(Boolean).map(d=>`<path fill="#ffd21f" stroke="#10151d" stroke-width="1.2" stroke-linejoin="round" paint-order="stroke" d="${d}"/>`).join('')}</svg>`;
   const stop=(o,i)=>`<div class="st"><i>${i===0?'from':(i===pl.length-1?'to':'via')}</i><div><b>${E(o.where||o.code)}</b><span>${o.name?E(o.name)+' ':''}${o.where?'('+E(o.code)+')':''}</span></div></div>`;
   const cell=(k,v)=>`<div><i>${k}</i><b>${v}</b></div>`,sp=SPOKEN[x.callsign];
   return `<button class="x" data-x="1" title="close">×</button>
    <div class="cs">${E(x.callsign||x.icao)}${x.emergency?`<span class="emg">SQUAWK ${E(x.squawk||'')}</span>`:''}</div>${sp&&sp!==x.callsign?`<div class="said">on the radio: "${E(sp)}"</div>`:''}
-   <div class="pic">${big}<div class="ty"><b>${E(x.desc||x.type||'type not known')}</b><span class="mu">${[x.type,x.reg,x.operator].filter(Boolean).map(E).join(' · ')}</span></div></div>
+   <div class="pic">${big}<div class="ty"><b>${doubt(x)?'Type not certain':E(x.desc||x.type||'type not known')}</b><span class="mu">${doubt(x)?'on file as '+E(x.desc||x.type)+' ('+E(x.reg||'')+'), which cannot fly at '+(x.speed_kt||0)+' kt - the table is out of date for this aircraft':[x.type,x.reg,x.operator].filter(Boolean).map(E).join(' · ')}</span></div></div>
    <div class="doing">${E(fr.why&&fr.why!==p?fr.why:p)}</div>
    <h5>${pk.list.length?'Listen to it':'No channel to offer for it'}</h5><div class="ch">${pk.list.map((f,i)=>`<button data-f="${f[0]}" data-n="${E(f[1])}" class="${i===0?'pk':''}${cur!=null&&Math.abs(cur-f[0])<0.003?' on':''}"><span>${cur!=null&&Math.abs(cur-f[0])<0.003?'■':'▶'}</span><b>${f[0].toFixed(3)}</b><span>${role(f)}</span>${i===0&&pk.note?`<small>${E(pk.note)}</small>`:''}</button>`).join('')}</div>
    ${pl.length?`<h5>Route</h5><div class="rt">${pl.map(stop).join('')}</div>`:(x.route?`<h5>Route</h5><div class="rt">${E(x.route)}</div>`:(x.route_file?`<h5>Route</h5><div class="mu">The route on file for this callsign (${E(x.route_file)}) does not fit where the aircraft is, so it is not shown.</div>`:''))}

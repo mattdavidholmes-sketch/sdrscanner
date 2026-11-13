@@ -121,6 +121,8 @@ def detail(x):
     # high-level airspace begins; the sectors' real limits are not in the sources used).
     K = CH["ctr"]; west = x["lon"] < YYZ[1]; high = alt >= 18000
     order = ((K["wh"] + K["wl"]) if high else (K["wl"] + K["wh"])) if west else ((K["eh"] + K["el"]) if high else (K["el"] + K["eh"]))
+    if alt < 5000 and dz >= 30:                                               # (v213) low and far from Pearson: Hamilton, Waterloo, Buffalo, Oshawa ...
+        return f"{p or 'enroute'} - low and away from Pearson: with another airport's controller, not known here (Centre's low sectors are a guess)", order, ""
     return f"{p or 'enroute'} - with Toronto Centre, {'west' if west else 'east'} side (which sector is a best guess)", order, ""
 
 def freqs(x):

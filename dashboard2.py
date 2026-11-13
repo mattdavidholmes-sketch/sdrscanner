@@ -1727,6 +1727,8 @@ def air_freqs(x):
     # 18,000 ft (where Canadian high-level airspace begins; the sectors' real floors and ceilings are not published in the sources used)
     K = C["ctr"]; west = x["lon"] < YYZ_LL[1]; high = alt >= 18000
     order = ((K["wh"] + K["wl"]) if high else (K["wl"] + K["wh"])) if west else ((K["eh"] + K["el"]) if high else (K["el"] + K["eh"]))
+    if alt < 5000 and dz >= 30:                                               # (v213) low and far from Pearson: Hamilton, Waterloo, Buffalo, Oshawa ...
+        return f"{p} - low and away from Pearson: with another airport's controller, not known here (Centre's low sectors are a guess)", order
     return f"{p} - with Toronto Centre, {'west' if west else 'east'} side (which sector is a best guess)", order
 
 def fr24_link(x):
@@ -1784,6 +1786,20 @@ def route_places(route):
     stops = [p.strip() for p in re.split(r"→|->", route or "") if p.strip()]
     out = [(airport(p) if p != "?" else None) or {"code": p, "where": "", "name": ""} for p in stops]
     return out if any(o["name"] for o in out) else []
+def route_second(callsign):
+    """(v213) A second opinion on a route, asked only when the first (hexdb) does not fit where the aircraft is: adsbdb.com's
+    callsign table. Neither is right every time - hexdb's entry for CJT620 was last updated in November 2018 - and on the night
+    of 13 Nov, of seven airline flights around Toronto, hexdb's route fitted six and adsbdb's five, not the same ones. Cached 45
+    min per callsign, a miss too."""
+    c = _AC.setdefault("routes2", {}); hit = c.get(callsign)
+    if hit and time.time() - hit[0] < 2700: return hit[1]
+    r = ""
+    try:
+        j = _fetch_json(f"https://api.adsbdb.com/v0/callsign/{callsign}", timeout=3)
+        fr = j["response"].get("flightroute") if isinstance(j, dict) and isinstance(j.get("response"), dict) else None
+        if fr: r = f"{fr['origin']['icao_code']} → {fr['destination']['icao_code']}"
+    except Exception: pass
+    c[callsign] = (time.time(), r); return r
 def aircraft_routes(planes, budget=8):
     """Origin -> destination per callsign from hexdb.io's open route table (one small GET per new callsign, at most `budget`
     lookups per refresh, cached 1 h per callsign, misses cached 15 min); silent on failure."""
@@ -1838,11 +1854,18 @@ def aircraft_now(max_age=10):
         out.sort(key=lambda x: (x["on_ground"], x["km"]))                     # airborne first, nearest first; Pearson ground traffic after
         try: aircraft_routes(out[:60])
         except Exception: pass
+        asked = 0
         for x in out:                                                            # (v212) before anything is worked out from the route: does it fit where the aircraft is?
             if x.get("route"):
                 try:
                     filed = x["route"]; x["route"], x["_places"] = route_fit(filed, x.get("lat"), x.get("lon"))
-                    if not x["route"]: x["route_file"] = filed
+                    if not x["route"]:
+                        x["route_file"] = filed
+                        known = x["callsign"] in _AC.get("routes2", {})
+                        if known or asked < 2:                                   # (v213) a second source, at most two new lookups a refresh
+                            asked += 0 if known else 1
+                            r2, pl2 = route_fit(route_second(x["callsign"]), x.get("lat"), x.get("lon"))
+                            if r2 and pl2 and any(o.get("name") for o in pl2): x["route"], x["_places"] = r2, pl2; x.pop("route_file", None)
                 except Exception: pass
         try:
             import asr_atc
