@@ -292,6 +292,21 @@ def _heard_ts(last_hhmm, now):
         if t > now + dt.timedelta(minutes=2): t -= dt.timedelta(days=1)
         return t.timestamp()
     except Exception: return 0
+_DMR_MARK = re.compile(r"\bDMR\b|\(digital\)", re.I); _DMR_REF = {"t": 0.0, "f": ()}
+def dmr_marked(mhz, name):
+    """(v207) A conventional DMR channel by its name ("Lowe's DMR (digital)", "Ham DMR VE3WOO"): returns the frequency the reference
+    lists for it (a sweep banks it up to 2.5 kHz to the side, and a DMR decoder wants the real one), else None. Matt, 13 Nov:
+    "Anything that is marked as digital should open with sdr trunk" - until now only the P25 systems and the Digital tab did;
+    such a row in the table, its drawer and the directory played analog FM, which is a buzz at best."""
+    if not (400.0 <= mhz <= 520.0) or not _DMR_MARK.search(name or "") or v1.digital_freq(mhz): return None
+    if time.time() - _DMR_REF["t"] > 600:
+        try:
+            from build_hub import entries
+            _DMR_REF["f"] = tuple(sorted({round(e["mhz"], 4) for e in entries() if 400.0 <= e["mhz"] <= 520.0 and (_DMR_MARK.search(e["name"]) or (e.get("digital") and e.get("group") == "DMR"))}))
+        except Exception: pass
+        _DMR_REF["t"] = time.time()
+    near = [f for f in _DMR_REF["f"] if abs(f - mhz) <= 0.0063]
+    return min(near, key=lambda f: abs(f - mhz)) if near else round(mhz, 4)
 def digital_name(mhz, name, service):
     """700/800 MHz public-safety hits: say what they are (nothing in the ISED extract covers them) and mark them digital."""
     if 764 <= mhz <= 776:
@@ -361,6 +376,9 @@ def bank_merge(live):
             tsc, hmc = call_stamp(st.get("last_clear", ""))
             if tsc > (row["voice_ts"] or 0): row["voice_ts"] = tsc              # (v191) a decoded, unencrypted call is voice heard
             row["last_call"] = {"tg": st.get("last_tg", "") or ("Police (encrypted)" if st["enc"] else ""), "t": hmc or hm, "calls": st["calls"], "enc": st["enc"]}
+        if row["ver"] != "DIGITAL":                                           # (v207) listed as DMR by name: digital too, and it says where SDRTrunk should tune
+            ref = dmr_marked(row["mhz"], row["name"])
+            if ref: row["ver"] = "DIGITAL"; row["mode"] = "DMR"; row["uv32"] = False; row["target"] = f"dmr:{ref:.4f}"
         row["vrank"] = 2 if row["ver"] == "VOICE" else (1 if row["ver"] == "KNOWN" else 0)
         out.append(row)
     # (v191) what the "Last heard" column sorts by: channels where voice was heard in the last 24 h come first, newest first; below them
@@ -626,7 +644,12 @@ def _sdrt_start(target):
         try: mhz = round(float(what), 4)
         except ValueError: return {"error": "bad DMR frequency"}
         known = dict(SP.DMR_KNOWN); known.update(SP.dmr_from_data())
-        name = f"{mhz:.4f} {known.get(mhz, 'DMR')} (DMR)"; enable = {"dmr": mhz}
+        nm = known.get(mhz)
+        if not nm:                                                       # (v207) not in the DMR lists (a store channel named in the reference): take the bank's name for it
+            try: nm = re.sub(r"\s*\(digital\)|\s*\bDMR\b", "", (bank_load().get(f"{mhz:.4f}") or {}).get("name", ""), flags=re.I).strip()
+            except Exception: nm = ""
+        nm = nm or "DMR channel"
+        name = f"{mhz:.4f} {nm} (DMR)"; enable = {"dmr": mhz, "names": {mhz: nm}}
     else: return {"error": "unknown target"}
     try: v1.stop_player()
     except Exception: pass
@@ -2145,7 +2168,10 @@ class H2(v1.H):
             return self.send(json.dumps(ham_nets.view(heard=hf)), "application/json")
         if u.path == "/api/directory":
             from build_hub import entries
-            out = [{"mhz": e["mhz"], "name": e["name"], "cat": e["cat"], "group": e["group"], "mode": e["mode"], "tone": e.get("tone", ""), "duplex": e.get("duplex", ""), "offset": e.get("offset", 0), "note": e.get("note", ""), "nets": e.get("nets", ""), "uv32": e["uv32"]} for e in entries()]
+            out = [{"mhz": e["mhz"], "name": e["name"], "cat": e["cat"], "group": e["group"], "mode": e["mode"], "tone": e.get("tone", ""), "duplex": e.get("duplex", ""), "offset": e.get("offset", 0), "note": e.get("note", ""), "nets": e.get("nets", ""), "uv32": e["uv32"], "digital": bool(e.get("digital"))} for e in entries()]
+            for e in out:                                                     # (v207) e.digital was never sent, so no entry here ever went to SDRTrunk
+                ref = None if e["digital"] else dmr_marked(e["mhz"], e["name"])
+                if ref: e["digital"] = True; e["target"] = f"dmr:{ref:.4f}"; e["uv32"] = False
             return self.send(json.dumps(out), "application/json")
         return super().do_GET()                     # /stream /playmac /stop /mode /meter /info /debug /rec/ /delrec
 
@@ -2666,7 +2692,7 @@ function spark(hours,h){const pct=Math.max(0,Math.min(100,Math.round((h&&h.recen
  const segs=Array.from({length:10},(_,i)=>`<i class="${i<lit?'on':''}"></i>`).join('');
  const lc=h&&h.last_call&&h.last_call.tg?`<div class="actl sv" title="last call SDRTrunk decoded on this channel (${h.last_call.calls} calls logged${h.last_call.enc?', '+h.last_call.enc+' encrypted':''})">📻 ${esc(h.last_call.tg)}${h.last_call.t?' '+h.last_call.t:''}</div>`:'';
  return `<div class="act" title="how much of the last 30 minutes of sweeps this channel was on the air (${pct}%)"><div class="actb">${segs}</div><div class="actl"><b>${pct}%</b> <span class="sv">${h&&h.last?'· last '+h.last:'· not yet'}</span></div>${lc}</div>`;}
-function rowHTML(h){return `<td><button class="play" data-mhz="${h.mhz}" data-mode="${h.ver==='DIGITAL'?'digital':(h.mode==='AM'?'am':'fm')}" data-name="${esc(h.name)}" title="${h.ver==='DIGITAL'?'digital voice - decoded by SDRTrunk, plays through the Mac':'listen'}">▶</button></td><td class="sv rank">${h.live?h.rank:'<span class="tag" title="not in the current sweep - last known values">banked</span>'}</td><td class="f">${fmt(h.mhz)}</td><td><span class="nm">${esc(h.name)}</span></td><td class="vc">${voiceCell(h)}</td><td class="sv">${h.cat}</td><td class="sv">${esc(h.service)||'—'}</td><td class="sv">${h.mode}</td>
+function rowHTML(h){return `<td><button class="play" data-mhz="${h.mhz}" data-mode="${h.ver==='DIGITAL'?'digital':(h.mode==='AM'?'am':'fm')}" data-name="${esc(h.name)}" data-target="${h.target||''}" title="${h.ver==='DIGITAL'?'digital voice - decoded by SDRTrunk, plays through the Mac':'listen'}">▶</button></td><td class="sv rank">${h.live?h.rank:'<span class="tag" title="not in the current sweep - last known values">banked</span>'}</td><td class="f">${fmt(h.mhz)}</td><td><span class="nm">${esc(h.name)}</span></td><td class="vc">${voiceCell(h)}</td><td class="sv">${h.cat}</td><td class="sv">${esc(h.service)||'—'}</td><td class="sv">${h.mode}</td>
  <td><span class="meter"><i style="width:${Math.min(100,h.snr*2.5)}%"></i></span><span class="snr">${h.snr} dB</span></td><td class="busy">${h.busy}%${h.cont?' <span class="tag" style="border-color:#6b5520;color:var(--warn)" title="on 100% of the time - a data link, beacon or sweep artifact, not voice">cont.</span>':''}</td><td>${spark(h.hours,h)}</td><td class="heard">${heardCell(h)}</td><td>${h.tone?'<span class="tag tone">'+esc(h.tone)+'</span>':''}</td><td>${h.uv32?'<span class="tag uv">UV-32</span>':'<span class="tag sdr">SDR only</span>'}</td>`;}
 function voiceCell(h){if(h.ver==='DIGITAL'){const k=h.mode==='P25'?'P25 ':(h.mode==='DMR'?'DMR ':'');return '<span class="vtag v4" title="digital voice - ▶ decodes it with SDRTrunk; audio plays through the Mac">◆ '+k+'digital</span>';}if(h.ver==='VOICE')return '<span class="vtag v1" title="the dashboard listened and heard real speech here">✓ VOICE heard</span>';if(h.ver==='KNOWN')return '<span class="vtag v2" title="a known voice channel: airport, repeater, FRS/GMRS or store table">✓ known voice</span>';return '<span class="vtag v3" title="not auditioned yet - the dashboard checks it when nobody is listening">? unverified</span>';}
 function agreeTag(a){if(a==null)return ' <span class="tag" style="opacity:.6" title="one engine only (whisper) - install professional transcription for a cross-check">1 engine</span>';if(a>=0.6)return ' <span class="tag" style="border-color:#1f5c3a;color:var(--acc)" title="two independent engines agree on '+Math.round(a*100)+'% of the words">✓ 2 engines agree</span>';return ' <span class="tag" style="border-color:#6b5520;color:var(--warn)" title="the two engines disagree ('+Math.round(a*100)+'% overlap) - treat as uncertain">? uncertain</span>';}
@@ -2720,7 +2746,7 @@ function renderDir(){const q=($('#dq').value||'').trim().toLowerCase();let rows=
   if(dSortT==='n')return (x-y)*dSortDir;return String(x).localeCompare(String(y))*dSortDir;});
  $('#dirrows').innerHTML=rows.map(({e,h})=>{const md=e.digital?'digital':(e.mode==='AM'?'am':'fm');const prog=fmt(e.mhz)+(e.duplex?' '+e.duplex+e.offset:'')+(e.tone?' / '+e.tone:'');
   const heard=h?`<span class="meter"><i style="width:${Math.min(100,h.snr*2.5)}%"></i></span><span class="sv">${h.snr} dB · busy ${h.busy}%</span>${h.tone?' <span class="tag tone">'+esc(h.tone)+'</span>':''}`:'<span class="tag" style="opacity:.6">not heard yet</span>';
-  return `<tr class="row ${h?'':'quiet'}"><td>${e.cat==='Digital'&&!e.digital?'':`<button class="play" data-mhz="${e.mhz}" data-mode="${md}" data-name="${esc(e.name)}" title="${md==='digital'?'decode with SDRTrunk':'listen'}">▶</button>`}</td><td class="f">${fmt(e.mhz)}</td><td><span class="nm">${esc(e.name)}</span></td><td class="sv">${esc(e.cat)} · ${esc(e.group)}</td><td class="sv">${e.mode}</td><td class="sv" style="font-family:var(--mono)">${prog}</td><td>${heard}</td><td class="sv" style="white-space:normal;max-width:320px">${esc(e.note)}${e.nets?'<br><i>'+esc(e.nets)+'</i>':''}</td><td>${e.uv32?'<span class="tag uv">UV-32</span>':'<span class="tag sdr">SDR only</span>'}</td></tr>`;}).join('')||'<tr><td colspan="9" class="empty">no match</td></tr>';capList($('#dirrows').closest('table'),'tbody>tr','dir');P.paint();}
+  return `<tr class="row ${h?'':'quiet'}"><td>${e.cat==='Digital'&&!e.digital?'':`<button class="play" data-mhz="${e.mhz}" data-mode="${md}" data-name="${esc(e.name)}" data-target="${e.target||''}" title="${md==='digital'?'decode with SDRTrunk':'listen'}">▶</button>`}</td><td class="f">${fmt(e.mhz)}</td><td><span class="nm">${esc(e.name)}</span></td><td class="sv">${esc(e.cat)} · ${esc(e.group)}</td><td class="sv">${e.mode}</td><td class="sv" style="font-family:var(--mono)">${prog}</td><td>${heard}</td><td class="sv" style="white-space:normal;max-width:320px">${esc(e.note)}${e.nets?'<br><i>'+esc(e.nets)+'</i>':''}</td><td>${e.uv32?'<span class="tag uv">UV-32</span>':'<span class="tag sdr">SDR only</span>'}</td></tr>`;}).join('')||'<tr><td colspan="9" class="empty">no match</td></tr>';capList($('#dirrows').closest('table'),'tbody>tr','dir');P.paint();}
 $('#dq').oninput=()=>{if(DIR)renderDir();};
 /* ---------- (v188) ham nets: the clubs' schedule, worked out by the server (/api/nets) ---------- */
 let NETS=null;
@@ -2838,7 +2864,7 @@ function renderActive(){if($('#dactive').style.display==='none')return;const v=S
  $('#alist').innerHTML=v.map(h=>`<tr class="row" data-mhz="${h.mhz}"><td><button class="play" data-mhz="${h.mhz}" data-mode="${h.mode==='AM'?'am':'fm'}" data-name="${esc(h.name)}" title="listen">▶</button></td><td class="f">${fmt(h.mhz)}</td><td><span class="nm">${esc(h.name)}</span><br><span class="sv">${esc(h.cat)}${h.ver==='VOICE'?' · voice ✓':(h.ver==='KNOWN'?' · known voice':'')}${h.tone?' · '+esc(h.tone):''}</span></td><td class="heard">${heardCell(h)}</td><td>${spark(h.hours,h)}</td><td class="sv">${h.snr} dB<br>${h.busy}% busy</td></tr>`).join('')||'<tr><td class="empty">nothing heard in the last 30 minutes</td></tr>';capList($('#alist').closest('table'),'tbody>tr','alist');
  $$('#alist tr.row').forEach(tr=>tr.onclick=e=>{if(e.target.closest('button'))return;const h=S.hits.find(x=>Math.abs(x.mhz-+tr.dataset.mhz)<0.0026);if(h)openDrawer(h);});P.paint();}
 async function openDrawer(h){$('#dactive').style.display='none';$('#dair').style.display='none';$('#dinfo').style.display='';const d=await (await fetch('/info?mhz='+h.mhz)).json();$('#dfreq').textContent=fmt(h.mhz)+' MHz';$('#dname').textContent=(d.name||h.name)+' · '+(d.cat||h.cat)+(d.service?' · '+d.service:'');
- $('#dlines').innerHTML=(uv32(h.mhz)?'<li><b>Baofeng:</b> '+uv32(h.mhz)+' (from the last CHIRP export'+(UV32.exported?' '+esc(UV32.exported):'')+')</li>':'')+d.lines.map(l=>'<li>'+esc(l)+'</li>').join('');$('#dalert').onclick=async()=>{await fetch('/api/alerts?add=mhz&value='+h.mhz);toast('alert set for '+fmt(h.mhz));};$('#dforget').onclick=async()=>{await fetch('/api/forget?mhz='+h.mhz);closeDrawer();toast('forgotten');poll();};const wb=$('#dwide');if(wb){wb.textContent=h.wide?'◉ open more (on)':'open more';wb.onclick=async()=>{const r=await (await fetch('/api/wide?mhz='+h.mhz+'&on='+(h.wide?0:1))).json();h.wide=r.wide;wb.textContent=r.wide?'◉ open more (on)':'open more';toast(r.wide?'squelch opens wider on this channel from the next play':'back to the normal squelch');};};const dp=$('#dplay');dp.dataset.mhz=h.mhz;dp.dataset.mode=h.mode==='AM'?'am':'fm';dp.dataset.name=h.name;dp.classList.add('play');P.paint();
+ $('#dlines').innerHTML=(uv32(h.mhz)?'<li><b>Baofeng:</b> '+uv32(h.mhz)+' (from the last CHIRP export'+(UV32.exported?' '+esc(UV32.exported):'')+')</li>':'')+d.lines.map(l=>'<li>'+esc(l)+'</li>').join('');$('#dalert').onclick=async()=>{await fetch('/api/alerts?add=mhz&value='+h.mhz);toast('alert set for '+fmt(h.mhz));};$('#dforget').onclick=async()=>{await fetch('/api/forget?mhz='+h.mhz);closeDrawer();toast('forgotten');poll();};const wb=$('#dwide');if(wb){wb.textContent=h.wide?'◉ open more (on)':'open more';wb.onclick=async()=>{const r=await (await fetch('/api/wide?mhz='+h.mhz+'&on='+(h.wide?0:1))).json();h.wide=r.wide;wb.textContent=r.wide?'◉ open more (on)':'open more';toast(r.wide?'squelch opens wider on this channel from the next play':'back to the normal squelch');};};const dp=$('#dplay');dp.dataset.mhz=h.mhz;dp.dataset.mode=h.ver==='DIGITAL'?'digital':(h.mode==='AM'?'am':'fm');dp.dataset.target=h.target||'';dp.dataset.name=h.name;dp.classList.add('play');P.paint();
  const r=(await (await fetch('/api/recordings')).json()).filter(x=>Math.abs(parseFloat(x.mhz)-h.mhz)<0.0026);
  try{const hs=await (await fetch('/api/history?mhz='+h.mhz)).json();const mx=Math.max(1,...hs.series.map(p=>p.v));const bars=hs.series.map(p=>`<i title="${new Date(p.t*1000).toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'})} · ${Math.round(p.v)}%" style="height:${Math.max(1,Math.round(26*p.v/mx))}px;opacity:${p.v?1:.25}"></i>`).join('');
   const hrs=Array.from({length:24},(_,i)=>i);const hb=hrs.map(i=>`<span title="${String(i).padStart(2,'0')}:00 · ${hs.hourly[i]||0}% busy over 7 days"><i style="height:${Math.max(1,Math.round(18*(hs.hourly[i]||0)/100))}px"></i><b>${i%6===0?String(i).padStart(2,'0'):''}</b></span>`).join('');

@@ -350,6 +350,11 @@ def build(extra_cc=None, enable=None, prio=None, nxdn_ok=None):
         en_d = enable.get("dmr") if enable else None
         on = (m in en_d) if isinstance(en_d, (set, list, tuple)) else (en_d == m)
         seen.add(m); x.append(dmr_channel(m, n, enable is not None and on))
+    # (v207) a DMR frequency asked for by the dashboard that is in neither list (a channel the reference names as DMR): it gets its
+    # channel here, or SDRTrunk would start with nothing to decode
+    en_d = (enable or {}).get("dmr")
+    for m in sorted(set(en_d) if isinstance(en_d, (set, list, tuple)) else ({en_d} if en_d else set())):
+        if m not in seen: seen.add(m); x.append(dmr_channel(m, ((enable or {}).get("names") or {}).get(m, "DMR channel"), True))
     x.append("</playlist>\n")
     with open(OUT, "w", encoding="utf-8") as f: f.write("".join(x))
     return OUT, len(seen), len(FIRE) + len(EMS)
