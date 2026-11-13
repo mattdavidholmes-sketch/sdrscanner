@@ -1712,6 +1712,27 @@ def air_freqs(x):
     if alt < 9000 and dz < 30: return f"{p} near Pearson - Arrival/Departure sectors", list(C["arr"]) + list(C["dep"])
     return f"{p} - Toronto Centre (sector frequency not in the bank; try the active airband channels)", []
 
+_AP = {"d": None}
+def airport(code):
+    """(v209) 'CYYZ' or 'YYZ' -> {"code": "YYZ", "where": "Toronto, ON", "name": "Toronto Pearson Intl"} or None. The table is
+    airports.json: every large and medium airport in the world, small ones that have an airline code, and every Canadian
+    aerodrome with a four-character identifier - built from OurAirports (ourairports.com/data, public domain)."""
+    if _AP["d"] is None:
+        try: _AP["d"] = json.load(open(os.path.join(HERE, "airports.json"), encoding="utf-8"))
+        except Exception: _AP["d"] = {"icao": {}, "iata": {}}
+    d = _AP["d"]; c = (code or "").strip().upper()
+    e = d["icao"].get(c) or d["icao"].get(d["iata"].get(c, ""))
+    if not e: return None
+    ia, city, name, country, reg = e
+    short = re.sub(r"\s+International Airport$", " Intl", name); short = re.sub(r"\s+Airport$", "", short)
+    tail = reg if (reg and country == "Canada") else (f"{reg}, USA" if (reg and country == "USA") else country)
+    where = ", ".join(x for x in (city, tail) if x)
+    return {"code": ia or c, "where": where, "name": short}
+def route_places(route):
+    """'CYYZ → LLBG' or 'YYZ → TLV' -> the same stops with city and airport name; [] when no stop is in the table."""
+    stops = [p.strip() for p in re.split(r"→|->", route or "") if p.strip()]
+    out = [(airport(p) if p != "?" else None) or {"code": p, "where": "", "name": ""} for p in stops]
+    return out if any(o["name"] for o in out) else []
 def aircraft_routes(planes, budget=8):
     """Origin -> destination per callsign from hexdb.io's open route table (one small GET per new callsign, at most `budget`
     lookups per refresh, cached 1 h per callsign, misses cached 15 min); silent on failure."""
@@ -1790,6 +1811,8 @@ def aircraft_now(max_age=10):
             try: air_extras(x)
             except Exception: x["heli"] = False; x["eta_min"] = None; x["runway"] = ""
             x["fr24"] = f"https://www.flightradar24.com/{x['callsign']}" if x["callsign"] else f"https://www.flightradar24.com/data/aircraft/{x['icao']}"
+            try: x["places"] = route_places(x.get("route"))                  # (v209) where it is coming from and going to, in words
+            except Exception: x["places"] = []
             x["alt_m"] = round(x["alt_ft"] / 3.281) if x["alt_ft"] else None
         try: air_log(out)
         except Exception: pass
@@ -2620,7 +2643,7 @@ async function openAir(icao){const a=await airData();const x=(a&&a.aircraft||[])
  const fq=(x.freqs||[]);const hot=new Set(((typeof S!=='undefined'&&S&&S.hits)||[]).filter(h=>h.mhz<137&&(h.recent||0)>0).map(h=>(+h.mhz).toFixed(4)));
  $('#dinfo').style.display='none';$('#dactive').style.display='none';const d=$('#dair');d.style.display='';
  d.innerHTML=`<h3 style="font-family:var(--mono)">${esc(x.callsign||x.icao)} ${x.emergency?'<span class="tag" style="background:var(--red);color:#fff">SQUAWK '+esc(x.squawk)+'</span>':''}</h3>
- <div class="sub">${esc(x.operator||'')}${x.operator&&(x.type||x.desc)?' · ':''}${esc(x.desc||x.type||'')}${x.reg?' · '+esc(x.reg):''}${x.route?' · <b>'+esc(x.route)+'</b>':''}</div>
+ <div class="sub">${esc(x.operator||'')}${x.operator&&(x.type||x.desc)?' · ':''}${esc(x.desc||x.type||'')}${x.reg?' · '+esc(x.reg):''}${x.route&&!(x.places||[]).length?' · <b>'+esc(x.route)+'</b>':''}</div>${(x.places||[]).map((o,i,a)=>`<div class="sub" style="margin-top:2px">${i===0?'from':(i===a.length-1?'to':'via')} <b>${esc(o.where||o.code)}</b>${o.name?' · '+esc(o.name):''}${o.where?' ('+esc(o.code)+')':''}</div>`).join('')}
  <div class="btns" style="margin:10px 0 12px;flex-wrap:wrap">${fq.length?`<button class="pri" onclick="tuneAir(${fq[0][0]},'${esc(fq[0][1])}')">▶ Tune now · ${esc(fq[0][1])} ${fq[0][0].toFixed(3)}</button>`:''}${fq.slice(1).map(f=>`<button class="ghost${hot.has(f[0].toFixed(4))?' hot':''}" onclick="tuneAir(${f[0]},'${esc(f[1])}')" title="${f[0].toFixed(3)} AM${uv32(f[0])?' · '+uv32(f[0]):''}">▶ ${esc(f[1])}${uv32(f[0])?' <span class="sv">'+uv32(f[0]).replace('UV-32 ch ','#')+'</span>':''}</button>`).join('')}<a class="ghost" style="padding:6px 10px;border:1px solid var(--line);border-radius:8px;color:var(--acc2)" href="${x.fr24}" target="_blank" rel="noopener">Flightradar24 ↗</a></div>
  <div class="sub" style="margin-bottom:10px"><b>${esc(x.phase||'')}</b> · ${esc(x.why||'')}</div>
  <ul id="dlines"><li><b>Position</b> ${x.km} km ${['N','NE','E','SE','S','SW','W','NW'][Math.round((x.bearing||0)/45)%8]} of home · ${x.lat.toFixed(3)}, ${x.lon.toFixed(3)}</li>

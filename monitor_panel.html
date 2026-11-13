@@ -296,11 +296,13 @@
  function icon(x){const p=ph(phase(x)),outline=x.emergency?'#ff5c5c':(p==='arr'?'#3ddc84':(p==='dep'?'#5aa9ff':'#1a1a1a')),fill=x.on_ground?'#b8961a':'#ffd21f',sz=x.on_ground?20:(p?40:32);
   return L.divIcon({className:'plane',iconSize:[sz,sz],iconAnchor:[sz/2,sz/2],html:`<svg viewBox="0 0 64 64" style="width:${sz-4}px;height:${sz-4}px;opacity:${x.on_ground?.75:1};transform:rotate(${x.track||0}deg)">${SIL[fam(x.type)].split(/(?=M)/).filter(Boolean).map(d=>`<path fill="${fill}" stroke="${outline}" stroke-width="${outline==='#1a1a1a'?1.5:3}" stroke-linejoin="round" paint-order="stroke" d="${d}"/>`).join('')}</svg>`});}
  const role=f=>E(f[2]||f[1]);
+ // (v209) the route in words: city and airport, one line per stop (the server sends x.places; the bare codes stay as the fallback)
+ function stops(x){const p=x.places||[];if(!p.length)return x.route?' · '+E(x.route):'';return p.map((o,i)=>`<br><span class="mu">${i===0?'from':(i===p.length-1?'to':'via')}</span> <b>${E(o.where||o.code)}</b>${o.name?' · '+E(o.name):''}${o.where?' ('+E(o.code)+')':''}`).join('');}
  function pop(x){const pk=pick(x),fr=pk.fr;
   return `<b>${E(x.callsign||x.icao)}</b> ${E(x.type||'')} <span class="mu">${E(x.reg||'')}${x.desc?' · '+E(x.desc):''}</span><br>${ft(x.alt_ft)}${x.vrate?' '+(x.vrate>0?'↑':'↓')+Math.abs(x.vrate)+' ft/min':''} · ${x.speed_kt||0} kt · heading ${x.track||0}°<br>`+
-   `${x.km} km ${dirn(x.bearing)} of home${x.route?' · '+E(x.route):''}<br><span class="mu">${E(phase(x))} · ${E(fr.why)}</span>`+
+   `${x.km} km ${dirn(x.bearing)} of home${stops(x)}<br><span class="mu">${E(phase(x))} · ${E(fr.why)}</span>`+
    (pk.list.length?`<br>${pk.list.map((f,i)=>`<a href="#" data-f="${f[0]}" data-n="${E(f[1])}">▶ ${f[0].toFixed(3)} ${role(f)}</a>`+(i===0&&pk.note?` <span class="mu">${E(pk.note)}</span>`:'')).join('<br>')}`:'')+
-   `<br><a href="#" data-more="${E(x.icao)}">more about this aircraft…</a>`;}
+   `<br><a href="#" data-more="${E(x.icao)}">more about this aircraft…</a>`+(x.fr24?` · <a href="${E(x.fr24)}" target="_blank" rel="noopener">Flightradar24 ↗</a>`:'');}
  function tagHtml(x,p){return p?`${E(x.callsign||x.icao)}<br><small>${x.alt_ft!=null?Number(x.alt_ft).toLocaleString()+' ft':''}${arrow(x)}</small>`:E(x.callsign||x.icao);}
  function drop(k){const o=MK[k];if(!o)return;layer.removeLayer(o.m);if(o.trail)layer.removeLayer(o.trail);if(o.ring)layer.removeLayer(o.ring);delete MK[k];}
  async function draw(a){
