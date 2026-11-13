@@ -292,20 +292,64 @@ def _heard_ts(last_hhmm, now):
         if t > now + dt.timedelta(minutes=2): t -= dt.timedelta(days=1)
         return t.timestamp()
     except Exception: return 0
-_DMR_MARK = re.compile(r"\bDMR\b|\(digital\)", re.I); _DMR_REF = {"t": 0.0, "f": ()}
-def dmr_marked(mhz, name):
-    """(v207) A conventional DMR channel by its name ("Lowe's DMR (digital)", "Ham DMR VE3WOO"): returns the frequency the reference
-    lists for it (a sweep banks it up to 2.5 kHz to the side, and a DMR decoder wants the real one), else None. Matt, 13 Nov:
-    "Anything that is marked as digital should open with sdr trunk" - until now only the P25 systems and the Digital tab did;
-    such a row in the table, its drawer and the directory played analog FM, which is a buzz at best."""
-    if not (400.0 <= mhz <= 520.0) or not _DMR_MARK.search(name or "") or v1.digital_freq(mhz): return None
-    if time.time() - _DMR_REF["t"] > 600:
+_DMR_MARK = re.compile(r"\bDMR\b|\(digital\)", re.I); _DMR_REF = {"t": 0.0, "named": (), "strong": {}, "weak": {}, "trunk": {}}
+def _dmr_tables():
+    """(v208) Where conventional DMR is, from everything the app holds, rebuilt every two minutes:
+    named  - reference entries whose own name says DMR ("Lowe's DMR (digital)")
+    strong - the researched list (sdrtrunk_playlist.DMR_KNOWN) and the hub's Digital entries of protocol DMR
+    weak   - frequencies with a digital licence in the register (dmr_from_data), minus those the reference lists as an analog
+             channel (the store "dot" channels: a hospital's digital licence on 467.850 does not make Home Depot's radios digital)
+    trunk  - every frequency of a trunked DMR system -> its control channel"""
+    if time.time() - _DMR_REF["t"] > 120:
         try:
+            import sdrtrunk_playlist as SP
             from build_hub import entries
-            _DMR_REF["f"] = tuple(sorted({round(e["mhz"], 4) for e in entries() if 400.0 <= e["mhz"] <= 520.0 and (_DMR_MARK.search(e["name"]) or (e.get("digital") and e.get("group") == "DMR"))}))
+            es = [e for e in entries() if 400.0 <= e["mhz"] <= 520.0]
+            named = {round(e["mhz"], 4) for e in es if _DMR_MARK.search(e["name"])}
+            strong = {round(f, 4): n for f, n in SP.DMR_KNOWN}
+            for e in es:
+                if e.get("digital") and e.get("group") == "DMR": strong.setdefault(round(e["mhz"], 4), e["name"])
+            analog = sorted(round(e["mhz"], 4) for e in es if not e.get("digital") and not _DMR_MARK.search(e["name"]))
+            weak = {round(f, 4): n for f, n in SP.dmr_from_data().items() if round(f, 4) not in strong and not any(abs(f - x) <= 0.0031 for x in analog)}
+            trunk = {round(f, 4): round(cc, 4) for _, cc, fr in SP.DMR_TRUNKED for f in [cc] + list(fr)}
+            _DMR_REF.update(named=tuple(sorted(named)), strong=strong, weak=weak, trunk=trunk)
         except Exception: pass
         _DMR_REF["t"] = time.time()
-    near = [f for f in _DMR_REF["f"] if abs(f - mhz) <= 0.0063]
+    return _DMR_REF
+def analog_heard(bank):
+    """(v208) Frequencies where this app itself has evidence of analog FM: a sub-audible tone read for 2 s or more, or speech
+    confirmed (VOICE). A channel with that stays analog whatever a list says - VA3PMO 444.250 is in the DMR list and was heard
+    here with CTCSS 100.0 for 8 s."""
+    out = []
+    for k, e in bank.items():
+        try:
+            m = re.search(r"\((\d+)s\)", e.get("tone") or "")
+            if e.get("ver") == "VOICE" or (m and int(m.group(1)) >= 2): out.append(float(k))
+        except (TypeError, ValueError): pass
+    return tuple(sorted(out))
+def dmr_route(mhz, name, analog=()):
+    """(v207, v208) Is this row a DMR channel, and where does SDRTrunk tune for it? Returns (target, label) or None.
+    Matt, 13 Nov: "Anything that is marked as digital should open with sdr trunk" and "there are other channels like the lowes
+    one ... put them to the same process". target is 'dmr:<listed MHz>' (a sweep banks a channel up to 2.5 kHz to the side; a
+    DMR decoder wants the real frequency) or 'dmrt:<control channel>' for a trunked system; label is the researched name when
+    there is one."""
+    T = _dmr_tables()
+    for f, cc in T["trunk"].items():
+        if abs(f - mhz) <= 0.0031: return f"dmrt:{cc:.4f}", None
+    if not (400.0 <= mhz <= 520.0) or v1.digital_freq(mhz): return None
+    def near(fs): return min((f for f in fs if abs(f - mhz) <= 0.0031), key=lambda f: abs(f - mhz), default=None)
+    by_name = bool(_DMR_MARK.search(name or ""))
+    ref = near(T["strong"]); label = T["strong"].get(ref) if ref is not None else None
+    if ref is None and by_name: ref = near(T["named"]); ref = round(mhz, 4) if ref is None else ref
+    if ref is None: ref = near(T["weak"])
+    if ref is None: return None
+    if any(abs(x - ref) <= 0.0031 for x in analog): return None
+    return f"dmr:{ref:.4f}", label
+def dmr_marked(mhz, name):
+    """The listed frequency of a channel that is DMR by its own name, else None (the directory uses this: each of its entries is
+    the reference speaking for itself)."""
+    if not (400.0 <= mhz <= 520.0) or not _DMR_MARK.search(name or "") or v1.digital_freq(mhz): return None
+    near = [f for f in _dmr_tables()["named"] if abs(f - mhz) <= 0.0063]
     return min(near, key=lambda f: abs(f - mhz)) if near else round(mhz, 4)
 def digital_name(mhz, name, service):
     """700/800 MHz public-safety hits: say what they are (nothing in the ISED extract covers them) and mark them digital."""
@@ -353,9 +397,11 @@ def bank_merge(live):
                 if ts > e.get("last_heard", 0): e["last_heard"] = ts; changed = True
     except Exception: pass
     if changed or _bank.get("dirty") or time.time() - _bank["saved"] > 120: _bank["dirty"] = False; bank_save()
-    out = []
+    out = []; analog = analog_heard(data)
     for k, e in data.items():
-        if e.get("ver") == "DATA" and not (764 <= e["mhz"] <= 776 or 851 <= e["mhz"] <= 870): continue   # P25 channels stay listed, named, routed to SDRTrunk
+        droute = dmr_route(e["mhz"], e.get("name", ""), analog) if (400.0 <= e["mhz"] <= 520.0 or 935.0 <= e["mhz"] <= 941.0) else None
+        # P25 channels stay listed, named, routed to SDRTrunk. (v208) So does a DMR channel the sweep has seen: "DATA" on a DMR frequency is that channel, heard.
+        if e.get("ver") == "DATA" and not (764 <= e["mhz"] <= 776 or 851 <= e["mhz"] <= 870) and not (droute and (e.get("times") or 0) >= 1): continue
         if 88.0 <= e["mhz"] < 108.0: continue                                  # broadcast FM is not part of the scanner
         h = live_by.get(k)
         age = (now.timestamp() - e.get("last_heard", 0)) / 60 if e.get("last_heard") else None
@@ -376,9 +422,11 @@ def bank_merge(live):
             tsc, hmc = call_stamp(st.get("last_clear", ""))
             if tsc > (row["voice_ts"] or 0): row["voice_ts"] = tsc              # (v191) a decoded, unencrypted call is voice heard
             row["last_call"] = {"tg": st.get("last_tg", "") or ("Police (encrypted)" if st["enc"] else ""), "t": hmc or hm, "calls": st["calls"], "enc": st["enc"]}
-        if row["ver"] != "DIGITAL":                                           # (v207) listed as DMR by name: digital too, and it says where SDRTrunk should tune
-            ref = dmr_marked(row["mhz"], row["name"])
-            if ref: row["ver"] = "DIGITAL"; row["mode"] = "DMR"; row["uv32"] = False; row["target"] = f"dmr:{ref:.4f}"
+        if droute:                                                            # (v207, v208) a DMR channel: digital, and the row says where SDRTrunk should tune
+            if row["ver"] != "DIGITAL" or droute[0].startswith("dmrt:"): row["target"] = droute[0]
+            if row["ver"] != "DIGITAL":
+                row["ver"] = "DIGITAL"; row["mode"] = "DMR"; row["uv32"] = False
+                if droute[1] and droute[1] not in row["name"]: row["name"] = droute[1] if re.fullmatch(r"[\d.]+( [A-Z]{1,2})?", row["name"] or "") else f"{droute[1]} · {row['name']}"
         row["vrank"] = 2 if row["ver"] == "VOICE" else (1 if row["ver"] == "KNOWN" else 0)
         out.append(row)
     # (v191) what the "Last heard" column sorts by: channels where voice was heard in the last 24 h come first, newest first; below them
@@ -2439,7 +2487,7 @@ details.card[open]>summary{margin-bottom:10px}
  <!-- (v137) the head unit: what a real scanner radio shows - the channel it is on, SCANNING / STOPPED ON / HOLD, and the keys -->
  <div class="card headunit" id="headunit" style="display:none"><div class="hu-top"><div class="hu-lcd"><div class="hu-stat" id="hu-stat">SCANNING</div><div class="hu-freq" id="hu-freq">—</div><div class="hu-name" id="hu-name"></div><div class="hu-sub sub" id="hu-sub"></div></div>
   <div class="hu-keys"><button class="ghost" id="hu-hold" title="stay on this channel / window (space)">HOLD</button><button class="ghost" id="hu-skip" title="hop to the next one now (s)">SKIP</button><button class="ghost" id="hu-lock" title="never stop on this channel again (l) - undo in the lockout list">LOCK OUT</button><button class="ghost" id="hu-stop" title="stop the scanner">STOP</button>
-  <label class="sub" style="display:flex;align-items:center;gap:6px;margin-left:4px" title="scan by itself whenever nobody is using the dongle; yields to the discovery sweep 2 min in every 10">auto <select id="hu-auto" style="font:inherit;background:var(--card);color:var(--ink);border:1px solid var(--line);border-radius:8px;padding:4px 6px"><option value="">off</option><option value="Top">Top 20 today</option><option value="All">all heard</option><option value="Walkies">Walkies</option><option value="CB">CB (all 40)</option><option value="Airport">Airport</option><option value="YYZ Arrivals">Pearson arrivals</option><option value="YYZ Departures">Pearson departures</option><option value="TTC Etobicoke">TTC Etobicoke (analog)</option><option value="Union Station">Union Station (platform ops)</option><option value="CP Etobicoke Yard">CP Rail Etobicoke Yard (freight)</option><option value="GFL Environmental">GFL Environmental (Oakville)</option><option value="Solid Waste Mgmt">Solid Waste Mgmt (Etobicoke)</option><option value="Follow traffic">Follow traffic</option></select></label><label class="sub" style="display:flex;align-items:center;gap:6px;margin-left:4px">delay <input id="hu-delay" type="range" min="0.5" max="20" step="0.5" style="width:90px"><span id="hu-delayv" class="sv">6 s</span></label></div></div>
+  <label class="sub" style="display:flex;align-items:center;gap:6px;margin-left:4px" title="scan by itself whenever nobody is using the dongle; yields to the discovery sweep 2 min in every 10">auto <select id="hu-auto" style="font:inherit;background:var(--card);color:var(--ink);border:1px solid var(--line);border-radius:8px;padding:4px 6px"><option value="">off</option><option value="Top">Top 20 today</option><option value="All">all heard</option><option value="Walkies">Walkies</option><option value="CB">CB (all 40)</option><option value="Airport">Airport</option><option value="YYZ Arrivals">Pearson arrivals</option><option value="YYZ Departures">Pearson departures</option><option value="TTC Etobicoke">TTC Etobicoke (analog)</option><option value="Union Station">Union Station (platform ops)</option><option value="CP Etobicoke Yard">CP Rail Etobicoke Yard (freight)</option><option value="GFL Environmental">GFL Environmental (Oakville)</option><option value="Solid Waste Mgmt">Solid Waste Mgmt (Etobicoke)</option><option value="Follow traffic">Follow traffic</option></select></label></div></div>
   <div class="sub" id="hu-lockouts"></div></div>
  <div class="tiles" id="tiles"></div>
  <div class="bands" id="bands"></div>
@@ -3002,14 +3050,14 @@ document.addEventListener('visibilitychange',()=>{if(!document.hidden){poll();me
 const HU={last:null,hold:false,delay:6};
 function huShow(on){const h=$('#headunit');if(h.style.display===(on?'':'none'))return;h.style.display=on?'':'none';}
 function huPaint(mo,m){if(!mo){if(HU.auto){huShow(true);const st=$('#hu-stat');st.textContent='IDLE · auto-scan '+HU.auto+' starts when nobody is listening';st.className='hu-stat';$('#hu-freq').textContent='—';$('#hu-name').textContent='';$('#hu-sub').textContent='';}else huShow(false);return;}huShow(true);const locked=!!m.open&&mo.active;const st=$('#hu-stat');st.textContent=HU.hold?'HOLD · '+(locked?'ON AIR':'listening'):(locked?'STOPPED ON':'SCANNING');st.className='hu-stat '+(HU.hold?'hold':(locked?'on':''));
- $('#hu-freq').textContent=locked||mo.active?fmt(mo.mhz)+' MHz'+(uv32(mo.mhz)?'  · '+uv32(mo.mhz).replace('UV-32 ch ','#'):''):(mo.groups?'window '+mo.group+'/'+mo.groups:'—');$('#hu-name').textContent=locked||mo.active?(mo.name||''):(mo.n+' channels · '+(mo.engine==='channelizer'?'all at once per window':'hopping'));
+ $('#hu-freq').textContent=locked||mo.active?fmt(mo.mhz)+' MHz'+(uv32(mo.mhz)?'  · '+uv32(mo.mhz).replace('UV-32 ch ','#'):''):(mo.groups?'window '+mo.group+'/'+mo.groups:'—');$('#hu-name').textContent=locked||mo.active?(mo.name||''):(mo.n+' channels · '+(mo.engine==='channelizer'?(mo.groups>1?mo.groups+' windows of 2 MHz, one at a time'+(mo.lap_s?' · a lap takes '+Math.round(mo.lap_s)+' s':''):'all at once'):'hopping'));
  const last=(mo.heard||[]).slice(-1)[0];$('#hu-sub').textContent=last?'last: '+last.name+' · '+last.when+' · '+last.secs+' s':'';$('#hu-hold').classList.toggle('on',HU.hold);}
 async function huCmd(c,q){try{const r=await (await fetch('/scanner/'+c+(q||''),{cache:'no-store'})).json();if(r.error)toast(r.error);else if(c==='hold'||c==='resume'){HU.hold=!!r.hold;}else if(c==='lockout'){toast('locked out - it will not stop there again');huLockouts();}else if(c==='skip')toast('skip');return r;}catch(e){toast(e.message);}}
-async function huLockouts(){try{const r=await (await fetch('/api/scanner',{cache:'no-store'})).json();HU.hold=!!r.hold;HU.auto=r.autoscan||'';if(document.activeElement!==$('#hu-auto'))$('#hu-auto').value=HU.auto;if(!r.running&&HU.auto)huPaint(null,{});if(r.delay&&!HU.drag){HU.delay=r.delay;$('#hu-delay').value=r.delay;$('#hu-delayv').textContent=r.delay+' s';}
+async function huLockouts(){try{const r=await (await fetch('/api/scanner',{cache:'no-store'})).json();HU.hold=!!r.hold;HU.auto=r.autoscan||'';if(document.activeElement!==$('#hu-auto'))$('#hu-auto').value=HU.auto;if(!r.running&&HU.auto)huPaint(null,{});
  $('#hu-lockouts').innerHTML=(r.lockouts||[]).length?'locked out: '+r.lockouts.map(l=>`<button class="ghost" style="padding:2px 8px;font-size:.8em" data-m="${l.mhz}" title="allow the scanner to stop here again">${esc(l.name||fmt(l.mhz))} ✕</button>`).join(' '):'';$$('#hu-lockouts button').forEach(b=>b.onclick=()=>huCmd('unlock','?mhz='+b.dataset.m));}catch(e){}}
 $('#hu-hold').onclick=e=>{huCmd(HU.hold?'resume':'hold');e.currentTarget.blur();};$('#hu-skip').onclick=()=>huCmd('skip');$('#hu-lock').onclick=()=>huCmd('lockout');$('#hu-stop').onclick=()=>P.stop();
 $('#hu-auto').onchange=async e=>{const r=await (await fetch('/scanner/autoscan?bank='+encodeURIComponent(e.target.value))).json();if(r.error)toast(r.error);else{HU.auto=r.bank||'';toast(r.bank?'auto-scan on: '+r.bank+' - starts 90 s after the player goes idle':'auto-scan off');huLockouts();}};
-$('#hu-delay').oninput=e=>{HU.drag=true;$('#hu-delayv').textContent=e.target.value+' s';};$('#hu-delay').onchange=e=>{HU.drag=false;huCmd('delay','?s='+e.target.value);};
+/* (v208) the delay slider is gone (Matt, 13 Nov): the scan waits 6 s for the reply after a call, as a scanner's default delay does */
 setInterval(()=>{if(!document.hidden&&$('#headunit').style.display!=='none')huLockouts();},3000);setInterval(()=>{if(!document.hidden&&$('#headunit').style.display==='none')huLockouts();},10000);huLockouts();
 document.addEventListener('keydown',e=>{if(e.target.matches('input,select,textarea,button')||$('#headunit').style.display==='none')return;if(e.key==='s'||e.key==='S'){$('#hu-skip').click();}else if(e.key==='l'||e.key==='L'){$('#hu-lock').click();}});
 
