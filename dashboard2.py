@@ -1857,6 +1857,20 @@ def route_ends(x):
     pl = [o for o in (x.get("places") or []) if o]
     e = {"from": None, "to": None, "from_src": "", "to_src": "", "via": [], "note": ""}
     if len(pl) >= 2: e.update({"from": pl[0], "to": pl[-1], "from_src": "table", "to_src": "table", "via": pl[1:-1]})
+    # (v220) The table's leg the wrong way round. 13 Nov 11:44: EDV5223 at 1,525 ft and descending beside Buffalo was shown as
+    # "Buffalo -> New York JFK" - it was landing at Buffalo; the table has the outbound leg of the same flight number, and a point
+    # on a line fits that line in both directions. Low and coming down beside the airport the table calls the origin (and not
+    # beside its destination) is an arrival there; low and climbing beside its destination is a departure from there.
+    if e["from"] and e["to"] and x.get("lat") is not None and (x.get("alt_ft") or 99999) < 6000 and not x.get("on_ground"):
+        vr = x.get("vrate") or 0
+        near = lambda o: o.get("lat") is not None and _dist_brg((x["lat"], x["lon"]), (o["lat"], o["lon"]))[0] < 40
+        a, b = e["from"], e["to"]; seen = None
+        if vr < -300 and near(a) and not near(b): seen = ("to", a)
+        elif vr > 300 and near(b) and not near(a): seen = ("from", b)
+        if seen:
+            e.update({"from": None, "to": None, "from_src": "", "to_src": "", "via": []})
+            e[seen[0]] = {k: seen[1].get(k) for k in ("code", "where", "name")}; e[seen[0] + "_src"] = "seen"
+            e["note"] = f"The route on file ({x.get('route')}) runs the other way: the aircraft is low and {'coming down' if seen[0] == 'to' else 'climbing'} beside {seen[1].get('name') or seen[1].get('code')}. It is another leg of the flight number and is not shown."
     p = x.get("phase") or ""; why = x.get("why") or ""
     ap = airport("CYYZ") if "YYZ" in p else (airport("CYTZ") if "YTZ" in p else None)
     end = "to" if p.startswith("arriving") else ("from" if p.startswith("departing") else "")
@@ -1871,7 +1885,7 @@ def route_ends(x):
         e["note"] = f"The route on file for this callsign ({x['route_file']}) does not fit where the aircraft is - another leg of the flight number - so it is not shown."
     if not e["note"] and not (e["from"] and e["to"]):
         cs = x.get("callsign") or ""
-        e["note"] = ("The open route tables (hexdb.io, adsbdb.com) have no route for " + cs + ".") if re.fullmatch(r"[A-Z]{3}\d{1,4}[A-Z]{0,2}", cs) else "It is flying under its registration, not a flight number: no table lists a route for that."
+        e["note"] = ("The open route tables (hexdb.io, adsbdb.com) have no route for " + cs + ".") if re.fullmatch(r"[A-Z]{3}\d{1,4}[A-Z]{0,2}", cs) else ("It is flying under its registration, not a flight number: no table lists a route for that." if cs else "It sends no flight number, so no table can list a route.")
     return e
 def route_second(callsign):
     """(v213) A second opinion on a route, asked only when the first (hexdb) does not fit where the aircraft is: adsbdb.com's
