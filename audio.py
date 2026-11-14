@@ -361,11 +361,13 @@ class Session:
         self.rec = Recorder(record_dir, mhz, name) if record_dir else None
         self.alive = True; self.err = ""; self.last_data = time.time(); self.keep_all = False      # keep_all: a user listen - never mute, never drop a clip as 'data'
         # (v228) Does the receiver deliver all of its audio? One block is 0.1 s of sound; blocks are counted against the clock,
-        # 5 s at a time (rtl_fm hands them over in lumps of 0.4 s, so nothing shorter means anything). feed = audio received /
-        # audio due over the last 5 s, feed_min = the lowest such figure of this listen, feed_stalls = pauses of more than 1 s
-        # between two blocks. 1.00 and 0 on a healthy dongle. A dongle that is dropping off USB shows up here - on 12 Nov that
-        # sounded like clicks and was blamed on the page's player (README, 14 Nov).
-        self.feed = None; self.feed_min = None; self.feed_stalls = 0; self.feed_longest = 0.0; self._fn = 0; self._ft = 0.0; self._fl = 0.0
+        # 5 s at a time. feed = audio received / audio due over the last 5 s, feed_min = the lowest such figure of this listen,
+        # feed_stalls = pauses of more than 1 s between two blocks. 1.00 and 0 on a healthy dongle. A dongle that is dropping
+        # off USB shows up here - on 12 Nov that sounded like clicks and was blamed on the page's player (README, 14 Nov).
+        # (v229) rtl_fm hands its audio over in lumps of 0.4 s (four blocks at once), so a window is closed only at the START of
+        # a lump, 5 s or more after the last one: counted every 50 blocks, as v228 did, a window held 12 or 13 lumps by turns
+        # and a healthy receiver read 0.96 and 1.04 (first listen on the real dongle, 14 Nov 01:57).
+        self.feed = None; self.feed_min = None; self.feed_stalls = 0; self.feed_longest = 0.0; self._fn = 0; self._ft = 0.0; self._fl = 0.0; self._fb = 0; self._fw = 0
         lf = open(log_path, "a") if log_path else subprocess.DEVNULL
         if log_path:
             with open(log_path, "a") as f: f.write(f"\n=== {dt.datetime.now():%H:%M:%S} {' '.join(rtl_cmd(mhz, mode, gain))}\n")
@@ -382,10 +384,11 @@ class Session:
                 self.last_data = tb = time.time()
                 if self._fn == 0: self._ft = tb
                 else:
-                    if tb - self._fl > 1.0: self.feed_stalls += 1; self.feed_longest = max(self.feed_longest, tb - self._fl)
-                    if self._fn % 50 == 0:
-                        self.feed = round(5.0 / max(tb - self._ft, 0.5), 3); self._ft = tb
-                        if self._fn > 50: self.feed_min = self.feed if self.feed_min is None else min(self.feed_min, self.feed)   # the first 5 s hold the start-up
+                    gap = tb - self._fl
+                    if gap > 1.0: self.feed_stalls += 1; self.feed_longest = max(self.feed_longest, gap)
+                    if gap > 0.05 and tb - self._ft >= 5.0:               # a lump begins: everything before it arrived in the window that ends here
+                        self.feed = round((self._fn - self._fb) * 0.1 / (tb - self._ft), 3); self._ft = tb; self._fb = self._fn; self._fw += 1
+                        if self._fw > 1: self.feed_min = self.feed if self.feed_min is None else min(self.feed_min, self.feed)   # the first window holds the start-up
                 self._fn += 1; self._fl = tb
                 out = self.gate.process(b)
                 if self.rawf: self.rawf.write(b)

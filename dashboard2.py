@@ -514,7 +514,9 @@ def recordings(limit=1000):
             asr = {"air": "atc" in j, "atc": bool(j.get("atc")), "unsure": bool(j.get("unsure")), "conf": j.get("conf")}   # (v214) airband clips: which engine the text is from and how sure it was
             if j.get("fixed"): asr["fixed"] = [{"name": x.get("name"), "was": x.get("was"), "callsign": x.get("callsign")} for x in j["fixed"]][:4]   # (v226)
         except Exception: pass
-        out.append({"file": base, "mhz": parts[0], "name": parts[1] if len(parts) > 2 else "", "secs": round(max(0, (st.st_size - 44) / (RATE * 2)), 1),
+        # (v229) the whole name: the file is <MHz>_<name with _ for spaces>_<date>_<time>.wav, and only its first word was shown ("YYZ" for "YYZ DEP 2")
+        nm = " ".join(w for w in parts[1:-2] if w) if (len(parts) > 3 and parts[-2].isdigit()) else ""
+        out.append({"file": base, "mhz": parts[0], "name": nm, "secs": round(max(0, (st.st_size - 44) / (RATE * 2)), 1),
                     "time": dt.datetime.fromtimestamp(st.st_mtime).strftime("%b %d %H:%M:%S"), "text": txt, "agree": agree, "asr": asr, "done": os.path.exists(tp)})
     return out
 
