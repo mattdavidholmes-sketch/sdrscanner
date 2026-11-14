@@ -91,6 +91,7 @@ class AmRx:
         # squelch and key
         self.open = False; self.below = 0; self.cnr_db = -30.0; self.line_db = 0.0; self.n0 = 0.0; self.c_pow = 0.0; self.mod = 0.0; self.f_off = 0.0
         self.a_ref = 0.0                                                    # the carrier power the key and the divisor refer to
+        self.idle = 0                                                       # (v230) blocks since the last usable carrier
         self.kstate = False; self.khist = np.zeros(self.DELAY, dtype=bool)  # is the carrier up (now / over the last 10 ms)
         kw = signal.get_window("hann", 97); self.kwin = kw / kw.sum(); self.ktail = np.zeros(len(self.kwin) - 1)     # 4 ms edges on the key
         self.key = 0.0; self.ring = 0; self.trace = None                    # trace: a list here collects the keying signals of every block (tests)
@@ -167,7 +168,12 @@ class AmRx:
             self.a_ref = settled if (not was or settled > self.a_ref or settled < 0.5 * self.a_ref) else self.a_ref + 0.3 * (settled - self.a_ref)
         # ---- detect: in phase with the carrier, carrier removed, divided by the carrier. The divisor never falls below a quarter
         # of the settled level (nor into the noise), so nothing blows up while the carrier estimate runs up or down.
-        den = np.maximum(cp, max(0.25 * self.a_ref if (usable or was) else 0.0, 6.0 * n0 * 133.0))
+        # (v230) Held open, that divisor floor outlived the call: `was` is always true then, so after one strong aircraft everything
+        # under the squelch - the hiss, and a station too weak to open it, which is what holding it open is for - was divided by a
+        # quarter of THAT carrier and came out at nothing (on the air 14 Nov: 69 s of digital silence after one call, hiss before
+        # it). The floor now lasts two blocks past the last usable carrier, as it does with the squelch working.
+        self.idle = 0 if usable else self.idle + 1
+        den = np.maximum(cp, max(0.25 * self.a_ref if (usable or (was and not (self.always and self.idle > 2))) else 0.0, 6.0 * n0 * 133.0))
         a = np.clip((yd.real * c.real + yd.imag * c.imag - cp) / den, -2.0, 2.0)
         # ---- key. "Up" = the carrier estimate is above 85 % of its level and has stopped rising; "down" = below a quarter.
         # The audio runs 10 ms behind: the key goes up 10 ms after "up" (the run-up is over by then) and down at once on "down"

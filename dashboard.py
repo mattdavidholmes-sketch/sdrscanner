@@ -1499,7 +1499,7 @@ YYZ_ARR = [(132.800, "am", "YYZ ARR 3"), (124.475, "am", "YYZ ARR 1"), (125.400,
 # CHIRP names, 10 characters at most). Frequencies and sector names: canairradio.ca/yyz.html; the West Low ones also
 # radioreference.com/db/subcat/69789. From here it is mostly the aircraft that are heard - the controllers' transmitters are at
 # Pearson, St. Catharines and Peterborough and reach this antenna as weakly as Pearson's own do.
-TOR_CENTRE = [(132.475, "am", "CTR HAMILT"), (133.300, "am", "CTR GRIMSB"), (125.775, "am", "CTR CENTRA"), (134.925, "am", "CTR OAKVIL"), (124.925, "am", "CTR E RDR"), (127.000, "am", "CTR SIMCOE"), (134.250, "am", "CTR E RDR2"), (134.575, "am", "CTR BARRIE")]
+TOR_CENTRE = [(132.475, "am", "CTR HAMILT"), (133.300, "am", "CTR GRIMSB"), (135.625, "am", "CTR KITCHN"), (125.775, "am", "CTR CENTRA"), (134.925, "am", "CTR OAKVIL"), (124.925, "am", "CTR E RDR"), (127.000, "am", "CTR SIMCOE"), (134.250, "am", "CTR E RDR2"), (134.575, "am", "CTR BARRIE")]
 def yyz_arrivals():
     """Overnight Pearson combines its terminal sectors: on 11 Nov 2026 at 01:22 an inbound flight was cleared down to 3,000 ft on 128.800,
     the 'departure' frequency, and after midnight it was the only terminal channel with voice. So from 23:00 to 07:00 the departure

@@ -7,8 +7,9 @@ Which channel an aircraft is on is WORKED OUT from where it is and what it is do
 same ones the Aircraft tab draws (monitor_panel.html freqs()):
   on final, lined up with a runway (GPS position against the centreline) or low and close -> the tower for that runway
   on approach, further out          -> Toronto Arrival: 132.800 (the main channel) first, then 124.475, 125.400
-  just airborne                     -> the tower for the runway it left
+  just airborne                     -> the tower for the runway it left, below 1,500 ft; above that already Toronto Departure (v230)
   climbing out                      -> Toronto Departure: 127.575 north of the field, 128.800 south
+  leaving Billy Bishop              -> its tower below 1,500 ft, then Toronto Terminal's East Satellite 133.400 (v230)
   on the ground                     -> Ground North / South + Apron;  Billy Bishop -> 118.200
   low, not arriving or departing    -> (v214) inside a control zone: that tower. Otherwise Toronto Terminal's "satellite" position for
                                        where it is: Hamilton 119.700, Kitchener 128.275, West 119.300, East 133.400
@@ -25,7 +26,9 @@ CH = {"twrN": (118.700, "YYZ TWR N"), "twrS": (118.350, "YYZ TWR S"), "arr": [(1
       # above -, West Satellite 119.300, West Satellite (Hamilton) 119.700, West Satellite (Kitchener) 128.275)
       "satW": (119.300, "YYZ VFR"), "satHam": (119.700, "TML HAMILT"), "satKW": (128.275, "TML KITCH"),
       # (v212) Toronto Centre around Toronto: west / east of Pearson, low / high sectors (the same table as dashboard.TOR_CENTRE; sources there)
-      "ctr": {"wl": [(132.475, "CTR HAMILT"), (133.300, "CTR GRIMSB")], "wh": [(125.775, "CTR CENTRA"), (134.925, "CTR OAKVIL")],
+      # (v230) + 135.625, Centre's Kitchener sector, West Low (radioreference.com/db/subcat/69789, canairradio.ca/yyz.html): ACA501 was
+      # heard on it on 14 Nov, climbing through 16,200 ft 60 km west, while this table offered four other sectors.
+      "ctr": {"wl": [(132.475, "CTR HAMILT"), (133.300, "CTR GRIMSB"), (135.625, "CTR KITCHN")], "wh": [(125.775, "CTR CENTRA"), (134.925, "CTR OAKVIL")],
               "el": [(124.925, "CTR E RDR"), (127.000, "CTR SIMCOE"), (134.250, "CTR E RDR2")], "eh": [(134.575, "CTR BARRIE")]}}
 RW = [("05", 43.67390, -79.66390, "23", 43.69470, -79.63330), ("06L", 43.66105, -79.62343, "24R", 43.67898, -79.59737), ("06R", 43.65830, -79.62193, "24L", 43.67529, -79.59724),
       ("15L", 43.69190, -79.64220, "33R", 43.67000, -79.61390), ("15R", 43.68580, -79.65170, "33L", 43.66750, -79.62830)]
@@ -129,6 +132,18 @@ def detail(x):
         if dz < 4: return "on the ground at Pearson", [CH["gndN"] if x["lat"] > YYZ[0] else CH["gndS"], CH["apron"]], ""
         if dt < 2: return "on the ground at Billy Bishop", [CH["ytzGnd"]], ""
         return "on the ground", [], ""
+    # (v230) What the app's own on-air check showed on 14 Nov (heard_check.csv, 24 calls matched to an aircraft, 01:51-10:46): the
+    # first channel offered was the one the aircraft was heard on 13 times, another of the list twice, none of them 9 times.
+    # Seven of the nine fall under three rules, changed here:
+    #  - "just airborne - with the tower" up to 3,000 ft: UAL2603, ROU1804 and ACA163 were on Departure 128.800 by 2,400-2,700 ft
+    #    (and the call was made 20-30 s before the altitude was read). Tower first only below 1,500 ft now.
+    #  - Billy Bishop departures were offered the island's tower only: JZA7956 at 5,675 ft and POE2303 at 6,100 ft were on
+    #    133.400, Toronto Terminal's East Satellite. Above 1,500 ft that channel now leads.
+    #  - the hand-over from Departure to Centre is not at one altitude: TSC186 was still on 128.800 at 12,775 ft, POE765 already
+    #    on Centre 132.475 at 10,075 ft. Each list now ends with the other side of that hand-over.
+    if p == "departing YTZ":
+        if alt < 1500: return "departing Billy Bishop - with its tower", [CH["ytzTwr"], CH["vfr"]], ""
+        return "departing Billy Bishop - with Toronto Terminal (East Satellite)", [CH["vfr"], CH["ytzTwr"]], ""
     if "YTZ" in p: return p.replace("YTZ", "Billy Bishop"), [CH["ytzTwr"]], ""
     if p == "arriving YYZ":
         r = lined_up(x)
@@ -136,11 +151,13 @@ def detail(x):
             return (f"final for runway {r[0]}, {r[1]:.0f} km out" if r else "short final") + " - with the tower", tower_for(r[0]) if r else [CH["twrN"], CH["twrS"]], r[0] if r else ""
         return (f"lined up for runway {r[0]}, {r[1]:.0f} km out" if r else "on approach") + " - with Toronto Arrival" + (" (overnight: on 128.800 with Departure)" if _night() else ""), _arr(), r[0] if r else ""
     if p == "departing YYZ":
+        north = x["lat"] > YYZ[0]; dep = [CH["depN"], CH["depS"]] if north else [CH["depS"], CH["depN"]]
         if dz < 9 and alt < 3000:
-            r = lined_up(x, dep=True)
-            return "just airborne" + (f" off runway {r[0]}" if r else "") + " - with the tower", tower_for(r[0]) if r else [CH["twrN"], CH["twrS"]], ""
-        north = x["lat"] > YYZ[0]
-        return f"climbing out, {'north' if north else 'south'} of the field - with Toronto Departure", [CH["depN"], CH["depS"]] if north else [CH["depS"], CH["depN"]], ""
+            r = lined_up(x, dep=True); twr = tower_for(r[0]) if r else [CH["twrN"], CH["twrS"]]; off = f" off runway {r[0]}" if r else ""
+            if alt < 1500: return "just airborne" + off + " - with the tower", twr[:1] + dep[:1] + twr[1:], ""
+            return "just airborne" + off + " - changing from the tower to Toronto Departure", dep[:1] + twr[:1] + dep[1:], ""
+        K = CH["ctr"]; ctr = (K["wl"] if x["lon"] < YYZ[1] else K["el"])[:2] if alt >= 9000 else []
+        return f"climbing out, {'north' if north else 'south'} of the field - with Toronto Departure", dep + ctr, ""
     # (v214) Low and neither arriving nor departing. Until now a helicopter crossing Pearson at 2,900 ft fell through every rule and
     # came out as "level - with Toronto Centre": the rule for light aircraft began 10 km from Pearson, the rule for airliners excluded
     # light aircraft, and Centre was what was left.
@@ -160,6 +177,8 @@ def detail(x):
         else: where, ch = "the west side", [CH["satW"], CH["vfr"]]
         return f"low and {'local' if light else 'away from Pearson'} - probably with Toronto Terminal's satellite controller for {where}", ch, ""
     if alt < 10000 and dz < 50 and not light:                                 # an airliner low inside the terminal area that phase() could not place
+        if vr > 300 and _small(x.get("type")) and dt < dz:                    # (v230) a turboprop climbing nearer the island than Pearson: it left Billy Bishop
+            return "climbing away from Billy Bishop - probably with Toronto Terminal (East Satellite)", [CH["vfr"], CH["depS"], CH["depN"]], ""
         if vr > 300: return "climbing near Pearson - probably with Toronto Departure", [CH["depN"], CH["depS"]] if north else [CH["depS"], CH["depN"]], ""
         return "low near Pearson, being vectored - probably with Toronto Arrival", _arr(), ""
     # (v212) enroute: Toronto Centre. THIS line wrote "with Toronto Centre (not in the bank)" into the Aircraft tab - v210 added the
@@ -167,6 +186,8 @@ def detail(x):
     # high-level airspace begins; the sectors' real limits are not in the sources used).
     K = CH["ctr"]; west = x["lon"] < YYZ[1]; high = alt >= 18000
     order = ((K["wh"] + K["wl"]) if high else (K["wl"] + K["wh"])) if west else ((K["eh"] + K["el"]) if high else (K["el"] + K["eh"]))
+    if p == "climbing" and alt < 15000 and dz < 60 and not light:             # (v230) may still be with Departure
+        order = order + ([CH["depN"]] if north else [CH["depS"]])
     return f"{p or 'enroute'} - with Toronto Centre, {'west' if west else 'east'} side (which sector is a best guess)", order, ""
 
 def freqs(x):

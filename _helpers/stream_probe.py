@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
 """What a browser receives from /stream, with a stopwatch on every arrival (v228).
-   stream_probe.py <MHz> <fm|am> <seconds> [name] [sq: auto, 0 = held open, 1-60] [rec: 0|1]   -> diag/probe_<MHz>_<mode>.json
+   stream_probe.py <MHz> <fm|am> <seconds> [name] [sq: auto, 0 = held open, 1-60] [rec: 0|1] [wav to keep]   -> diag/probe_<MHz>_<mode>.json
    Silent: nothing is played on the Mac. It takes the dongle like any listen in a browser, so the caller checks first
    that nobody is listening. Each arrival is kept as [seconds since the request, bytes, rms of that piece]."""
 import sys, time, json, os, array, math, urllib.request, urllib.parse
-mhz = sys.argv[1]; mode = sys.argv[2]; secs = float(sys.argv[3]); name = sys.argv[4] if len(sys.argv) > 4 else "probe"; sq = sys.argv[5] if len(sys.argv) > 5 else "auto"; rec = sys.argv[6] if len(sys.argv) > 6 else "0"
+mhz = sys.argv[1]; mode = sys.argv[2]; secs = float(sys.argv[3]); name = sys.argv[4] if len(sys.argv) > 4 else "probe"; sq = sys.argv[5] if len(sys.argv) > 5 else "auto"; rec = sys.argv[6] if len(sys.argv) > 6 else "0"; keep = sys.argv[7] if len(sys.argv) > 7 else ""      # keep: a .wav to write what was received to
 url = "http://127.0.0.1:8765/stream?raw=1&rec=%s&mhz=%s&mode=%s&sq=%s&voice=1&name=%s&t=%d" % (rec, mhz, mode, sq, urllib.parse.quote(name), int(time.time() * 1000))
-t0 = time.time(); arr = []; tot = 0; err = ""
+t0 = time.time(); arr = []; tot = 0; err = ""; pcm = bytearray()
 try:
     r = urllib.request.urlopen(url, timeout=20)
     while time.time() - t0 < secs:
@@ -15,8 +15,12 @@ try:
         t = time.time() - t0; n = len(b) - (len(b) & 1)
         a = array.array("h", b[:n]); rms = math.sqrt(sum(x * x for x in a) / max(1, len(a))) if a else 0
         arr.append([round(t, 4), len(b), int(rms)]); tot += len(b)
+        if keep: pcm += b
     r.close()
 except Exception as e: err = repr(e)
+if keep and pcm:
+    import wave
+    w = wave.open(keep, "wb"); w.setnchannels(1); w.setsampwidth(2); w.setframerate(24000); w.writeframes(bytes(pcm[:len(pcm) // 2 * 2])); w.close()
 out = {"mhz": mhz, "mode": mode, "sq": sq, "when": time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(t0)), "pieces": len(arr), "bytes": tot, "err": err, "arrivals": arr}
 if arr:
     span = arr[-1][0] - arr[0][0]; gaps = [b[0] - a[0] for a, b in zip(arr, arr[1:])]
