@@ -1606,6 +1606,7 @@ def make_session(mhz, mode, manual, voice, name, record, cat="All"):
     # A user listen is never muted by the data detector (a repeater's tail or courtesy tone looked like "data" and muted
     # VE3URU mid-conversation) and never loses a clip to it; on known voice channels the detector is off altogether.
     ses.keep_all = True; ses.gate.mute_data = False
+    if mode == "fm": ses.gate.set_fm_noise()                                  # (v222) a listen on FM gets the carrier squelch (audio.ZcrSquelch.set_fm_noise). Not the voice check, not the scans: there a carrier alone must not count as heard
     if manual is None and expected_voice(mhz): ses.gate.set_wide(True)        # known / expected transmissions: open a little more, hang longer
     try:
         known = bool(sdr_scan.reference_for(round(mhz, 4))) or (load_verified().get(round(mhz, 4), {}).get("label") in ("VOICE", "KNOWN"))

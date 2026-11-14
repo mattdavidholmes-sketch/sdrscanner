@@ -74,6 +74,8 @@ class _Denoiser:
 
 DENOISE = _Denoiser()
 
+FM_N0 = 16384 / math.sqrt(3)     # 9,459: what a polar discriminator scaled to +-16384 puts out on noise alone (every phase step equally
+                                 # likely); measured through rtl_fm on 146.985 with no carrier, 13 Nov: 9,200 to 9,700 in every block
 class ZcrSquelch:
     """open when smoothed zero-crossing rate < thresh (signal), close when > thresh+0.08; 0.8 s hang. manual: 0 = always open,
     1..60 maps to threshold 0.55..0.22 (1 = most sensitive, 60 = tightest). None = auto: adaptive, idle-noise ZCR minus a margin. Measured: idle hiss ZCR 0.50-0.67,
@@ -100,6 +102,20 @@ class ZcrSquelch:
         # (v216) Held open by hand: the loudspeaker gets everything, but a recording of it would be one long clip of hiss (13 Nov:
         # 443.8375 for 20 s, saved whole). A second, automatic squelch listens to the same audio and the recorder goes by that one.
         self.auto = ZcrSquelch(mode, None) if (manual == 0 and mode != "wbfm") else None
+        # (v222) FM quieting squelch, off until set_fm_noise() - see there
+        self.n0 = None; self.q = False; self.q_open = 0.70 if manual is None else (0.90 - 0.60 * (min(60, max(1, manual)) - 1) / 59.0)
+    def set_fm_noise(self, n0=FM_N0):
+        """(v222) Turn on the carrier ("quieting") squelch for FM - what every FM radio has. n0 = the level this squelch sees when
+        there is no carrier at all. An FM receiver with no signal puts out full-scale noise; any carrier quiets it. On 13 Nov the
+        Skywide net on 146.985 could not be heard with the squelch on auto: with the repeater up, the raw audio sat at 1,600-2,500
+        against 9,400 without it - 14 dB of quieting, nothing clearer - while its zero-crossing rate was 0.52-0.62, HIGHER than
+        the empty channel's 0.50 (no de-emphasis in rtl_fm: what noise is left under a carrier is all treble). The zero-crossing
+        squelch, built on "a signal crosses zero less often than noise", opened only on the loudest syllables and cut every
+        transmission into pieces. With n0 set the squelch is open while the level is under 0.70 x n0 (3 dB of quieting; 0.75 on a
+        known channel; by hand from 0.90 at 1 to 0.30 at 60) and shuts in the block that climbs back over that plus 0.10 x n0,
+        so the noise burst when the carrier drops is not played. The zero-crossing rule still opens it as before."""
+        self.n0 = float(n0) if n0 else None
+        if self.auto is not None: self.auto.set_fm_noise(n0)
     @property
     def rec_open(self):
         """what a recorder goes by: this squelch - or, when it is held open by hand, what the automatic squelch makes of the audio"""
@@ -108,6 +124,7 @@ class ZcrSquelch:
         """Known or expected transmissions (directory channels, confirmed voice, a channel the user marked 'open more'):
         threshold 0.03 closer to the hiss (opens on weaker, noisier speech) and a 2.5 s hang so the reply is not clipped."""
         self.wide = bool(on); self.margin = (0.04 if self.mode != "am" else 0.03) if on else self._m0
+        if self.manual is None: self.q_open = 0.75 if on else 0.70
         if self.auto is not None: self.auto.set_wide(on)
         self.hang_blocks = (40 if on else 30) if self.mode == "am" else (25 if on else 15)
     def process(self, b):
@@ -173,6 +190,9 @@ class ZcrSquelch:
             if self.noise is not None: self.thresh = min(0.55, max(0.30, self.noise - self.margin))
         if self.open: sig = self.ema < (min(self.thresh + 0.08, self.noise - 0.04) if self.noise is not None else self.thresh + 0.05)   # hysteresis, but always below the hiss
         else:         sig = self.ema < self.thresh
+        if self.n0 and self.mode == "fm":                                  # (v222) the carrier itself: see set_fm_noise
+            self.q = self.level < (self.q_open + (0.10 if self.q else 0.0)) * self.n0
+            sig = sig or self.q
         # data / digital detector: a real voice signal pulses at syllable rate; data and digital carriers do not.
         if sig:
             self.hist.append((self.level, self.zcr)); self.hist = self.hist[-8:]
@@ -209,6 +229,7 @@ class ZcrSquelch:
             # discriminator output jumps to full-scale noise (~7400 rms) - that burst is the loud "ksssh" tail: mute it.
             ref = (sum(x[0] for x in self.open_levels) / len(self.open_levels)) if self.open_levels else 0
             if ref <= 0 or self.level > 2.5 * ref: return bytes(len(b))
+            if self.n0 and self.mode == "fm": return bytes(len(b))        # (v222) with the carrier squelch "no signal" means no carrier: what is left is noise, at any level
         self._aud = b; self._closed = not self.open
         return b if self.open else bytes(len(b))
 
