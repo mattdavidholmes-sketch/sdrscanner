@@ -238,6 +238,148 @@ class ZcrSquelch:
         self._aud = b; self._closed = not self.open
         return b if self.open else bytes(len(b))
 
+try:
+    import numpy as _np
+except Exception:                                # the squelch below needs numpy; without it a listen falls back to ZcrSquelch
+    _np = None
+
+class FmSquelch:
+    """(v231) The squelch of an FM listen, written new. Matt, 14 Nov 15:55: "the auto squelch while listening to 444.800 is broken.
+    I believe the whole auto squelch/open squelch feature needs to be fixed or completely redone."
+
+    What was wrong. v222/v223 opened while the receiver's output level was under 0.70 x "the level of an empty channel" and shut
+    above 0.80 x, with that level taken as the constant 9,459 (what a discriminator gives on white noise; 9,164 measured on
+    146.985). On 444.800 the empty channel reads 6,450-7,400 through rtl_fm (443.0, 444.7 and 444.9 the same): between the two
+    thresholds. Once the repeater had opened the squelch it never shut again, and the hiss of the empty channel was played for as
+    long as the listen lasted. A constant where a measurement belonged - and the measurement had only been made on 2 m.
+
+    What it is now. Three things, each from what the receiver itself puts out, block by block (0.1 s):
+      empty   the level of the empty channel, MEASURED on the channel being listened to: the highest level the receiver has held
+              for a second (nothing is louder than no signal at all on FM). Starts at 6,000 - under every empty channel seen here
+              - so nothing counts as a carrier before it is known; follows the channel up at once and down slowly.
+      carrier the level is under 0.70 x empty (stays one until it is over 0.80 x): a transmitter has quieted the receiver.
+      speech  on that carrier, over the last second, in steps of 20 ms, two things at once:
+              - the level of the voice band (350-2,800 Hz) rises and falls the way talking does: (P85 - P15) / P50 is 0.8 or
+                more. Speech 1.2 and up; an empty channel, a strong bare carrier, a tone, digital: 0.01-0.4. But a bare carrier
+                only 2-5 dB over the noise crackles (clicks) and reaches 1.3 by itself - hence the second:
+              - in the loud steps the voice band stands 1.25 x or more above the band next to it (3,500-5,950 Hz), where no
+                transmitter puts speech and noise and clicks are as strong as below. Noise alone: 0.45-0.9 on any carrier.
+    The three positions of the control:
+      auto    plays a carrier once somebody talks on it, from the start of the transmission (the audio runs one second behind
+              the decision, so what was needed to decide is not lost), and until that carrier drops. A bare carrier, a kerchunk,
+              an empty channel at any level: silence. A carrier nobody has talked on for 8 s is shut again. For a minute
+              after speech every new carrier on the channel is played at once (a conversation: the quiet voice counts too).
+      1 - 60  the carrier alone decides, no waiting: open under 0.90 x empty at 1 (almost everything) down to 0.30 x at 60
+              (strong signals only). For data, tones, anything that is not speech.
+      open    everything, always (the recorder still goes by what auto would have done: `rec_open`).
+    The block in which a carrier drops is never played (that is the noise burst), 0.3 s of flutter is ridden out, and what is
+    played begins and ends with a 5 ms fade."""
+    D = 10                       # blocks the audio runs behind the decision on auto
+    def __init__(self, manual=None):
+        self.mode = "fm"; self.manual = manual; self.always = manual == 0
+        self.n = 0; self.open = False; self.level = 0.0; self.zcr = 0.0
+        self.empty = 6000.0; self.lv = []                                  # the empty channel's level, and the last ten block levels it is learned from
+        self.frac = 0.70 if not manual else (0.90 - 0.60 * (min(60, max(1, manual)) - 1) / 59.0)
+        self.thresh = self.frac * self.empty; self.noise = self.empty
+        self.carrier = False; self.c_blocks = 0; self.gone = 99           # c_blocks: blocks of this carrier so far; gone: blocks since it was last there
+        self.frames = []; self.spread = 0.0; self.loud = 0.0; self.over = 0.0   # the last 50 steps of 20 ms on this carrier: (voice-band level, voice band / band above it)
+        self.conf = False; self.quiet = 0; self.warm = 0                  # somebody has talked on this carrier; blocks since the last sign of it; warm: see process
+        self.line = []                                                     # auto: [audio, play?] waiting D blocks for the decision
+        self.dc = 0.0; self.was_open = False; self.live_open = False; self.rec_hang = 0
+        self.auto = FmSquelch(None) if self.always else None
+        # what the rest of the app reads off a squelch
+        self.data = False; self.data_latched = False; self.data_blocks = 0; self.mute_data = False; self.detect_data = False
+        self.voice_cv = 0.0; self.wide = False; self.q = False; self.n0 = None
+    def set_fm_noise(self, n0=None): pass
+    def set_wide(self, on=True): self.wide = bool(on)
+    @property
+    def rec_open(self):
+        """what a recorder goes by: this squelch - or, held open by hand, what auto makes of the same audio as it comes in"""
+        return self.auto.live_open if self.auto is not None else self.open
+    def _measure(self, x):
+        n = len(x)
+        P = _np.abs(_np.fft.rfft(x)) ** 2; hz = RATE / n
+        self.level = float(_np.sqrt(2.0 * P[int(100 / hz):].sum()) / n)                       # as the old squelch measured it: everything above 100 Hz
+        s = _np.signbit(x); self.zcr = float(_np.count_nonzero(s[1:] != s[:-1])) / n
+        k = RATE // 50; m = n // k                                                             # 20 ms steps
+        if m:
+            F = _np.abs(_np.fft.rfft(x[:m * k].reshape(m, k) * _np.hanning(k), axis=1)) ** 2
+            g = 2.0 / (0.375 * k * k)                                                          # 0.375: the window's power gain
+            return _np.sqrt(g * F[:, 7:57].sum(axis=1)), _np.sqrt(g * F[:, 70:120].sum(axis=1))    # 350-2,800 Hz, and 3,500-5,950 Hz: no transmitter puts speech there
+        return _np.zeros(0), _np.zeros(0)
+    def process(self, b):
+        if _np is None or len(b) < 200: return b
+        x = _np.frombuffer(b, dtype="<i2").astype(_np.float64); n = len(x); self.n += 1
+        if self.auto is not None: self.auto.process(b)
+        fr, up = self._measure(x)
+        # the receiver's DC (its tuning offset) is taken out as a ramp from the last block's to this one's: no step at the join
+        m = float(x.mean()); y = x - _np.linspace(self.dc, m, n, endpoint=False); self.dc = m
+        if self.n <= SETTLE:
+            self.open = self.always; self.live_open = False
+            return self._raw(y) if self.always else bytes(len(b))
+        # ---- the empty channel
+        self.lv = (self.lv + [self.level])[-10:]
+        if len(self.lv) == 10:
+            med = sorted(self.lv)[5]
+            if med > self.empty: self.empty = min(med, 10500.0)
+            elif med > 0.85 * self.empty: self.empty = max(5000.0, self.empty + 0.05 * (med - self.empty))
+        self.noise = self.empty; self.thresh = self.frac * self.empty
+        # ---- carrier
+        was = self.carrier
+        self.carrier = self.level < (self.frac + (0.10 if was else 0.0)) * self.empty if self.frac <= 0.87 else self.level < min(0.97, self.frac + (0.05 if was else 0.0)) * self.empty
+        self.q = self.carrier
+        if self.carrier:
+            self.c_blocks = self.c_blocks + 1 if self.gone <= 3 else 1; self.gone = 0
+        else:
+            self.gone += 1
+            if self.gone > 3: self.c_blocks = 0; self.frames = []; self.conf = False; self.quiet = 0
+        if self.manual:                                                    # ---- by hand: the carrier decides, at once
+            play = self.carrier and self.c_blocks >= 1
+            self.live_open = self.open = play
+            return self._out(y, play, None)
+        # ---- speech on the carrier (auto, and auto's twin behind a squelch held open)
+        newly = False
+        if self.carrier and self.c_blocks == 2 and self.n < self.warm and not self.conf:
+            self.conf = True; self.quiet = 0                               # a conversation is going on (speech here within the last minute): its next carrier is played at once,
+                                                                           # so the quiet voice in a net is heard as well. The 8 s rule below still shuts a carrier nobody talks on.
+        if self.carrier and self.c_blocks >= 2:                            # not the block the carrier came up in: half of it is still noise
+            self.frames = (self.frames + [(float(v), float(v) / (float(u) + 1.0)) for v, u in zip(fr, up)])[-50:]
+            if len(self.frames) >= 25:
+                h = sorted(f[0] for f in self.frames); k = len(h)
+                p15, p50, p85 = h[int(0.15 * k)], h[k // 2], h[int(0.85 * k)]
+                self.spread = (p85 - p15) / (p50 + 1.0); self.loud = p85; self.voice_cv = self.spread
+                self.over = sorted(f[1] for f in self.frames)[int(0.85 * k)]
+                talk = self.spread >= 0.8 and self.over >= 1.25 and p85 >= 150.0
+                if talk:
+                    newly = not self.conf; self.conf = True; self.quiet = 0; self.warm = self.n + 600
+                elif self.conf:
+                    self.quiet = 0 if self.spread >= 0.5 else self.quiet + 1     # 0.5: a quiet or a weak voice still moves the level that much; a carrier with nothing on it does not
+                    if self.quiet >= 80: self.conf = False                # a carrier nobody has talked on for 8 s
+        play = self.carrier and self.conf and self.c_blocks >= 2
+        self.live_open = play or (self.conf and self.gone <= 10)           # for the recorder behind a held-open squelch: a second past the end
+        if self.always: self.open = True; return self._raw(y)
+        # ---- auto: one second behind, so the start of a transmission can still be played once somebody has talked
+        self.line.append([y, play, self.carrier and self.c_blocks >= 2])
+        if newly:
+            for e in reversed(self.line[:-1]):                             # back to where this carrier began
+                if not e[2]: break
+                e[1] = True
+        if len(self.line) <= self.D: self.open = False; return bytes(len(b))
+        y0, play0, _ = self.line.pop(0)
+        self.open = bool(play0)
+        return self._out(y0, play0, bool(self.line[0][1]))
+    def _raw(self, y): return _np.clip(y, -32768, 32767).astype("<i2").tobytes()
+    def _out(self, y, play, nxt):
+        """one block out: silence, or the audio with a 5 ms fade where sound begins and (when the next block is known) ends"""
+        n = len(y)
+        if not play: self.was_open = False; return bytes(2 * n)
+        f = min(n // 4, RATE // 200)
+        if not self.was_open or nxt is False: y = y.copy()
+        if not self.was_open: y[:f] *= _np.linspace(0.0, 1.0, f)
+        if nxt is False: y[-f:] *= _np.linspace(1.0, 0.0, f)
+        self.was_open = True
+        return self._raw(y)
+
 DCS_CODES = [23,25,26,31,32,36,43,47,51,53,54,65,71,72,73,74,114,115,116,122,125,131,132,134,143,145,152,155,156,162,165,172,174,205,212,223,
              225,226,243,244,245,246,251,252,255,261,263,265,266,271,274,306,311,315,325,331,332,343,346,351,356,364,365,371,411,412,413,423,431,
              432,445,446,452,454,455,462,464,465,466,503,506,516,523,526,532,546,565,606,612,624,627,631,632,654,662,664,703,712,723,731,732,734,743,754]
@@ -355,8 +497,9 @@ def wav_header(nbytes):
 
 class Session:
     """One tuned channel. read() yields 24 kHz processed PCM blocks; stop() tears everything down."""
-    def __init__(self, mhz, mode, manual=None, voice=True, gain="49.6", record_dir=None, name="", log_path=None, raw_path=None):
-        self.mhz = mhz; self.mode = mode; self.gate = ZcrSquelch(mode, manual); self.tones = ToneDecoder()
+    def __init__(self, mhz, mode, manual=None, voice=True, gain="49.6", record_dir=None, name="", log_path=None, raw_path=None, listen=False):
+        self.mhz = mhz; self.mode = mode; self.tones = ToneDecoder()
+        self.gate = FmSquelch(manual) if (listen and mode == "fm" and _np is not None) else ZcrSquelch(mode, manual)      # (v231) listen: somebody's own listen on FM
         self.rawf = open(raw_path, "wb") if raw_path else None
         self.rec = Recorder(record_dir, mhz, name) if record_dir else None
         self.alive = True; self.err = ""; self.last_data = time.time(); self.keep_all = False      # keep_all: a user listen - never mute, never drop a clip as 'data'
@@ -430,6 +573,7 @@ class Session:
         return {"open": g.open, "zcr": round(g.zcr, 2), "thresh": round(g.thresh, 2), "level": round(g.level), "tones": self.tones.summary(), "tone_now": self.tones.last, "err": self.err,
                 "data": g.data or g.data_latched, "data_secs": round(g.data_blocks / 10, 1), "voice_cv": round(g.voice_cv, 2),
                 "feed": {"now": self.feed, "min": self.feed_min, "stalls": self.feed_stalls, "longest": round(self.feed_longest, 1)},   # (v228)
+                "sq": ({"empty": round(g.empty), "carrier": bool(g.carrier), "speech": bool(g.conf), "spread": round(g.spread, 2), "over": round(g.over, 2), "loud": round(g.loud)} if isinstance(g, FmSquelch) else None),   # (v231)
                 "denoise_off": DENOISE._disabled}      # (v169) visibility into the speex denoiser's fail-open state, for diagnostics - never gates playback
 
 
