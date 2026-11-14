@@ -113,7 +113,7 @@ class ZcrSquelch:
         squelch, built on "a signal crosses zero less often than noise", opened only on the loudest syllables and cut every
         transmission into pieces. With n0 set the squelch is open while the level is under 0.70 x n0 (3 dB of quieting; 0.75 on a
         known channel; by hand from 0.90 at 1 to 0.30 at 60) and shuts in the block that climbs back over that plus 0.10 x n0,
-        so the noise burst when the carrier drops is not played. The zero-crossing rule still opens it as before."""
+        so the noise burst when the carrier drops is not played. (v223) Nothing else opens it: see _proc."""
         self.n0 = float(n0) if n0 else None
         if self.auto is not None: self.auto.set_fm_noise(n0)
     @property
@@ -192,7 +192,12 @@ class ZcrSquelch:
         else:         sig = self.ema < self.thresh
         if self.n0 and self.mode == "fm":                                  # (v222) the carrier itself: see set_fm_noise
             self.q = self.level < (self.q_open + (0.10 if self.q else 0.0)) * self.n0
-            sig = sig or self.q
+            # (v223) ... and the carrier ALONE. v222 let the zero-crossing rule open the squelch as well ("as before"). On the air
+            # that rule had learned its "noise" from the hiss under the repeater's carrier (0.60), put its threshold at 0.55, and
+            # from then on took the empty channel (0.50) for a signal: every time the repeater dropped, full-scale noise was
+            # played - 6.5 s of it at 20:15:17. Matt: "squelch is permanently open now". My replay had not shown it: its
+            # zero-crossing threshold never got that high. Found in the recording of what was actually played.
+            sig = self.q
         # data / digital detector: a real voice signal pulses at syllable rate; data and digital carriers do not.
         if sig:
             self.hist.append((self.level, self.zcr)); self.hist = self.hist[-8:]
@@ -221,7 +226,7 @@ class ZcrSquelch:
             # measured: voice level CV 0.24-0.5 with ZCR spread 0.07-0.10; digital bursts CV < 0.05 within a burst and ZCR spread ~0.02
             if self.detect_data and len(self.open_levels) >= 12 and mean > 1200 and (self.voice_cv < 0.12 or (self.voice_cv < 0.25 and zspread < 0.04)):
                 self.data = True; self.data_latched = True; self.data_blocks += 1
-        if sig: self.hang = self.hang_blocks                               # 1.5 s hang (2.5 s on a known channel): pauses between words stay open
+        if sig: self.hang = 3 if (self.n0 and self.mode == "fm") else self.hang_blocks   # 1.5 s hang (2.5 s on a known channel): pauses between words stay open. (v223) carrier squelch: 0.3 s, to ride a flutter - the carrier itself spans the pauses
         elif self.hang > 0: self.hang -= 1
         self.open = (sig or self.hang > 0) and not ((self.data or (self.data_latched and self.data_blocks >= 10)) and self.mute_data)
         if self.open and not sig:

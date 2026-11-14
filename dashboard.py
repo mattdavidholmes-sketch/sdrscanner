@@ -18,6 +18,7 @@ _player = {"proc": None, "mhz": None, "since": 0, "where": None, "gate": None, "
 import audio as AU
 USER_WANTS = threading.Event()        # set the moment a play request arrives: auditions stop and stay out of the way
 LAST_USER_PLAY = [0.0]; PRIO_LAST = [0.0]; BG_STATE = {"what": "", "since": 0.0}; AUDIO_LAST = [0.0]
+MAC_VOL = [1.0]                      # (v223) the page's Vol slider for sound that comes out of the Mac (0..1, 1 = as it always was); until now the slider only reached audio played by a browser
 def say(msg):
     """One place for every event worth seeing: it prints to the dashboard's own terminal window (the only one)."""
     try: print(f"{dt.datetime.now():%H:%M:%S}  {msg}", flush=True)
@@ -707,6 +708,8 @@ def play_mac(mhz, mode, manual, name, cat="All", resume=False):
                 b = ses.read(4800)
                 if not b: break
                 AUDIO_LAST[0] = time.time()
+                v = MAC_VOL[0]
+                if v < 0.995: b = array.array("h", [int(x * v) for x in array.array("h", b[:len(b) // 2 * 2])]).tobytes()      # (v223) Vol slider
                 try: cur.stdin.write(b); cur.stdin.flush()
                 except (BrokenPipeError, OSError):              # the sound output (sox play) died, e.g. the Mac switched output device: start it again, keep the stream
                     if not getattr(ses, "alive", True): break

@@ -2400,6 +2400,12 @@ class H2(v1.H):
             open(v1.RESTART_REQ, "w").write("force" if force else "idle")
             v1.say("restart requested from the browser" + (" (force: now)" if force else " (when nobody is listening)"))
             return self.send(json.dumps({"ok": True, "when": "now" if force else "when idle"}), "application/json")
+        if u.path == "/api/macvol":                                             # (v223) the Vol slider, for sound played by the Mac itself
+            try:
+                qv = parse_qs(u.query)
+                if "v" in qv: v1.MAC_VOL[0] = min(1.0, max(0.0, float(qv["v"][0])))
+            except ValueError: pass
+            return self.send(json.dumps({"v": v1.MAC_VOL[0]}), "application/json")
         if u.path == "/api/macbeep":
             subprocess.Popen(["afplay", "/System/Library/Sounds/Glass.aiff"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
             return self.send(json.dumps(mac_sound()), "application/json")
@@ -3150,7 +3156,11 @@ function ensureCtx(){if(!actx){actx=new (window.AudioContext||window.webkitAudio
  if(VIAEL&&WA&&WA.paused){const pr=WA.play();if(pr&&pr.catch)pr.catch(()=>{try{gain.disconnect();gain.connect(actx.destination);VIAEL=false;}catch(e){}});}
  try{if('mediaSession' in navigator){navigator.mediaSession.metadata=new MediaMetadata({title:(P&&P.cur&&P.cur.name)||'SDR Scanner',artist:'Live radio'});}}catch(e){}
  gain.gain.value=+$('#vol').value;}
-$('#vol').oninput=e=>{if(gain)gain.gain.value=+e.target.value;};
+// (v223) The Vol slider only ever reached audio played by a browser; with the sound coming out of the Mac (the default on the Mac
+// itself) it did nothing. It now also sets the level of the Mac's own player (1 = as it always was).
+let MVT=null;function macVol(v){if(!(typeof P!=='undefined'&&P&&P.cur&&P.cur.where==='mac'))return;clearTimeout(MVT);MVT=setTimeout(()=>{fetch('/api/macvol?v='+v).catch(()=>{});},60);}
+$('#vol').oninput=e=>{if(gain)gain.gain.value=+e.target.value;macVol(+e.target.value);};
+fetch('/api/macvol').then(r=>r.json()).then(j=>{if(j&&j.v<0.995)$('#vol').value=j.v;}).catch(()=>{});
 $('#macbeep').onclick=async()=>{$('#pstat').textContent='beeping on the Mac…';try{const r=await (await fetch('/api/macbeep')).json();$('#pstat').textContent='Mac output: '+(r.device||'unknown device')+' · '+r.volume;}catch(e){$('#pstat').textContent='Mac beep failed: '+e.message;}};
 $('#beep').onclick=()=>{ensureCtx();const o=actx.createOscillator();o.frequency.value=660;o.connect(gain);o.start();o.stop(actx.currentTime+0.4);$('#pstat').textContent='beep sent to this browser ('+Math.round(actx.sampleRate)+' Hz) - heard it? then browser playback works';};
 function sqArg(){return $('#auto').checked?'auto':$('#sq').value;}
