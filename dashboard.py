@@ -2114,7 +2114,7 @@ class H(BaseHTTPRequestHandler):
             return self.send(json.dumps({"playing": m, "open": mt["open"], "level": mt["level"], "zcr": mt["zcr"], "thresh": mt["thresh"], "floor": 0, "mode": ses.mode,
                                          "name": (LAST_PLAY.get("name") or "") if abs((LAST_PLAY.get("mhz") or 0) - (m or 0)) < 0.0026 else "",      # (v219) what the channel playing on the Mac is called
                                          "auto": ses.gate.manual is None, "tones": mt["tones"], "tone_now": mt["tone_now"], "paused": True, "fm": mt["err"] or last_fm_error(),
-                                         "data": mt.get("data", False), "monitor": mt.get("monitor"), "air": mt.get("air"), "feed": mt.get("feed"),
+                                         "data": mt.get("data", False), "monitor": mt.get("monitor"), "air": mt.get("air"), "feed": mt.get("feed"), "sq": mt.get("sq"),
                                          "denoise_off": mt.get("denoise_off", False)}), "application/json")   # (v170) diagnostic only - never affects playback
         if u.path == "/debug":
             def sh(cmd):
