@@ -126,7 +126,7 @@ function ensure(){
  $('#unlock').style.display='none';
 }
 function stopAudio(){seq++;if(abort){try{abort.abort()}catch(e){}abort=null;}if(DIGA){try{DIGA.pause();DIGA.removeAttribute('src');DIGA.load();}catch(e){}DIGA=null;}}
-var PO={nextT:0,rate:{},m:9,tWin:0,t0:0,tLast:0,got:0,est:0,mode:0,mIn:0,gaps:0};
+var PO={nextT:0,rate:{},m:9,tWin:0,t0:0,tLast:0,got:0,est:0,mode:0,mIn:0,gaps:0,rep:0,g0:0,low:9,t00:0};
 function playout(ctx,ab,src,kind){
  /* Queue one piece of audio (v204; speed control redone in v205 and v206).
     Audio reaches the page in lumps (a single FM channel: up to 0.4 s at a time), and the radio's clock and this device's
@@ -139,7 +139,7 @@ function playout(ctx,ab,src,kind){
     not fool it, and not before 10 s have passed), a little to the side so the cushion walks back to the middle, and then
     to the delivered speed itself and held. The speed found is remembered per kind of listen. */
  var now=ctx.currentTime,r=PO.rate[kind]||1;
- if(PO.nextT<now+0.03){if(PO.nextT>0)PO.gaps++;PO.nextT=now+1.0;PO.m=9;PO.tWin=now;PO.t0=now;PO.tLast=now;PO.got=0;PO.est=0;PO.mode=0;
+ if(PO.nextT<now+0.03){if(PO.nextT>0){PO.gaps++;PO.low=0;}else{PO.rep=now;PO.g0=PO.gaps;PO.low=9;PO.t00=now;}PO.nextT=now+1.0;PO.m=9;PO.tWin=now;PO.t0=now;PO.tLast=now;PO.got=0;PO.est=0;PO.mode=0;
   var ch=ab.getChannelData(0),k=Math.min(240,ch.length);for(var i=0;i<k;i++)ch[i]*=i/k;}
  var T=now-PO.t0;if(now-PO.tLast>0.05&&T>=10)PO.est=PO.got/T;PO.tLast=now;
  var lead=PO.nextT-now;if(lead<PO.m)PO.m=lead;
@@ -150,7 +150,13 @@ function playout(ctx,ab,src,kind){
    else{if(m<1.1){PO.mode=0;r=e;}else if(m>PO.mIn+0.15){PO.mIn=m;r=Math.max(r,e+0.02);}}
    r=Math.max(0.92,Math.min(1.04,r));PO.rate[kind]=r;}
   PO.m=9;PO.tWin=now;}
- src.playbackRate.value=r;src.start(PO.nextT);PO.nextT+=ab.duration/r;PO.got+=ab.duration;}
+ src.playbackRate.value=r;src.start(PO.nextT);PO.nextT+=ab.duration/r;PO.got+=ab.duration;
+ /* (v228) The player's own account of the listen. Every 30 s it tells the app how many holes it had to leave in the sound,
+    the speed it plays at and the least it had in hand - the answer to "does the player leave holes" from the device
+    that played it. The app writes it to player_stats.log and puts a line in the event log when there were holes. */
+ if(now-PO.t00>3&&lead<PO.low)PO.low=lead;
+ if(now-PO.rep>=30){try{fetch('/api/playerstat?kind='+encodeURIComponent(kind)+'&secs='+Math.round(now-PO.t00)+'&holes='+(PO.gaps-PO.g0)+'&speed='+r.toFixed(3)+'&low='+PO.low.toFixed(2)+'&est='+PO.est.toFixed(3)).catch(function(){});}catch(e){}
+  PO.rep=now;PO.g0=PO.gaps;PO.low=9;}}
 async function pcm(url,my){
  ensure();abort=new AbortController();nextT=0;PO.nextT=0;
  var kind=(/mode=([a-z]+)/.exec(url)||[0,'x'])[1];

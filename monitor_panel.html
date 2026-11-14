@@ -52,7 +52,7 @@
 </script>
 
 <!-- Aircraft tab (v181): one panel - a live map beside the list of who is working Pearson / Billy Bishop and on which channel, ▶ to listen.
-     The rules for "which channel" are written out at freqs() below; the same rules run server-side in _helpers/follow_traffic.py. -->
+     The rules for "which channel" are in _helpers/follow_traffic.py on the server (one copy since v227); this page shows their result. -->
 <style>
 /* base map = OpenStreetMap; the dark theme is the same tiles inverted and toned down so the aircraft stand out, the light theme is slightly muted */
 .airmapwrap[data-theme=dark] .leaflet-tile-pane{filter:invert(1) hue-rotate(180deg) brightness(.78) contrast(.84) saturate(.35)}
@@ -149,7 +149,7 @@
  const q=s=>document.querySelector(s);const tabAir=q('#tab-air');if(!tabAir)return;
  const E=s=>String(s==null?'':s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
  const LS={get:(k,d)=>{try{return localStorage.getItem(k)||d;}catch(e){return d;}},set:(k,v)=>{try{localStorage.setItem(k,v);}catch(e){}}};
- const YYZ=[43.6777,-79.6248],YTZ=[43.6275,-79.3962],D2R=Math.PI/180,HAM=[43.1736,-79.9350],YKF=[43.4608,-80.3786];   // (v214) + Hamilton, Kitchener-Waterloo
+ const YYZ=[43.6777,-79.6248],YTZ=[43.6275,-79.3962],D2R=Math.PI/180;
  const dirn=b=>['N','NE','E','SE','S','SW','W','NW'][Math.round((b||0)/45)%8];
  const ft=v=>v!=null?Number(v).toLocaleString()+' ft':'—';
  const arrow=x=>x.vrate>200?' ↑':(x.vrate<-200?' ↓':'');
@@ -188,7 +188,6 @@
    const ok=dep?(along>0&&along<e.len+10&&cross<0.7):(along<0&&along>-40&&cross<0.4);
    if(ok&&(!best||cross<best.cross))best={n:e.n,cross,out:dep?along:-along};});
   return best;}
- const towerFor=n=>/^(05|23)$/.test(n)?[CH.twrN,CH.twrS]:(/^(06|24)/.test(n)?[CH.twrS,CH.twrN]:[CH.twrN,CH.twrS]);   // 15/33: either tower
 
  // ---- Silhouettes by ICAO type family (top view, nose up, 64x64) - the same families Flightradar24 draws
  const SIL={
@@ -268,52 +267,15 @@
  // drawn size on the map: by the real wingspan, so a 787 is plainly bigger than an A320 and a Cessna is small but still findable
  const planPx=t=>{const [S,L]=specOf(t);return Math.round(Math.min(66,Math.max(20,15+Math.max(S,L)*.62)));};
 
- // ---- what the aircraft is doing: the server's answer when it sends one, else worked out here from altitude, climb, distance and heading
- function phase(x){if(x.phase)return x.phase;if(x.on_ground)return 'on the ground';const alt=x.alt_ft||0,vr=x.vrate||0,tr=x.track||0,f=fam(x.type),rt=(x.route||'');
-  const small=(f==='prop'||f==='ga'||f==='heli');                       // Billy Bishop takes turboprops, GA and helicopters only
-  let toYYZ=/CYYZ\s*$/.test(rt)||/→\s*CYYZ/.test(rt),toYTZ=/CYTZ\s*$/.test(rt)||/→\s*CYTZ/.test(rt),fromYYZ=/^\s*CYYZ/.test(rt),fromYTZ=/^\s*CYTZ/.test(rt);
-  const geo=ap=>{const d=km([x.lat,x.lon],ap);const dn=(ap[1]-x.lon)*D2R,y=Math.sin(dn)*Math.cos(ap[0]*D2R),xx=Math.cos(x.lat*D2R)*Math.sin(ap[0]*D2R)-Math.sin(x.lat*D2R)*Math.cos(ap[0]*D2R)*Math.cos(dn);
-   const brg=(Math.atan2(y,xx)/D2R+360)%360;return [d,Math.abs((tr-brg+540)%360-180)];};
-  const [dz,az]=geo(YYZ),[dt,at]=geo(YTZ);
-  // (v221) the table's direction against what the aircraft is doing - the same three lines as follow_traffic.py phase()
-  if(toYYZ&&vr>300&&alt<9000&&dz<35)toYYZ=false;
-  if(fromYYZ&&vr<-300&&alt<10000&&dz<60)fromYYZ=false;
-  if(toYYZ&&small&&dt<dz&&dt<15&&alt<3500&&at<45){toYYZ=false;toYTZ=true;}
-  if(!toYTZ&&!fromYTZ){if(toYYZ&&alt<12000&&vr<=100&&dz<60)return 'arriving YYZ';if(fromYYZ&&alt<12000&&vr>100&&dz<45)return 'departing YYZ';
-   if(!toYYZ&&!fromYYZ&&!(f==='ga'||f==='heli'||x.category==='A7')){if(dz<45&&alt<9000&&vr<=0&&az<50)return 'arriving YYZ';if(dz<35&&alt<9000&&vr>200&&az>110)return 'departing YYZ';
-    if(x.type&&!small&&dz<60&&dz<km([x.lat,x.lon],HAM)&&alt<10000&&(vr<-300||(alt<8000&&vr<=100&&dz<40)))return 'arriving YYZ';}}   // (v214) downwind: pointing away from the field, coming down
-  if(small||toYTZ||fromYTZ){if((toYTZ||(!fromYTZ&&vr<=0&&at<55))&&dt<28&&alt<6000)return 'arriving YTZ';if((fromYTZ||(vr>200&&at>110))&&dt<20&&alt<6000)return 'departing YTZ';}
-  return vr>300?'climbing':(vr<-300?'descending':'level');}
+ // ---- (v227) What the aircraft is doing and which channel it is on: the SERVER's answer, nothing worked out here. The rules live in
+ // one place, _helpers/follow_traffic.py; /api/aircraft carries their result on every aircraft (phase, why, freqs, rwy). This page
+ // had its own copy of them (and dashboard2.py a third): three versions to keep in step, and v210 did not.
+ // Which channel is still a deduction from where the aircraft is, NOT read off the radio; the only proof is hearing the callsign
+ // on a channel (HEARD, from the transcripts) - the card says which of the two it is showing.
+ function phase(x){return x.phase||(x.on_ground?'on the ground':'');}
  const ph=p=>/arriving/.test(p||'')?'arr':(/departing/.test(p||'')?'dep':'');
- // light = a GA aircraft or a helicopter (by type family, or ADS-B category A1 / A7); an unknown aircraft counts as light
- const light=x=>{const f=fam(x.type);return f==='ga'||f==='heli'||x.category==='A1'||x.category==='A7'||(!x.type&&!x.category);};
-
- // ---- which channel it is on, most likely first. This is worked out from where the aircraft is - it is NOT read off the radio.
- // The only proof is hearing the callsign on a channel (HEARD, from the transcripts); the card says which of the two it is showing.
- function freqs(x){const p=phase(x),alt=x.alt_ft||0,dz=km([x.lat,x.lon],YYZ),dt=km([x.lat,x.lon],YTZ),hr=new Date().getHours(),night=hr>=23||hr<7,ARR=night?[CH.depS].concat(CH.arr):CH.arr;   // (v214) overnight Pearson works its arrivals on 128.800 (follow_traffic.py _arr)
-  if(x.on_ground){if(dz<4)return{why:'on the ground at Pearson',f:[x.lat>YYZ[0]?CH.gndN:CH.gndS,CH.apron]};if(dt<2)return{why:'on the ground at Billy Bishop',f:[CH.ytzGnd]};return{why:'on the ground',f:[]};}
-  if(/YTZ/.test(p))return{why:p.replace('YTZ','Billy Bishop'),f:[CH.ytzTwr]};
-  if(/arriving YYZ/.test(p)){const r=linedUp(x,false);
-   if((r&&r.out<13)||(dz<14&&alt<3500)){const t=r?towerFor(r.n):[CH.twrN,CH.twrS];return{rwy:r&&r.n,why:(r?'final for runway '+r.n+', '+r.out.toFixed(0)+' km out':'short final')+' - with the tower',f:t};}
-   return{rwy:r&&r.n,why:(r?'lined up for runway '+r.n+', '+r.out.toFixed(0)+' km out':'on approach')+' - with Toronto Arrival'+(night?' (overnight: on 128.800 with Departure)':''),f:ARR};}
-  if(/departing YYZ/.test(p)){
-   if(dz<9&&alt<3000){const r=linedUp(x,true);return{dep:r&&r.n,why:'just airborne'+(r?' off runway '+r.n:'')+' - with the tower',f:r?towerFor(r.n):[CH.twrN,CH.twrS]};}
-   const north=x.lat>YYZ[0];return{why:'climbing out, '+(north?'north':'south')+' of the field - with Toronto Departure',f:north?[CH.depN,CH.depS]:[CH.depS,CH.depN]};}
-  // (v214) low and neither arriving nor departing - the same rules, in the same order, as _helpers/follow_traffic.py detail()
-  const lt=light(x),vr=x.vrate||0,north=x.lat>YYZ[0];
-  if(lt&&alt<3600&&dz<=13)return{why:"crossing Pearson's control zone - with the tower (best guess)",f:north?[CH.twrN,CH.twrS]:[CH.twrS,CH.twrN]};
-  if(lt&&alt<3000&&dt<=9)return{why:"in Billy Bishop's control zone - with its tower (best guess)",f:[CH.ytzTwr]};
-  const dh=km([x.lat,x.lon],HAM),dk=km([x.lat,x.lon],YKF),sat=Math.min(dh,dk)<30,K=CH.ctr,west=x.lon<YYZ[1];
-  if(alt<7000&&(lt||sat||dz>=50)){
-   if(dz>75&&!sat)return{why:(p||'enroute')+" - low and far out: with another airport's controller, not known here (Centre's low sectors are a guess)",f:west?K.wl.concat(K.wh):K.el.concat(K.eh)};
-   const s=(sat&&dh<=dk)?['Hamilton',[CH.satHam,CH.satW]]:(sat?['Kitchener-Waterloo',[CH.satKW,CH.satW]]:(x.lon>=YYZ[1]?['the east side',[CH.vfr,CH.satW]]:['the west side',[CH.satW,CH.vfr]]));
-   return{why:'low and '+(lt?'local':'away from Pearson')+" - probably with Toronto Terminal's satellite controller for "+s[0],f:s[1]};}
-  if(alt<10000&&dz<50&&!lt){if(vr>300)return{why:'climbing near Pearson - probably with Toronto Departure',f:north?[CH.depN,CH.depS]:[CH.depS,CH.depN]};
-   return{why:'low near Pearson, being vectored - probably with Toronto Arrival',f:ARR};}
-  // (v210) enroute: Toronto Centre. Its side of Pearson, and the low sectors first below 18,000 ft (where Canadian high-level airspace
-  // begins - the sectors' real limits are not in the sources used). pick() then prefers the one where voices were heard lately.
-  const high=alt>=18000,ord=west?(high?K.wh.concat(K.wl):K.wl.concat(K.wh)):(high?K.eh.concat(K.el):K.el.concat(K.eh));
-  return{why:(p||'enroute')+' - with Toronto Centre, '+(west?'west':'east')+' side (which sector is a best guess)',f:ord};}
+ const chOf=f=>{const m=+f[0];return ALLCH.find(c=>Math.abs(c[0]-m)<0.0006)||[m,f[1]||'',f[1]||''];};   // the page's own label for a channel the server names
+ function freqs(x){return{why:x.why||'',f:(x.freqs||[]).map(chOf),rwy:x.rwy||''};}
  window.__ft={phase,freqs};                                             // the Monitor card reads this to put callsigns on its channel tiles
  const listen=(f,n)=>{if(typeof P!=='undefined'&&P.play)P.play(+f,'am',n||String(f));};
 

@@ -133,11 +133,44 @@ def log_tones():
     with open(os.path.join(f, "tones.csv"), "a") as fh:
         fh.write(f"{dt.datetime.now():%Y-%m-%d %H:%M},{m:.4f},{summ}\n")
 
+def feed_report(ses, secs, mhz):
+    """(v228) What the receiver delivered during the listen that is ending - said only when it was not all there. audio.Session
+    counts its own blocks against the clock (feed_min, feed_stalls); the channelizer does the same with the dongle's samples
+    (iq_min). Under 95% in the worst 5 s, or a pause of more than a second, is a hole the listener heard."""
+    lo = getattr(ses, "feed_min", None); st = getattr(ses, "feed_stalls", 0) or 0; lg = getattr(ses, "feed_longest", 0.0) or 0.0
+    if lo is None and getattr(ses, "solo_am", False): lo = getattr(ses, "iq_min", None)      # one airband channel. Not the scanner: it retunes all the time and its figure means something else
+    if secs < 12 or not ((lo is not None and lo < 0.95) or st): return ""
+    bits = []
+    if lo is not None and lo < 0.95: bits.append(f"only {lo * 100:.0f}% of the audio arrived in its worst 5 s")
+    if st: bits.append(f"{st} pause{'s' if st != 1 else ''} of more than a second (longest {lg:.1f} s)")
+    return f"receiver on {mhz}: " + " and ".join(bits) + " - samples were lost between the dongle and the app (USB, or the Mac too busy); holes or clicks in that listen came from there"
+
+PLAYER_STATS = os.path.join(HERE, "player_stats.log")
+def player_stat(kind, secs, holes, speed, low, est, who=""):
+    """(v228) A page's player reports every 30 s of a listen: holes it left in the last 30 s, its playing speed, the least audio
+    it had in hand, the source's speed as it measured it. Kept in player_stats.log (trimmed at 400 kB); holes go to the event log."""
+    with _lock: m = _player.get("mhz"); where = _player.get("where")
+    line = f"{dt.datetime.now():%m-%d %H:%M:%S},{who},{kind[:12]},{m if m else ''},{secs:.0f},{holes},{speed:.3f},{low:.2f},{est:.3f}\n"
+    try:
+        if os.path.exists(PLAYER_STATS) and os.path.getsize(PLAYER_STATS) > 400_000:
+            keep = open(PLAYER_STATS, errors="ignore").read()[-200_000:]; open(PLAYER_STATS, "w").write(keep[keep.find("\n") + 1:])
+        new = not os.path.exists(PLAYER_STATS)
+        with open(PLAYER_STATS, "a") as f:
+            if new: f.write("when,client,kind,mhz,seconds into the listen,holes in the last 30 s,playing speed,least in hand (s),source speed measured\n")
+            f.write(line)
+    except OSError: pass
+    if holes > 0: say(f"page player ({who}): {holes} hole{'s' if holes != 1 else ''} in the sound in the last 30 s of the listen{f' on {m}' if m else ''} (speed {speed:.3f}, least in hand {low:.2f} s)")
+
 def stop_player():
     with _lock:
         log_tones()
         ses = _player.get("session")
         if ses: say("stopped listening")
+        if ses:
+            try:
+                fr = feed_report(ses, time.time() - _player.get("since", time.time()), _player.get("mhz"))
+                if fr: say(fr)
+            except Exception: pass
         if ses:
             try:                                             # who stopped the user's stream, and when (stops.log)
                 import traceback
@@ -659,7 +692,22 @@ LAST_PLAY = {}                       # what the user last asked for on the Mac s
 DONGLE = {"lost": False, "since": 0, "note": "", "flat": "", "flat_since": 0}
 def dongle_error(txt):
     t = (txt or "").lower()
-    return any(k in t for k in ("failed to open", "no supported devices", "usb_claim", "no device", "error -", "not found"))
+    return any(k in t for k in ("failed to open", "no supported devices", "usb_claim", "no device", "error -", "not found") + BAD_START)
+# (v228) rtl_fm / rtl_tcp starting on a dongle that is half off the USB bus: it finds the stick but not the tuner, switches itself
+# to "direct sampling" and plays whatever that gives, or its first transfers fail. 12 Nov 00:09-00:12, four starts like that
+# in three minutes while Matt heard "click click click"; nothing in the app took notice.
+BAD_START = ("no supported tuner", "direct sampling mode", "r82xx_init: failed", "i2c wr failed", "failed to set center freq", "failed to set sample rate", "failed to submit transfer", "async read returned")
+def start_log(off):
+    """what the receiver has written to rtl_fm.log since byte `off`, from its own header line on (the one before may still be writing its goodbye)"""
+    try:
+        with open(FM_LOG, "rb") as fh: fh.seek(off); seg = fh.read(20000).decode(errors="ignore")
+    except OSError: return ""
+    return seg[seg.rfind("\n=== "):] if "\n=== " in seg else seg
+def bad_start(off):
+    """the first line in start_log(off) that says the dongle did not answer properly ('' = a clean start)"""
+    for l in start_log(off).splitlines():
+        if any(k in l.lower() for k in BAD_START): return l.strip()
+    return ""
 def tunable(mhz, mode):
     """(v136) The dongle tunes 24-1766 MHz; mode 'monitor' uses the 1.0 pseudo-frequency. Anything else is a bad request, never a play."""
     return mode == "monitor" or 24.0 <= float(mhz) <= 1766.0
@@ -770,6 +818,11 @@ def _watchdog_once():
                         try: subprocess.call(pat)
                         except Exception: pass
                     time.sleep(1.5); _STALLS[:] = []
+            try:                                                # (v228) the receiver is alive but not all of its audio arrives: say so once, while it happens
+                fd = getattr(ses, "feed", None) if ses else None
+                if fd is not None and fd < 0.9 and not getattr(ses, "feed_said", False):
+                    ses.feed_said = True; say(f"receiver on {_player.get('mhz')}: only {fd * 100:.0f}% of the audio arrived in the last 5 s - samples are being lost between the dongle and the app (USB, or the Mac too busy): holes or clicks in the sound come from there")
+            except Exception: pass
             if ses and (stalled or not getattr(ses, "alive", True) or ses.rtl.poll() is not None):      # receiver died (dongle unplugged, etc.)
                 where = _player.get("where"); err = last_fm_error()
                 try: stop_player()
@@ -939,7 +992,7 @@ async function info(tr){const mhz=parseFloat(tr.dataset.mhz);const nxt=tr.nextEl
 document.getElementById('rows').addEventListener('click',e=>{if(e.target.closest('button'))return;const tr=e.target.closest('tr');if(tr&&tr.dataset.mhz)info(tr);});
 // Web Audio streaming player: fetch raw PCM, schedule buffers back to back. Works in Safari, Chrome and iOS.
 let actx=null,gainNode=null,nextT=0,abort=null,bytesIn=0;
-var PO={nextT:0,rate:{},m:9,tWin:0,t0:0,tLast:0,got:0,est:0,mode:0,mIn:0,gaps:0};
+var PO={nextT:0,rate:{},m:9,tWin:0,t0:0,tLast:0,got:0,est:0,mode:0,mIn:0,gaps:0,rep:0,g0:0,low:9,t00:0};
 function playout(ctx,ab,src,kind){
  /* Queue one piece of audio (v204; speed control redone in v205 and v206).
     Audio reaches the page in lumps (a single FM channel: up to 0.4 s at a time), and the radio's clock and this device's
@@ -952,7 +1005,7 @@ function playout(ctx,ab,src,kind){
     not fool it, and not before 10 s have passed), a little to the side so the cushion walks back to the middle, and then
     to the delivered speed itself and held. The speed found is remembered per kind of listen. */
  var now=ctx.currentTime,r=PO.rate[kind]||1;
- if(PO.nextT<now+0.03){if(PO.nextT>0)PO.gaps++;PO.nextT=now+1.0;PO.m=9;PO.tWin=now;PO.t0=now;PO.tLast=now;PO.got=0;PO.est=0;PO.mode=0;
+ if(PO.nextT<now+0.03){if(PO.nextT>0){PO.gaps++;PO.low=0;}else{PO.rep=now;PO.g0=PO.gaps;PO.low=9;PO.t00=now;}PO.nextT=now+1.0;PO.m=9;PO.tWin=now;PO.t0=now;PO.tLast=now;PO.got=0;PO.est=0;PO.mode=0;
   var ch=ab.getChannelData(0),k=Math.min(240,ch.length);for(var i=0;i<k;i++)ch[i]*=i/k;}
  var T=now-PO.t0;if(now-PO.tLast>0.05&&T>=10)PO.est=PO.got/T;PO.tLast=now;
  var lead=PO.nextT-now;if(lead<PO.m)PO.m=lead;
@@ -963,7 +1016,13 @@ function playout(ctx,ab,src,kind){
    else{if(m<1.1){PO.mode=0;r=e;}else if(m>PO.mIn+0.15){PO.mIn=m;r=Math.max(r,e+0.02);}}
    r=Math.max(0.92,Math.min(1.04,r));PO.rate[kind]=r;}
   PO.m=9;PO.tWin=now;}
- src.playbackRate.value=r;src.start(PO.nextT);PO.nextT+=ab.duration/r;PO.got+=ab.duration;}
+ src.playbackRate.value=r;src.start(PO.nextT);PO.nextT+=ab.duration/r;PO.got+=ab.duration;
+ /* (v228) The player's own account of the listen. Every 30 s it tells the app how many holes it had to leave in the sound,
+    the speed it plays at and the least it had in hand - the answer to "does the player leave holes" from the device
+    that played it. The app writes it to player_stats.log and puts a line in the event log when there were holes. */
+ if(now-PO.t00>3&&lead<PO.low)PO.low=lead;
+ if(now-PO.rep>=30){try{fetch('/api/playerstat?kind='+encodeURIComponent(kind)+'&secs='+Math.round(now-PO.t00)+'&holes='+(PO.gaps-PO.g0)+'&speed='+r.toFixed(3)+'&low='+PO.low.toFixed(2)+'&est='+PO.est.toFixed(3)).catch(function(){});}catch(e){}
+  PO.rep=now;PO.g0=PO.gaps;PO.low=9;}}
 function ensureCtx(){if(!actx){actx=new (window.AudioContext||window.webkitAudioContext)();gainNode=actx.createGain();gainNode.connect(actx.destination);}
  if(actx.state!=='running')actx.resume();gainNode.gain.value=parseFloat(document.getElementById('vol').value);}
 document.getElementById('vol').addEventListener('input',e=>{if(gainNode)gainNode.gain.value=parseFloat(e.target.value);});
@@ -1120,21 +1179,26 @@ def alerts_check_text(mhz, name, text):
 
 def transcript_path(wav): return wav[:-4] + ".txt"
 
-KEEP_RECORDINGS = 40; KEEP_QUIET = 10
-def prune_recordings(keep=KEEP_RECORDINGS, keep_quiet=KEEP_QUIET):
-    """Disk guard: keep the newest `keep` clips that have somebody talking in them (or have not been read yet) and the newest
-    `keep_quiet` clips in which the transcriber found nobody (their .txt is there and empty); delete the rest, across every scan
-    folder. (v214) Until now it was simply the newest 40 of everything, and at night most of what opens the squelch is noise: on
-    13 Nov, 9 of the 12 newest clips were noise or a kerchunk, each one pushing a real call out of the list. A clip still being
-    written (touched in the last 60 s) is never removed."""
+KEEP_RECORDINGS = 40; KEEP_QUIET = 10; KEEP_TOTAL = 400; KEEP_MB = 600
+def prune_recordings(keep=KEEP_RECORDINGS, keep_quiet=KEEP_QUIET, keep_total=KEEP_TOTAL, keep_mb=KEEP_MB):
+    """Disk guard for the recordings, across every scan folder. Kept:
+      the newest `keep` clips with somebody talking (or not read yet) PER CHANNEL, `keep_total` of them and `keep_mb` MB in all,
+      the newest `keep_quiet` clips in which the transcriber found nobody (their .txt is there and empty).
+    (v225) Was 40 in all: on the morning of 13 Nov one busy channel (128.800) filled that in eight minutes - 20 to 50 clips
+    were pruned every ten minutes - and whatever had been said on any other channel went with them. Per channel a busy one can
+    only push out its own. Transcripts are never deleted, they move to transcripts_archive. A clip still being written (touched
+    in the last 60 s) is never removed."""
     try:
         files = sorted(glob.glob(os.path.join(HERE, "scan_*", "recordings", "*.wav")), key=os.path.getmtime, reverse=True)
-        gone = 0; said = 0; quiet = 0
+        gone = 0; said = 0; quiet = 0; size = 0; per = {}
         for f in files:
             try:
                 tp = transcript_path(f)
                 if os.path.exists(tp) and os.path.getsize(tp) == 0: quiet += 1; over = quiet > keep_quiet
-                else: said += 1; over = said > keep
+                else:
+                    ch = os.path.basename(f).split("_")[0]; sz = os.path.getsize(f)
+                    over = per.get(ch, 0) >= keep or said >= keep_total or size + sz > keep_mb * 1e6
+                    if not over: per[ch] = per.get(ch, 0) + 1; said += 1; size += sz          # only what is kept counts against the totals
                 if not over or time.time() - os.path.getmtime(f) < 60: continue
                 os.remove(f); gone += 1
                 os.makedirs(os.path.join(HERE, "transcripts_archive"), exist_ok=True)
@@ -1142,7 +1206,7 @@ def prune_recordings(keep=KEEP_RECORDINGS, keep_quiet=KEEP_QUIET):
                     try: shutil.move(f[:-4] + ext, os.path.join(HERE, "transcripts_archive", os.path.basename(f)[:-4] + ext))
                     except OSError: pass
             except OSError: pass
-        if gone: say(f"recordings: kept the newest {keep} with speech and {keep_quiet} without, deleted {gone} older clips")
+        if gone: say(f"recordings: {gone} older clips deleted (kept: {keep} with speech per channel, {keep_total} in all, {keep_quiet} without)")
         return gone
     except Exception: return 0
 def housekeeping():
@@ -1554,6 +1618,8 @@ def make_session_retry(*args, tries=5, **kw):
     audition): if rtl_fm cannot claim it, wait and try again instead of reporting a dead stream to the user."""
     last = None
     for i in range(tries):
+        try: off = os.path.getsize(FM_LOG)
+        except OSError: off = 0
         ses = make_session(*args, **kw)
         rtl = getattr(ses, "rtl", None)
         t0 = time.time(); died = False
@@ -1561,10 +1627,16 @@ def make_session_retry(*args, tries=5, **kw):
             if rtl is not None and rtl.poll() is not None: died = True; break
             if not getattr(ses, "alive", True): died = True; break
             time.sleep(0.1)
-        if not died: return ses
+        if not died and rtl is not None and type(ses).__name__ == "Session":      # (v228) a plain rtl_fm receiver ends its opening lines with "Output at ...":
+            while time.time() - t0 < 1.5 and rtl.poll() is None and "Output at" not in start_log(off) and not bad_start(off): time.sleep(0.05)   # wait for that (no audio flows before it anyway)
+            if rtl.poll() is not None: died = True
+        why = "" if died else bad_start(off)                       # alive, but on a dongle that did not answer properly: not a receiver to hand out
+        if not died and not why: return ses
+        if why: say(f"dongle fault at the start of the listen ({why}) - {'trying again' if i < tries - 1 else 'giving up; it will be tried again when the dongle answers'}")
         last = ses
         try: ses.stop()
         except Exception: pass
+        if why: time.sleep(1.5)                                     # a stick that is re-appearing on the bus needs longer than one that is merely still held
         subprocess.call(["pkill", "-x", "rtl_power"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         time.sleep((0.3, 0.6, 1.0, 1.5, 2.5)[min(i, 4)])            # (v134) rtl_fm fails in ~0.2 s while libusb still holds the device; the 2nd try normally works 0.3 s later (was 1.5 s + i)
     return last
@@ -1844,6 +1916,7 @@ def _asr_engine(script, path, timeout):
             with open(os.path.join(HERE, "transcribe.log"), "a") as lf: lf.write(f"{dt.datetime.now():%H:%M:%S} {script} {e!r}\n")
         except Exception: pass
     return {}
+ON_TRANSCRIPT = [None]            # (v228) called with the path of every airband transcript that has just been written
 def transcribe_clip(f, wb, model):
     """One recording -> (text for the .txt, details for the .asr.json or None, whisper's return code).
     Airband (108-137 MHz): the ATC-trained model is the reader, on the recording as it is (the receiver has already filtered and
@@ -1887,8 +1960,9 @@ def transcribe_clip(f, wb, model):
             if atc:
                 agree = max(_agreement(atc, txt), _agreement(atc, alt))
                 unsure = conf is not None and (conf < 0.62 or words < 5) and agree < 0.5
-                return ("(unsure) " if unsure else "") + atc, {"atc": atc, "whisper": txt, "parakeet": alt, "agree": round(agree, 2), "conf": conf, "words": words,
-                                                                 "unsure": unsure, "engines": 3 if alt else 2}, r
+                info = {"atc": atc, "whisper": txt, "parakeet": alt, "agree": round(agree, 2), "conf": conf, "words": words, "unsure": unsure, "engines": 3 if alt else 2}
+                if j.get("fixed"): info["fixed"] = j["fixed"]; info["atc_heard"] = j.get("heard")      # (v226) airline names put right from the aircraft in the air, and what the model had written
+                return ("(unsure) " if unsure else "") + atc, info, r
             if txt and alt and both >= 0.5 and len(_asr_tokens(txt)) >= 3:
                 return "(unsure) " + txt, {"atc": "", "whisper": txt, "parakeet": alt, "agree": round(both, 2), "conf": None, "words": 0, "unsure": True, "engines": 3}, r
             return "", {"atc": "", "whisper": txt, "parakeet": alt, "agree": round(both, 2), "conf": None, "words": 0, "unsure": False, "engines": 3, "nothing": True}, r
@@ -1930,6 +2004,9 @@ def transcribe_worker():
                 if not os.path.exists(f): continue                              # pruned while it was being read: leave no orphan transcript
                 open(tp, "w").write(text)
                 if info is not None: json.dump(info, open(tp[:-4] + ".asr.json", "w"))
+                if air and text and ON_TRANSCRIPT[0]:                           # (v228) the on-air check of the aircraft rules: dashboard2.heard_check
+                    try: ON_TRANSCRIPT[0](tp)
+                    except Exception: pass
                 if r is not None and r.returncode != 0:
                     with open(os.path.join(HERE, "transcribe.log"), "a") as lf: lf.write(f"{dt.datetime.now():%H:%M:%S} {os.path.basename(f)} rc={r.returncode} {r.stderr[-300:]}\n")
                 if busy: break                                                   # keep the CPU for live audio while listening
@@ -2034,7 +2111,7 @@ class H(BaseHTTPRequestHandler):
             return self.send(json.dumps({"playing": m, "open": mt["open"], "level": mt["level"], "zcr": mt["zcr"], "thresh": mt["thresh"], "floor": 0, "mode": ses.mode,
                                          "name": (LAST_PLAY.get("name") or "") if abs((LAST_PLAY.get("mhz") or 0) - (m or 0)) < 0.0026 else "",      # (v219) what the channel playing on the Mac is called
                                          "auto": ses.gate.manual is None, "tones": mt["tones"], "tone_now": mt["tone_now"], "paused": True, "fm": mt["err"] or last_fm_error(),
-                                         "data": mt.get("data", False), "monitor": mt.get("monitor"), "air": mt.get("air"),
+                                         "data": mt.get("data", False), "monitor": mt.get("monitor"), "air": mt.get("air"), "feed": mt.get("feed"),
                                          "denoise_off": mt.get("denoise_off", False)}), "application/json")   # (v170) diagnostic only - never affects playback
         if u.path == "/debug":
             def sh(cmd):

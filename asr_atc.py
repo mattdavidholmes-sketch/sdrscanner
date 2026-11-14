@@ -73,6 +73,73 @@ def spoken(cs):
     digits = " ".join({"0": "zero", "1": "one", "2": "two", "3": "three", "4": "four", "5": "five", "6": "six", "7": "seven", "8": "eight", "9": "niner"}[d] for d in m.group(2))
     return f"{AIRLINES.get(m.group(1), m.group(1))} {digits}{(' ' + m.group(3)) if m.group(3) else ''}"
 
+_NUM = {"zero": "0", "oh": "0", "one": "1", "two": "2", "three": "3", "tree": "3", "four": "4", "five": "5", "fife": "5", "six": "6", "seven": "7", "eight": "8",
+        "nine": "9", "niner": "9", "ten": "10", "eleven": "11", "twelve": "12", "thirteen": "13", "fourteen": "14", "fifteen": "15", "sixteen": "16", "seventeen": "17",
+        "eighteen": "18", "nineteen": "19"}
+_TENS = {"twenty": "2", "thirty": "3", "forty": "4", "fifty": "5", "sixty": "6", "seventy": "7", "eighty": "8", "ninety": "9"}
+# words that belong to a call and are never a mangled airline name
+_ATC = set("""heading runway level flight climb climbing descend descending maintain maintaining thousand hundred to for the and direct contact departure arrival
+tower ground centre center toronto terminal good day morning evening afternoon night from on with at of turn left right cleared clear land takeoff approach ils visual
+speed knots feet roger thanks thank you bye hello is it we are now out passing through leaving reaching up down vectors expect hold short line wait taxi via squawk
+altimeter wind traffic radar identified heavy super confirm affirm negative request requesting standby go ahead say again correction approved unable wilco check in a an
+that this i course decimal point frequency over continue proceed cross behind follow number sir ma'am please when ready report established localizer glidepath final
+alpha bravo charlie delta echo foxtrot golf hotel india juliett juliet kilo lima mike november oscar papa quebec romeo sierra tango uniform victor whiskey xray x-ray yankee zulu""".split())
+_GUARD = {"squawk", "squawking", "altimeter", "heading", "runway", "level", "decimal", "point", "frequency", "contact"}
+def fix_callsigns(text, live):
+    """(v226) Put the airline's radio name right where the flight number says which aircraft it is.
+    The model learned its airlines from European recordings: on 13 Nov, 07:28-07:30, Envoy 3524 came out as "Envoy" once and
+    then as "on boeing three five twenty four", "voz 3524" and "aero flot three five two four". The number it gets right.
+    Rule: a flight number of four digits or more, written as a number of its own, that exactly ONE aircraft in the air carries
+    (`live`: their callsigns), not after "squawk / altimeter / heading / runway / level / decimal / frequency / contact" and not a
+    count of thousands or hundreds. Then the one or two words in front of it, if they are neither part of a call's vocabulary
+    nor any airline's name, are that airline's name mangled, and are replaced. A DIFFERENT airline's name in front is left as
+    written (it may be right: an aircraft that just left the list). Three-digit numbers are left alone: on the same morning
+    "four five two" was both an Air Canada in the air and a Jazz parked at the gate.
+    Also: a known name the model wrote in two words in front of a number ("morning star eight zero eight two").
+    -> (text, [{"callsign", "name", "was"}]); the text is returned untouched when nothing applies."""
+    import re as _re
+    if not text or not live: return text, []
+    toks = text.split(); norm = [_re.sub(r"[^a-z0-9'-]", "", t.lower()) for t in toks]
+    tel = {}; bynum = {}
+    for cs in live:
+        m = _re.match(r"([A-Z]{3})(\d+)[A-Z]*$", cs or "")
+        if not m or m.group(1) not in AIRLINES: continue
+        tel[cs] = AIRLINES[m.group(1)]; n = m.group(2).lstrip("0")
+        if len(n) >= 4: bynum.setdefault(n, []).append(cs)
+    names = {w for v in AIRLINES.values() for w in v.lower().split()}
+    # number runs: (first token, one past the last, digits)
+    runs = []; i = 0
+    while i < len(norm):
+        j = i; d = ""
+        while j < len(norm):
+            w = norm[j]
+            if w.isdigit(): d += w
+            elif w in _NUM: d += _NUM[w]
+            elif w in _TENS:
+                if j + 1 < len(norm) and norm[j + 1] in _NUM and len(_NUM[norm[j + 1]]) == 1 and norm[j + 1] not in ("zero", "oh"): d += _TENS[w] + _NUM[norm[j + 1]]; j += 1
+                else: d += _TENS[w] + "0"
+            else: break
+            j += 1
+        if j > i: runs.append((i, j, d)); i = j
+        else: i += 1
+    fixes = []; edits = []                                              # edits: (first token, one past the last, replacement)
+    for a, b, d in runs:
+        if b < len(norm) and norm[b] in ("thousand", "hundred"): continue
+        if a and norm[a - 1] in _GUARD: continue
+        c = bynum.get(d.lstrip("0"))
+        if c and len(c) == 1 and a:
+            name = tel[c[0]]; k = a
+            while k > 0 and a - k < 2 and norm[k - 1] and norm[k - 1] not in _ATC and norm[k - 1] not in names and norm[k - 1] not in _NUM and norm[k - 1] not in _TENS and not norm[k - 1].isdigit(): k -= 1
+            if k < a: edits.append((k, a, name)); fixes.append({"callsign": c[0], "name": name, "was": " ".join(toks[k:a])})
+    # a known one-word name written in two words, in front of a number, when an aircraft of that airline is in the air
+    one = {v.lower(): v for v in set(tel.values()) if " " not in v and len(v) >= 6}
+    for a, b, d in runs:
+        if a >= 2 and (norm[a - 2] + norm[a - 1]) in one and not any(e[0] <= a - 1 < e[1] for e in edits):
+            v = one[norm[a - 2] + norm[a - 1]]; edits.append((a - 2, a, v)); fixes.append({"callsign": "", "name": v, "was": " ".join(toks[a - 2:a])})
+    if not edits: return text, []
+    for k, a, name in sorted(edits, reverse=True): toks[k:a] = [name]
+    return " ".join(toks), fixes
+
 def to16k(path):
     sox = "/opt/homebrew/bin/sox" if os.path.exists("/opt/homebrew/bin/sox") else "sox"
     tmp = tempfile.NamedTemporaryFile(suffix=".wav", delete=False).name
@@ -121,9 +188,12 @@ def main(files):
             # transmissions it read the same way through two different receive chains scored 0.64-0.75; what it wrote on carriers
             # with no speech on them at all ("United four five zero", "heading flight level eight three") scored 0.28-0.61, or was
             # a callsign lifted from the list of aircraft in the prompt. The app marks low figures; it does not hide them.
+            heard = text; text, fixed = fix_callsigns(text, live)     # (v226) the airline's name from the aircraft in the air, where the flight number pins it down
             words = [w for s in segs for w in (s.words or [])]
             conf = round(sum(w.probability for w in words) / len(words), 2) if words else None
-            print(json.dumps({"file": f, "text": text, "conf": conf, "words": len(words), "secs": round(time.time() - t0, 1)}), flush=True)
+            out = {"file": f, "text": text, "conf": conf, "words": len(words), "secs": round(time.time() - t0, 1)}
+            if fixed: out["heard"] = heard; out["fixed"] = fixed
+            print(json.dumps(out), flush=True)
         except Exception as e:
             print(json.dumps({"file": f, "error": repr(e)}), flush=True)
         finally:

@@ -334,6 +334,7 @@ class Recorder:
                 self.path = os.path.join(self.dir, f"{self.mhz:.4f}_{self.name}_{dt.datetime.now():%Y%m%d_%H%M%S}.wav")
                 self.f = open(self.path, "wb"); self.f.write(wav_header(0)); self.bytes = 0
             self.f.write(b); self.bytes += len(b); self.closed = 0
+            if self.bytes >= RATE * 2 * 120: self.close()                # (v225) two minutes a clip: with the carrier squelch a net is one opening for as long as the repeater stays up (a 93 s over was 4.4 MB); the next block starts the next clip
         elif self.f:
             self.closed += 1
             if self.closed > 20: self.close()
@@ -359,6 +360,12 @@ class Session:
         self.rawf = open(raw_path, "wb") if raw_path else None
         self.rec = Recorder(record_dir, mhz, name) if record_dir else None
         self.alive = True; self.err = ""; self.last_data = time.time(); self.keep_all = False      # keep_all: a user listen - never mute, never drop a clip as 'data'
+        # (v228) Does the receiver deliver all of its audio? One block is 0.1 s of sound; blocks are counted against the clock,
+        # 5 s at a time (rtl_fm hands them over in lumps of 0.4 s, so nothing shorter means anything). feed = audio received /
+        # audio due over the last 5 s, feed_min = the lowest such figure of this listen, feed_stalls = pauses of more than 1 s
+        # between two blocks. 1.00 and 0 on a healthy dongle. A dongle that is dropping off USB shows up here - on 12 Nov that
+        # sounded like clicks and was blamed on the page's player (README, 14 Nov).
+        self.feed = None; self.feed_min = None; self.feed_stalls = 0; self.feed_longest = 0.0; self._fn = 0; self._ft = 0.0; self._fl = 0.0
         lf = open(log_path, "a") if log_path else subprocess.DEVNULL
         if log_path:
             with open(log_path, "a") as f: f.write(f"\n=== {dt.datetime.now():%H:%M:%S} {' '.join(rtl_cmd(mhz, mode, gain))}\n")
@@ -372,7 +379,14 @@ class Session:
             while self.alive:
                 b = self.rtl.stdout.read(self.blk)
                 if not b: self.err = "rtl_fm stopped"; break
-                self.last_data = time.time()
+                self.last_data = tb = time.time()
+                if self._fn == 0: self._ft = tb
+                else:
+                    if tb - self._fl > 1.0: self.feed_stalls += 1; self.feed_longest = max(self.feed_longest, tb - self._fl)
+                    if self._fn % 50 == 0:
+                        self.feed = round(5.0 / max(tb - self._ft, 0.5), 3); self._ft = tb
+                        if self._fn > 50: self.feed_min = self.feed if self.feed_min is None else min(self.feed_min, self.feed)   # the first 5 s hold the start-up
+                self._fn += 1; self._fl = tb
                 out = self.gate.process(b)
                 if self.rawf: self.rawf.write(b)
                 if self.gate.open and self.mode == "fm": self.tones.feed(b)
@@ -412,6 +426,7 @@ class Session:
         g = self.gate
         return {"open": g.open, "zcr": round(g.zcr, 2), "thresh": round(g.thresh, 2), "level": round(g.level), "tones": self.tones.summary(), "tone_now": self.tones.last, "err": self.err,
                 "data": g.data or g.data_latched, "data_secs": round(g.data_blocks / 10, 1), "voice_cv": round(g.voice_cv, 2),
+                "feed": {"now": self.feed, "min": self.feed_min, "stalls": self.feed_stalls, "longest": round(self.feed_longest, 1)},   # (v228)
                 "denoise_off": DENOISE._disabled}      # (v169) visibility into the speex denoiser's fail-open state, for diagnostics - never gates playback
 
 

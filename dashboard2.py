@@ -512,6 +512,7 @@ def recordings(limit=1000):
         try:
             j = json.load(open(tp[:-4] + ".asr.json")); agree = j.get("agree")
             asr = {"air": "atc" in j, "atc": bool(j.get("atc")), "unsure": bool(j.get("unsure")), "conf": j.get("conf")}   # (v214) airband clips: which engine the text is from and how sure it was
+            if j.get("fixed"): asr["fixed"] = [{"name": x.get("name"), "was": x.get("was"), "callsign": x.get("callsign")} for x in j["fixed"]][:4]   # (v226)
         except Exception: pass
         out.append({"file": base, "mhz": parts[0], "name": parts[1] if len(parts) > 2 else "", "secs": round(max(0, (st.st_size - 44) / (RATE * 2)), 1),
                     "time": dt.datetime.fromtimestamp(st.st_mtime).strftime("%b %d %H:%M:%S"), "text": txt, "agree": agree, "asr": asr, "done": os.path.exists(tp)})
@@ -908,7 +909,7 @@ def _digits_close(a, b):
     if abs(len(a) - len(b)) != 1: return False
     s, l = (a, b) if len(a) < len(b) else (b, a)
     return any(l[:i] + l[i + 1:] == s for i in range(len(l)))
-def air_heard(window=900):
+def air_heard(window=900, only=None, detail=None):
     """callsign -> 'HH:MM on 128.800 - "what was said"' for the aircraft named in the airband transcripts of the last 15 minutes.
     The airline's radio name and the WHOLE flight number have to be in the text ((v180): "air canada two" used to match every Air
     Canada 2xx). (v214) One slip in the number is allowed when it can only mean one aircraft: on 13 Nov at 02:07 the controller
@@ -927,7 +928,7 @@ def air_heard(window=900):
             sp = asr_atc.spoken(cs).lower()
             if sp == cs.lower() or len(sp.split()) <= len(m.group(2)): continue
             live.setdefault(_say_norm(sp.rsplit(" ", len(m.group(2)))[0]), {})[m.group(2).lstrip("0") or "0"] = cs
-        for f in sorted(glob.glob(os.path.join(HERE, "scan_*", "recordings", "*.txt")), key=os.path.getmtime, reverse=True)[:80]:
+        for f in ([only] if only else sorted(glob.glob(os.path.join(HERE, "scan_*", "recordings", "*.txt")), key=os.path.getmtime, reverse=True)[:80]):
             try: mhz = float(os.path.basename(f).split("_")[0])
             except ValueError: continue
             if not 108 <= mhz <= 137 or time.time() - os.path.getmtime(f) > window: continue      # (v180) only the last 15 min says where a plane is NOW
@@ -945,6 +946,7 @@ def air_heard(window=900):
                         near = [n for n in nums if len(n) >= 2 and len(said) >= 2 and _digits_close(said, n)]
                         if len(near) != 1: continue
                         cs = nums[near[0]]; how = f" (the transcript has {mm.group(1)} for {re.sub(r'^[A-Z]+', '', cs)}; no other {tel.title()} flight in the air has a number that close)"
+                    if detail is not None: detail.append((mhz, cs, "one digit off" if how else "name and number"))
                     if cs not in out: out[cs] = f'{stamp} on {mhz:.3f} - "{said_txt}"{how}'
             # (v218) The number without the name. The recogniser learned its airlines in Europe: on 13 Nov, 07:28-07:30, Envoy 3524 was
             # written "Envoy" once and then "on boeing", "voz" and "aero flot three five two four". A four-digit flight number that
@@ -956,9 +958,35 @@ def air_heard(window=900):
                 c = bynum.get(t.lstrip("0")) if t.isdigit() else None
                 if not c or len(c) != 1 or c[0] in out: continue
                 if i and toks[i - 1] in ("squawk", "squawking", "altimeter", "heading", "runway", "level", "decimal", "point", "frequency", "contact"): continue
+                if detail is not None: detail.append((mhz, c[0], "number only"))
                 out[c[0]] = f'{stamp} on {mhz:.3f} - "{said_txt}" (the flight number {t} is in the transcript without this airline\'s name; it is the only aircraft in the air with that number)'
     except Exception: pass
     return out
+# (v228) The on-air check of the aircraft rules, collected by the app itself. Whenever an airband transcript that has just been
+# written names an aircraft that is in the air, one line goes to heard_check.csv: the channel it was heard on, what the rules
+# (_helpers/follow_traffic.py) said about that aircraft at that moment - its phase and the channels to listen on, in order - and
+# where the heard channel stands in that list (0 = not in it). After a day of traffic the file says how often the first
+# suggestion, or any suggestion, was the channel the aircraft was really on, for each phase and each channel - Centre sectors and
+# the Terminal's satellite channels included. Only channels something was listening to can appear (the Monitor scan, the voice
+# check, a listen), and only calls the recogniser could put a flight on.
+HEARD_CHECK = os.path.join(HERE, "heard_check.csv")
+def heard_check(tp):
+    det = []; air_heard(window=600, only=tp, detail=det)
+    if not det: return
+    by = {x.get("callsign"): x for x in aircraft_now().get("aircraft", [])}
+    new = not os.path.exists(HEARD_CHECK); seen = set()
+    with open(HEARD_CHECK, "a") as fh:
+        if new: fh.write("when,callsign,heard on,matched by,phase,suggested (in order),place of the heard channel in that list (0 = not in it),km,altitude ft,seconds from the call to this line,why\n")
+        try: lag = int(time.time() - dt.datetime.strptime("".join(os.path.basename(tp)[:-4].split("_")[-2:]), "%Y%m%d%H%M%S").timestamp())
+        except ValueError: lag = ""
+        for mhz, cs, how in det:
+            if cs in seen: continue
+            seen.add(cs); x = by.get(cs) or {}
+            fr = [round(float(q[0]), 3) for q in (x.get("freqs") or [])]
+            rank = next((i + 1 for i, q in enumerate(fr) if abs(q - mhz) < 0.0006), 0)
+            why = str(x.get("why") or "").replace(",", ";").replace("\n", " ")[:160]
+            fh.write(f"{dt.datetime.fromtimestamp(os.path.getmtime(tp)):%Y-%m-%d %H:%M:%S},{cs},{mhz:.3f},{how},{x.get('phase') or ''},{' '.join(f'{q:.3f}' for q in fr)},{rank},{x.get('km', '')},{x.get('alt_ft', '')},{lag},{why}\n")
+v1.ON_TRANSCRIPT[0] = heard_check
 _LAST_UREQ = {"target": None, "t": 0.0}
 def sdrt_user_start(target):
     # (v173/v177) a double tap (or two devices) used to launch SDRTrunk twice 2 s apart - the second start killed the first. v173 compared
@@ -1736,13 +1764,9 @@ def aircraft_sources():
     return srcs
 
 YYZ_LL = (43.6777, -79.6248); YTZ_LL = (43.6275, -79.3962)
-AIR_CH = {"twrE": (118.700, "YYZ TWR N"), "twrW": (118.350, "YYZ TWR S"), "gndN": (121.650, "YYZ GND N"), "gndS": (121.900, "YYZ GND S"),
-          "apron": (122.825, "YYZ APRON"), "clnc": (121.300, "YYZ CLNC"), "atis": (120.825, "YYZ ATIS"), "ytzTwr": (118.200, "YTZ TWR"),
-          "ytzGnd": (121.700, "YTZ GND"), "vfr": (133.400, "TOR VFR"), "guard": (121.500, "AIR GUARD"),
-          "arr": [(132.800, "YYZ ARR 3"), (124.475, "YYZ ARR 1"), (125.400, "YYZ ARR 2")],      # (v181) main arrival channel first; 134.175 is the ILS monitor
-          "dep": [(128.800, "YYZ DEP 2"), (127.575, "YYZ DEP 1")],
-          # (v210) Toronto Centre around Toronto: west / east of Pearson, low / high sectors (see dashboard.TOR_CENTRE for the sources)
-          "ctr": {"wl": [(132.475, "CTR HAMILT"), (133.300, "CTR GRIMSB")], "wh": [(125.775, "CTR CENTRA"), (134.925, "CTR OAKVIL")], "el": [(124.925, "CTR E RDR"), (127.000, "CTR SIMCOE"), (134.250, "CTR E RDR2")], "eh": [(134.575, "CTR BARRIE")]}}
+# (v227) The rules for what an aircraft is doing and which channel it is on live in ONE place: _helpers/follow_traffic.py. This file
+# had a second copy (AIR_CH, air_phase, air_freqs: the fallback "so the tab works without that file") and the page a third; v210
+# changed one and left another, and the Aircraft tab said "not in the bank" for two more versions. Both copies are gone.
 
 def _dist_brg(a, b):
     import math
@@ -1751,44 +1775,6 @@ def _dist_brg(a, b):
     km = 2 * 6371 * math.asin(math.sqrt(h))
     brg = (math.degrees(math.atan2(math.sin(dlon) * math.cos(math.radians(b[0])), math.cos(math.radians(a[0])) * math.sin(math.radians(b[0])) - math.sin(math.radians(a[0])) * math.cos(math.radians(b[0])) * math.cos(dlon))) + 360) % 360
     return km, brg
-
-def air_phase(x):
-    """(v132) Fallback flight phase (altitude, vertical rate, distance to and heading toward YYZ / YTZ). When _helpers/follow_traffic.py
-    is present its route- and type-aware phase() overrides this (aircraft_now); this stays so the Aircraft tab works without that file."""
-    if x.get("on_ground"): return "on the ground"
-    alt = x.get("alt_ft") or 0; vr = x.get("vrate") or 0; tr = x.get("track") or 0
-    for n, ap in (("YYZ", YYZ_LL), ("YTZ", YTZ_LL)):
-        d, brg = _dist_brg((x["lat"], x["lon"]), ap); diff = abs((tr - brg + 540) % 360 - 180)
-        if d < 45 and alt < 9000 and vr <= 0 and diff < 50: return f"arriving {n}"
-        if d < 35 and alt < 9000 and vr > 200 and diff > 110: return f"departing {n}"
-    return "climbing" if vr > 300 else ("descending" if vr < -300 else "level")
-
-def air_freqs(x):
-    """(v132) Which airband channel(s) this aircraft is most likely talking on right now -> (why, [(mhz, name), ...]), best first.
-    Tower/ground sides follow the aircraft's side of the field; arrivals and departures get the whole Arrival / Departure set."""
-    p = x.get("phase") or air_phase(x); alt = x.get("alt_ft") or 0
-    dz, _ = _dist_brg((x["lat"], x["lon"]), YYZ_LL); dt, _ = _dist_brg((x["lat"], x["lon"]), YTZ_LL); C = AIR_CH
-    east = x["lon"] > YYZ_LL[1]; north = x["lat"] > YYZ_LL[0]
-    if x.get("on_ground"):
-        if dz < 4: return "on the ground at Pearson", [C["gndN"] if north else C["gndS"], C["apron"], C["clnc"], C["twrE"] if east else C["twrW"]]
-        if dt < 2: return "on the ground at Billy Bishop", [C["ytzGnd"], C["ytzTwr"]]
-        return "on the ground", []
-    if "YTZ" in p: return f"{p} - Billy Bishop tower", [C["ytzTwr"], C["ytzGnd"]]
-    if p == "arriving YYZ":
-        if dz < 14 and alt < 3500: return "short final - Pearson tower", [C["twrE"] if east else C["twrW"], C["twrW"] if east else C["twrE"]] + C["arr"][:2]
-        return "on approach - Toronto Arrival", list(C["arr"]) + [C["twrE"] if east else C["twrW"]]
-    if p == "departing YYZ":
-        if dz < 9 and alt < 3000: return "just airborne - Pearson tower", [C["twrE"] if east else C["twrW"]] + list(C["dep"])
-        return "climbing out - Toronto Departure", list(C["dep"])
-    if alt < 4000 and dz > 10 and dt > 6: return "low and local - VFR advisory", [C["vfr"], C["guard"]]
-    if alt < 9000 and dz < 30: return f"{p} near Pearson - Arrival/Departure sectors", list(C["arr"]) + list(C["dep"])
-    # (v210) enroute: Toronto Centre. Which sector has the aircraft is a best guess - its side of Pearson, and low sectors first below
-    # 18,000 ft (where Canadian high-level airspace begins; the sectors' real floors and ceilings are not published in the sources used)
-    K = C["ctr"]; west = x["lon"] < YYZ_LL[1]; high = alt >= 18000
-    order = ((K["wh"] + K["wl"]) if high else (K["wl"] + K["wh"])) if west else ((K["eh"] + K["el"]) if high else (K["el"] + K["eh"]))
-    if alt < 5000 and dz >= 30:                                               # (v213) low and far from Pearson: Hamilton, Waterloo, Buffalo, Oshawa ...
-        return f"{p} - low and away from Pearson: with another airport's controller, not known here (Centre's low sectors are a guess)", order
-    return f"{p} - with Toronto Centre, {'west' if west else 'east'} side (which sector is a best guess)", order
 
 def fr24_link(x):
     """(v212) A Flightradar24 address that opens something. Checked in a browser on 13 Nov:
@@ -1980,22 +1966,17 @@ def aircraft_now(max_age=10):
             import asr_atc
             spoken = {x["callsign"]: asr_atc.spoken(x["callsign"]) for x in out if x["callsign"]}
         except Exception: spoken = {}
+        try:                                                                     # (v227) the one rule set: phase, why, channels (most likely first), the runway it is lined up with
+            hp = os.path.join(HERE, "_helpers")
+            if hp not in sys.path: sys.path.insert(0, hp)
+            import follow_traffic as FT
+        except Exception: FT = None
         for x in out:
-            try: x["phase"] = air_phase(x); x["why"], x["freqs"] = air_freqs(x)
-            except Exception: x["phase"], x["why"], x["freqs"] = "", "", []
-        try:                                                                     # (v135) _helpers/follow_traffic.py (route- and type-aware phases) is the shared truth when present
-            sys.path.insert(0, os.path.join(HERE, "_helpers")); import follow_traffic as FT
-            for x in out:
-                try:
-                    p2 = FT.phase(x)
-                    if p2: x["phase"] = p2
-                    if hasattr(FT, "detail"):                                    # (v181) one rule set: why, channels (most likely first), the runway it is lined up with
-                        x["why"], f2, x["rwy"] = FT.detail(x); x["freqs"] = [tuple(f) for f in f2]
-                    else:
-                        f2 = [tuple(f) for f in FT.freqs(dict(x, phase=p2))]
-                        if f2: x["freqs"] = f2 + [f for f in x["freqs"] if f not in f2]
-                except Exception: pass
-        except Exception: pass
+            x["phase"], x["why"], x["freqs"], x["rwy"] = ("on the ground" if x.get("on_ground") else ""), "", [], ""
+            if FT is None: x["why"] = "the rules file _helpers/follow_traffic.py could not be loaded"; continue
+            try:
+                x["phase"] = FT.phase(x) or x["phase"]; x["why"], f2, x["rwy"] = FT.detail(x); x["freqs"] = [tuple(f) for f in f2]
+            except Exception: pass
         for x in out:
             try: air_extras(x)
             except Exception: x["heli"] = False; x["eta_min"] = None; x["runway"] = ""
@@ -2400,6 +2381,11 @@ class H2(v1.H):
             open(v1.RESTART_REQ, "w").write("force" if force else "idle")
             v1.say("restart requested from the browser" + (" (force: now)" if force else " (when nobody is listening)"))
             return self.send(json.dumps({"ok": True, "when": "now" if force else "when idle"}), "application/json")
+        if u.path == "/api/playerstat":                                         # (v228) the page player's own account, every 30 s of a listen in a browser
+            q = parse_qs(u.query); g = lambda k, d="": (q.get(k) or [d])[0]
+            try: v1.player_stat(g("kind"), float(g("secs", "0")), int(float(g("holes", "0"))), float(g("speed", "1")), float(g("low", "0")), float(g("est", "0")), self.client_address[0])
+            except Exception: pass
+            return self.send(json.dumps({"ok": True}), "application/json")
         if u.path == "/api/macvol":                                             # (v223) the Vol slider, for sound played by the Mac itself
             try:
                 qv = parse_qs(u.query)
@@ -3114,15 +3100,23 @@ $('#aladd').onclick=()=>{const v=$('#alval').value.trim();if(!v)return;loadAlert
 // (v214) The tag behind a transcript. Airband clips are read by the ATC-trained model and the tag has to say what THAT means: the old
 // tag only compared two engines, so a call the ATC model read with confidence was marked "? uncertain" whenever the general engines
 // could not make it out - which on airband is the normal case.
-function recTag(x){const a=x.asr;if(!a||!a.air)return agreeTag(x.agree);const T=(c,t,tip)=>' <span class="tag" style="'+c+'" title="'+tip+'">'+t+'</span>',pc=a.conf!=null?Math.round(a.conf*100)+'%':'';
+// (v226) an airline name that was put right from the aircraft in the air says so, with what the recogniser had written
+function fixNote(x){const f=x.asr&&x.asr.fixed;if(!f||!f.length)return '';return ' <span class="tag" style="border-color:#2a3b55;color:var(--acc2)" title="'+esc(f.map(o=>'"'+o.was+'" was written; '+(o.callsign?o.callsign+' is the only aircraft in the air with that flight number':'an aircraft of that airline is in the air')).join(' · '))+'">name: '+esc(f.map(o=>o.name).join(', '))+' ← “'+esc(f.map(o=>o.was).join('”, “'))+'”</span>';}
+function recTag(x){return recTag0(x)+fixNote(x);}
+function recTag0(x){const a=x.asr;if(!a||!a.air)return agreeTag(x.agree);const T=(c,t,tip)=>' <span class="tag" style="'+c+'" title="'+tip+'">'+t+'</span>',pc=a.conf!=null?Math.round(a.conf*100)+'%':'';
  if(a.unsure)return T('border-color:#6b5520;color:var(--warn)','? unsure',a.atc?('the ATC model was not sure of this one'+(pc?' (confidence '+pc+')':'')+' and no other engine heard the same'):'the ATC model found no speech in it; the two general engines agree with each other');
  if((x.agree||0)>=0.5)return T('border-color:#1f5c3a;color:var(--acc)','✓ engines agree','the ATC model and a second engine wrote the same thing ('+Math.round(x.agree*100)+'% of the words)');
  return T('border-color:#1f5c3a;color:var(--acc)','ATC model','read by the model trained on air traffic radio'+(pc?', confidence '+pc:'')+'; the general-purpose engines could not make this one out');}
-let REC_ALL=false;
-async function loadRecs(){loadAlerts();const all=await (await fetch('/api/recordings')).json();const el=$('#recs');const quiet=all.filter(x=>x.done&&!x.text).length,r=REC_ALL?all:all.filter(x=>!(x.done&&!x.text));
+let REC_ALL=false,REC_CH='';
+// (v225) kept per channel now (40 with speech each, 400 in all): a channel picker, busiest first
+async function loadRecs(){loadAlerts();const every=await (await fetch('/api/recordings')).json();const el=$('#recs');
+ const chans={};every.forEach(x=>{(chans[x.mhz]=chans[x.mhz]||{n:0,name:x.name}).n++;});if(REC_CH&&!chans[REC_CH])REC_CH='';
+ const all=REC_CH?every.filter(x=>x.mhz===REC_CH):every;
+ const pick=Object.keys(chans).length>1?`<div style="padding:8px 12px;border-bottom:1px solid var(--line);display:flex;gap:10px;align-items:center;flex-wrap:wrap"><select onchange="REC_CH=this.value;loadRecs()" style="font:inherit;background:var(--card);color:var(--ink);border:1px solid var(--line);border-radius:8px;padding:6px 8px;max-width:100%"><option value="">All channels (${every.length})</option>${Object.keys(chans).sort((a,b)=>chans[b].n-chans[a].n).map(k=>`<option value="${k}"${k===REC_CH?' selected':''}>${k} ${esc(chans[k].name)} (${chans[k].n})</option>`).join('')}</select><span class="sv">kept: the newest 40 with speech per channel, 400 in all · every transcript is archived</span></div>`:'';
+ const quiet=all.filter(x=>x.done&&!x.text).length,r=REC_ALL?all:all.filter(x=>!(x.done&&!x.text));
  const note=quiet?`<div class="sv" style="padding:8px 12px;border-bottom:1px solid var(--line)">${quiet} clip${quiet>1?'s':''} in which no speech could be made out (noise, a kerchunk, an open carrier, a voice too weak to read) ${REC_ALL?'shown':'hidden'} · <a href="#" onclick="REC_ALL=!REC_ALL;loadRecs();return false" style="color:var(--acc)">${REC_ALL?'hide':'show'}</a></div>`:'';
- if(all.length&&!r.length){el.innerHTML=note+'<div class="empty">No clip with speech in it yet.</div>';return;}if(!r.length){el.innerHTML='<div class="empty">No recordings yet. Every transmission that opens the squelch while you listen is saved here.</div>';return;}
- el.innerHTML=note+r.map(x=>`<div class="rec"><div><span class="f">${x.mhz}</span><br><span class="sv">${esc(x.name)}</span></div><div class="sv">${x.time} · ${x.secs} s${x.text?'<div class="tx">“'+esc(x.text.replace(/^\(unsure\) /,''))+'”'+recTag(x)+'</div>':'<div class="sv" style="opacity:.65">'+(x.done?'no speech could be made out':'transcript on its way…')+'</div>'}</div><audio controls preload="none" src="/rec/${encodeURIComponent(x.file)}"></audio><button class="ghost" onclick="delRec('${x.file}')">Delete</button></div>`).join('');capList(el,'.rec','rec');}
+ if(all.length&&!r.length){el.innerHTML=pick+note+'<div class="empty">No clip with speech in it yet.</div>';return;}if(!r.length){el.innerHTML='<div class="empty">No recordings yet. Every transmission that opens the squelch while you listen is saved here.</div>';return;}
+ el.innerHTML=pick+note+r.map(x=>`<div class="rec"><div><span class="f">${x.mhz}</span><br><span class="sv">${esc(x.name)}</span></div><div class="sv">${x.time} · ${x.secs} s${x.text?'<div class="tx">“'+esc(x.text.replace(/^\(unsure\) /,''))+'”'+recTag(x)+'</div>':'<div class="sv" style="opacity:.65">'+(x.done?'no speech could be made out':'transcript on its way…')+'</div>'}</div><audio controls preload="none" src="/rec/${encodeURIComponent(x.file)}"></audio><button class="ghost" onclick="delRec('${x.file}')">Delete</button></div>`).join('');capList(el,'.rec','rec');}
 async function delRec(f){await fetch('/delrec?f='+encodeURIComponent(f));loadRecs();toast('deleted');}
 async function loadDebug(){try{const d=await (await fetch('/debug')).json();const NL=String.fromCharCode(10);$('#dbgsum').textContent='scan '+(d.paused?'PAUSED (listening)':'running')+' · '+d.folder+' · recent USB errors: '+d.usb_errors_recent+(d.player.mhz?' · player on '+d.player.mhz:'');
  let t='WHAT HAPPENED (events.log, newest last)'+NL+((d.events||[]).join(NL)||'(nothing yet)')+NL+NL+'PROCESSES'+NL+(d.procs||'(none)')+NL+NL+'rtl_fm (listener)'+NL+d.fm_log;for(const k in d.logs)t+=NL+NL+'── '+k+NL+d.logs[k];$('#dbgout').textContent=t;}catch(e){$('#dbgout').textContent='debug failed: '+e;}}
@@ -3167,7 +3161,7 @@ function sqArg(){return $('#auto').checked?'auto':$('#sq').value;}
 const onMac=['localhost','127.0.0.1'].includes(location.hostname);let outDev='auto';try{outDev=localStorage.getItem('out')||'auto';}catch(e){}if(MOBILE)outDev='browser';   /* (v160) a phone/tablet always plays through its own speaker - never the Mac's */
 function useMac(){return outDev==='mac'||(outDev==='auto'&&onMac);}
 function paintOut(){const b=$('#outsel');if(!b)return;b.value=outDev;$('#outhint').textContent=useMac()?'→ Mac speakers':'→ this device';}
-var PO={nextT:0,rate:{},m:9,tWin:0,t0:0,tLast:0,got:0,est:0,mode:0,mIn:0,gaps:0};
+var PO={nextT:0,rate:{},m:9,tWin:0,t0:0,tLast:0,got:0,est:0,mode:0,mIn:0,gaps:0,rep:0,g0:0,low:9,t00:0};
 function playout(ctx,ab,src,kind){
  /* Queue one piece of audio (v204; speed control redone in v205 and v206).
     Audio reaches the page in lumps (a single FM channel: up to 0.4 s at a time), and the radio's clock and this device's
@@ -3180,7 +3174,7 @@ function playout(ctx,ab,src,kind){
     not fool it, and not before 10 s have passed), a little to the side so the cushion walks back to the middle, and then
     to the delivered speed itself and held. The speed found is remembered per kind of listen. */
  var now=ctx.currentTime,r=PO.rate[kind]||1;
- if(PO.nextT<now+0.03){if(PO.nextT>0)PO.gaps++;PO.nextT=now+1.0;PO.m=9;PO.tWin=now;PO.t0=now;PO.tLast=now;PO.got=0;PO.est=0;PO.mode=0;
+ if(PO.nextT<now+0.03){if(PO.nextT>0){PO.gaps++;PO.low=0;}else{PO.rep=now;PO.g0=PO.gaps;PO.low=9;PO.t00=now;}PO.nextT=now+1.0;PO.m=9;PO.tWin=now;PO.t0=now;PO.tLast=now;PO.got=0;PO.est=0;PO.mode=0;
   var ch=ab.getChannelData(0),k=Math.min(240,ch.length);for(var i=0;i<k;i++)ch[i]*=i/k;}
  var T=now-PO.t0;if(now-PO.tLast>0.05&&T>=10)PO.est=PO.got/T;PO.tLast=now;
  var lead=PO.nextT-now;if(lead<PO.m)PO.m=lead;
@@ -3191,7 +3185,13 @@ function playout(ctx,ab,src,kind){
    else{if(m<1.1){PO.mode=0;r=e;}else if(m>PO.mIn+0.15){PO.mIn=m;r=Math.max(r,e+0.02);}}
    r=Math.max(0.92,Math.min(1.04,r));PO.rate[kind]=r;}
   PO.m=9;PO.tWin=now;}
- src.playbackRate.value=r;src.start(PO.nextT);PO.nextT+=ab.duration/r;PO.got+=ab.duration;}
+ src.playbackRate.value=r;src.start(PO.nextT);PO.nextT+=ab.duration/r;PO.got+=ab.duration;
+ /* (v228) The player's own account of the listen. Every 30 s it tells the app how many holes it had to leave in the sound,
+    the speed it plays at and the least it had in hand - the answer to "does the player leave holes" from the device
+    that played it. The app writes it to player_stats.log and puts a line in the event log when there were holes. */
+ if(now-PO.t00>3&&lead<PO.low)PO.low=lead;
+ if(now-PO.rep>=30){try{fetch('/api/playerstat?kind='+encodeURIComponent(kind)+'&secs='+Math.round(now-PO.t00)+'&holes='+(PO.gaps-PO.g0)+'&speed='+r.toFixed(3)+'&low='+PO.low.toFixed(2)+'&est='+PO.est.toFixed(3)).catch(function(){});}catch(e){}
+  PO.rep=now;PO.g0=PO.gaps;PO.low=9;}}
 const P={cur:null,abort:null,bytes:0,nextT:0,seq:0,err:'',sdrtOn:false,
  async sdrt(target,name,mhz){this.seq++;this.leftDig=0;if(this.abort){this.abort.abort();this.abort=null;}this.cur={mhz:+mhz||0,mode:'digital',name,where:'mac',target};this.sdrtOn=true;mode='listen';paintMode();$('#pfreq').textContent=mhz?fmt(+mhz):'P25';$('#pname').textContent=name+' · SDRTrunk · Mac speakers';$('#pstat').textContent='starting SDRTrunk…';this.paint();
   try{const r=await (await fetch('/api/sdrt/play?target='+encodeURIComponent(target))).json();if(r.error){$('#pstat').textContent=r.error;toast(r.error);this.cur=null;this.sdrtOn=false;this.paint();return;}$('#pname').textContent=r.name+' · SDRTrunk · Mac speakers';toast('SDRTrunk is decoding '+r.name);}catch(e){$('#pstat').textContent='SDRTrunk: '+e.message;}},

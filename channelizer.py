@@ -180,6 +180,17 @@ class Tap:
         for k in list(self.files): self.close(k)
         self.pre.clear()
 
+# (v224) What this file's FM discriminator puts out with no carrier at all: white noise through sos1 (80 kHz) and sos2 (9 kHz), the
+# phase step of each sample scaled to +-16384, one-pole high-pass, rms per 0.1 s. Measured by putting noise through Channel.process
+# (fm_noise_level() below): 8,230, every block within 2 %. (rtl_fm's figure is 9,459: no channel filter in front of its discriminator.)
+FM_N0 = 8230.0
+def fm_noise_level(blocks=40, seed=3):
+    """measure FM_N0 again - run after any change to the channel filters"""
+    rng = np.random.default_rng(seed); ch = Channel(146.0, "fm", "noise", 146.0e6 - 200e3, manual=30); lv = []
+    for i in range(blocks):
+        ch.process((rng.standard_normal(BLOCK) + 1j * rng.standard_normal(BLOCK)).astype(np.complex64), i * 0.1)
+        if i >= 8: lv.append(ch.gate.level)
+    return float(np.mean(lv)), float(min(lv)), float(max(lv))
 def _sos(cut, fs, order=6):
     return signal.butter(order, cut / (fs / 2), output="sos")
 
@@ -222,6 +233,64 @@ class Channel:
         self.env_hist = []; self.voice_mod = 0.0; self.voice_ok = False; self.am_blocks = 0   # syllabic modulation detector (AM): speech ~0.5-1.0, steady noise/carrier < 0.15
         self.pending = []; self.pending_raw = []; self.live = b""; self.max_mod = 0.0; self.open_n = 0; self.snr_sum = 0.0; self.confirmed = True   # confirmed: the last AM open carried speech (FM: always)
         self.nb = None                                             # noise blanker state
+        # (v224) FM in a scan with the squelch on automatic: carrier squelch + speech on the carrier. See _fm_gate.
+        self.fmq = mode == "fm" and manual is None
+        self.fm_q = False; self.fm_blocks = 0; self.fm_hang = 0; self.fm_idle = 0; self.fm_hist = []; self.fm_conf = False; self.fm_lv = []
+        self.zdh = signal.sosfilt_zi(self.sosh) * 0.0; self.zdv = signal.sosfilt_zi(self.sosv) * 0.0
+        if self.fmq: self.confirmed = False
+    def _fm_gate(self, raw):
+        """(v224) FM squelch for the Monitor scan and the voice check, squelch on automatic. Decides g.open, self.confirmed and what
+        is played; returns the audio to play (silence when shut).
+        Why: the zero-crossing squelch counts how often the audio crosses zero and calls it a signal when that is less often than
+        the channel's noise. Under a weak FM carrier it is MORE often (no de-emphasis: the noise that is left is all treble) -
+        the Skywide repeater on 13 Nov read 0.52-0.62 with its carrier up against 0.50 without. The squelch opened on the loudest
+        syllables only and cut every transmission into pieces; v222/v223 fixed that for a listen, this is the scan.
+        Two measurements, both on the audio that is already there:
+          the carrier - an FM receiver with no signal puts out full-scale noise (FM_N0) and any carrier quiets it. Carrier = the
+                        level is under 0.70 x FM_N0 (and stays one until it is back over 0.80).
+          speech -      the level of the voice band (300-2,800 Hz), 20 ms at a time, over the last second of carrier: how far it
+                        rises and falls, as (85th - 15th percentile) / median. Percentiles, not the standard deviation: a weak FM
+                        carrier clicks, one click lifts one 20 ms frame, and the standard deviation took three clicks for a
+                        syllable. Bench (real speech on a carrier): 1.0-2.0 while somebody talks, 0.5-0.8 for a talker a third as
+                        loud; a carrier alone never over 0.20 from 7.5 dB over the noise up, no carrier 0.16, a digital channel
+                        0.13. 0.35 = somebody is talking. A carrier at the very edge (6 dB: it crackles) reached 0.65 on its
+                        own, so where the level has not been under a quarter of FM_N0 in the last second it takes 0.80.
+        A scan must not stop for a carrier with nobody on it, so here the carrier alone does not open (in a listen it does):
+          a new carrier gets 1.5 s to show speech; what it sends meanwhile is held back and played from its start once it has;
+          once it has, the channel is open until the carrier drops - pauses, the repeater's tail and all (0.3 s silent hang for
+          a flutter); a carrier that then says nothing for 6 s is shut again until somebody talks.
+        Digital channels (a steady buzz in the voice band) never show speech and never open; the data detector is still there
+        behind this for bursts that do."""
+        g = self.gate; q_was = self.fm_q
+        self.fm_q = g.level < (0.80 if q_was else 0.70) * FM_N0
+        a = np.frombuffer(raw, dtype=np.int16).astype(np.float64)
+        b, self.zdh = signal.sosfilt(self.sosh, a, zi=self.zdh); b, self.zdv = signal.sosfilt(self.sosv, b, zi=self.zdv)
+        if self.fm_q and q_was:
+            m = len(b) - len(b) % 480
+            if m: self.fm_hist.extend(np.sqrt(np.mean(b[:m].reshape(-1, 480) ** 2, axis=1)).tolist()); self.fm_hist = self.fm_hist[-50:]
+        else: self.fm_hist = []                                       # no carrier, or its first block (the filters still ring with the noise before it)
+        h = self.fm_hist; mod = 0.0
+        if len(h) >= 30: p15, p50, p85 = np.percentile(h, [15, 50, 85]); mod = float((p85 - p15) / (p50 + 1e-9))
+        self.voice_mod = mod
+        self.fm_lv = (self.fm_lv + [g.level])[-10:] if self.fm_q else []
+        need = 0.35 if (self.fm_lv and min(self.fm_lv) < 0.25 * FM_N0) else 0.80
+        if not self.fm_q:
+            self.fm_blocks = 0
+            if self.fm_hang > 0: self.fm_hang -= 1
+            else: self.fm_conf = False; self.fm_idle = 0
+        else:
+            if not q_was and self.fm_hang <= 0: self.fm_conf = False; self.fm_idle = 0; self.confirmed = False     # a new carrier: nothing proven yet
+            self.fm_blocks += 1
+            if mod >= need: self.fm_conf = True; self.confirmed = True; self.fm_idle = 0
+            elif self.fm_conf and len(h) >= 30:
+                self.fm_idle = self.fm_idle + 1 if mod < 0.25 else 0
+                if self.fm_idle >= 60: self.fm_conf = False; self.fm_idle = 0
+            if self.fm_conf: self.fm_hang = 3
+        # self.confirmed = "this carrier has had speech on it": it outlives the carrier, as on AM, because the Channelizer asks after
+        # the channel has shut whether what it just heard counts. self.fm_conf is the squelch's own state.
+        self.voice_ok = self.fm_conf
+        g.open = g.n > AU.SETTLE and ((self.fm_q and (self.fm_conf or self.fm_blocks <= 15)) or (not self.fm_q and self.fm_conf and self.fm_hang > 0))
+        return raw if (g.open and self.fm_q) else bytes(len(raw))
     def process(self, iq, t_block):
         """iq: complex64 block at FS. Returns (audio_int16_bytes or None, is_open)."""
         n = len(iq)
@@ -304,6 +373,7 @@ class Channel:
         raw = np.clip(audio, -32767, 32767).astype(np.int16).tobytes()
         gated = self.gate.process(raw)                                                   # squelch on the raw discriminator audio
         g = self.gate
+        if self.fmq: gated = self._fm_gate(raw)                                          # (v224) scan, squelch automatic: the carrier and speech on it decide
         if self.mode == "am" and g.manual is None:
             # carrier squelch decides for AM. A strong carrier (>= 3 dB over the floor) opens on its own; a weak one (1.5-3 dB,
             # the 5 Nov threshold) also needs the audio noise-squelch to hear voice-like audio, so a noisy channel cannot pin the hop
@@ -353,8 +423,9 @@ class Channel:
             out = y.astype(np.int16).tobytes()
             self.last_raw = gated                                        # the un-filtered squelched audio: the live path sends THIS through sox (same chain as a direct listen)
             self.live = gated
-            if self.mode == "am" and not self.voice_ok:                  # (5 Nov) grace period: hold the audio back until the speech detector confirms
-                self.pending.append(out); self.pending = self.pending[-8:]; self.pending_raw.append(gated); self.pending_raw = self.pending_raw[-8:]
+            if (self.mode == "am" or self.fmq) and not self.voice_ok:    # (5 Nov) grace period: hold the audio back until the speech detector confirms ((v224) FM in a scan too)
+                keep = 15 if self.fmq else 8
+                self.pending.append(out); self.pending = self.pending[-keep:]; self.pending_raw.append(gated); self.pending_raw = self.pending_raw[-keep:]
                 self.live = b""                                          # nothing to the speakers yet either: no 0.6 s noise burst on a false carrier
             else:
                 if self.rec:
@@ -374,7 +445,7 @@ class Channel:
             self.data_end = self.mode == "fm" and bool(g.data or (g.data_latched and g.data_blocks >= 10)) and self.cv_max < 0.12
             if self.open_n and OPEN_LOG:                                 # one line per open: tune the speech detector from real data
                 try:
-                    with open(OPEN_LOG, "a") as f: f.write(f"{dt.datetime.now():%m-%d %H:%M:%S} {self.name} {self.mhz:.4f} {self.mode} {self.open_n/10:.1f}s max_mod {self.max_mod:.2f} mean_snr {self.snr_sum/self.open_n:.1f} voice {'yes' if self.voice_ok else 'no'}\n")
+                    with open(OPEN_LOG, "a") as f: f.write(f"{dt.datetime.now():%m-%d %H:%M:%S} {self.name} {self.mhz:.4f} {self.mode} {self.open_n/10:.1f}s max_mod {self.max_mod:.2f} mean_snr {self.snr_sum/self.open_n:.1f} voice {'yes' if (self.voice_ok or (self.fmq and self.confirmed)) else 'no'}\n")
                 except Exception: pass
             self.max_mod = 0.0; self.open_n = 0; self.snr_sum = 0.0
         self.pending = []; self.pending_raw = []; self.live = b""
@@ -655,7 +726,7 @@ class Channelizer:
                         # confirmed. A carrier that has not proven itself gets 1.2 s from the moment it appears (enough to confirm), once per
                         # visit for weak ones. Before, every block of any carrier reset the hold: 118.7's noise floor flickering 1.5 dB (62
                         # times in 95 s on 10 Nov) pinned the scanner to that window and the other windows were not visited.
-                        proven = is_open and (ch.mode != "am" or ch.confirmed)
+                        proven = is_open and ch.confirmed                               # (v224) "confirmed" is managed for FM too now (it stays True where the old squelch still decides)
                         if ch.carrier and ch.gate.n >= 2 and not proven and self.steady.get(round(ch.mhz, 4), 0) < 6:
                             g0 = graced.get(ch.mhz)
                             strong = ch.mode != "am" or (ch.floor_db is not None and ch.pow_db - ch.floor_db >= 4.0)
@@ -679,10 +750,10 @@ class Channelizer:
                                     if self.datahits[k] >= 3 and k not in self.trusted: ch.pinned = True; ch.pin_why = "data"
                                     continue
                                 if secs >= 0.5: self.datahits.pop(k, None)
-                            if secs >= 0.5 and (ch.mode != "am" or ch.confirmed):            # (5 Nov) flickers and refused AM carriers stay out of the heard log
+                            if secs >= 0.5 and ch.confirmed:            # (5 Nov) flickers and refused AM carriers stay out of the heard log
                                 self.heard.append({"mhz": ch.mhz, "name": ch.name, "when": dt.datetime.now().strftime("%H:%M:%S"), "secs": secs, "tones": ch.tones.summary()})
                                 self.heard = self.heard[-50:]; self.hotwin[self.gi] = time.time()
-                            if self.on_heard and secs >= 0.5 and (ch.mode != "am" or ch.confirmed):     # (v180) refused AM carriers no longer count as "heard" in the bank
+                            if self.on_heard and secs >= 0.5 and ch.confirmed:     # (v180) refused AM carriers no longer count as "heard" in the bank
                                 try: self.on_heard(ch.mhz, ch.name, secs, ch.tones.summary())
                                 except Exception: pass
                     self.load = 0.8 * self.load + 0.2 * ((time.perf_counter() - t_cpu) / 0.1)
