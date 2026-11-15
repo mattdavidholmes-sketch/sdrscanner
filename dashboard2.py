@@ -2905,6 +2905,9 @@ table:has(#airrows) :is(th,td):nth-child(2),table:has(#airrows) :is(th,td):nth-c
 #airrows td:nth-child(5),#airrows td:nth-child(6){white-space:nowrap}
 #airrows td:first-child a{display:inline-block;min-height:32px;padding:6px 2px}
 }
+/* (v236) the countdown under a net's time ("in 10 h 34 min") ran under the play button: it wraps inside its column, and the column is wider on a wide screen */
+.nr .nt small{white-space:normal;display:inline-block;line-height:1.15}
+@media(min-width:761px){.nr{grid-template-columns:98px 36px minmax(0,1fr) auto}}
 </style></head><body><div class="app">
 <div id="dbanner" style="display:none;background:#b33b3b;color:#fff;padding:10px 16px;font-weight:600;line-height:1.35"></div>
 <header>
