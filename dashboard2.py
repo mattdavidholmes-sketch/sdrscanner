@@ -84,7 +84,8 @@ def state():
     # progress: slices done vs expected (10 min per band per round, 10 rounds)
     return {"folder": d["folder"], "running": d["running"], "paused": d["paused"], "now": d["now"], "t": time.time(), "ip": v1.lan_ip(), "port": PORT, "usb_errors": d.get("usb_errors_recent", 0), "background": d.get("background", ""), "background_last": d.get("background_last", ""),
             "total": d.get("total", 0), "hits": hits, "bands": bands, "recordings": len(recs), "log": d.get("log", "")[-400:],
-            "player": {"mhz": v1._player["mhz"], "where": v1._player["where"]}, "dongle_lost": v1.DONGLE["lost"], "dongle_flat": v1.DONGLE.get("flat", "")}
+            "player": {"mhz": v1._player["mhz"], "where": v1._player["where"]}, "dongle_lost": v1.DONGLE["lost"], "dongle_flat": v1.DONGLE.get("flat", ""),
+            "sweep_only": sweep_only(d["folder"])}
 
 _STC = {"t": 0.0, "val": None, "busy": False, "lock": __import__("threading").Lock()}
 def state_cached(max_age=3.0):
@@ -1164,6 +1165,35 @@ def _sdrt_stop(handback=True):
     except Exception: pass
     if handback: v1.give_dongle_back(0)
 PENDING_SCAN = {"cat": None, "key": None, "t": 0}
+# (v250) THE SWEEP THAT WAS CHOSEN STAYS CHOSEN. A chip starts a sweep of that band set only, and the page says so: "Scanning only
+# YYZ arrivals/tower - click All to go back to everything". But a sweep is five hours of slices (seven with the pauses for
+# listening), and when it had run them the app started the FULL sweep - "no sweep running and idle for 60 s" - with the chip on
+# the page still lit: events.log, 15 Nov, Airport pressed at 01:58:18, All started by the app at 09:14:43; the same on 13-14 Nov
+# after "Ham repeater". Now the chip's choice is kept in _state/sweep_choice.json and the idle start takes it up again; All is
+# a choice like any other. The page's header names a sweep that is not the full one, whatever chip that browser remembers.
+SWEEP_CHOICE = os.path.join(HERE, "_state", "sweep_choice.json")
+def _sweep_key(cat): return cat.lower().replace("/", "").replace(" ", "_")
+def _sweep_tag(cat): return "".join(c for c in cat.lower().replace("/", "").replace(" ", "-") if c.isalnum() or c == "-")      # as dashboard.start_scan names the folder
+def sweep_choice(cat=None):
+    """sweep_choice("Airport") remembers the sweep a chip asked for. sweep_choice() -> (band-set key, label) of the sweep to start
+    when none is running: the one chosen last, or the full sweep when nothing was ever chosen or the choice is no band set."""
+    if cat is not None:
+        try:
+            os.makedirs(os.path.dirname(SWEEP_CHOICE), exist_ok=True)
+            with open(SWEEP_CHOICE + ".tmp", "w") as f: json.dump({"cat": cat, "when": time.strftime("%Y-%m-%d %H:%M:%S")}, f)
+            os.replace(SWEEP_CHOICE + ".tmp", SWEEP_CHOICE)
+        except OSError: pass
+        return _sweep_key(cat), cat
+    try:
+        with open(SWEEP_CHOICE) as f: cat = json.load(f).get("cat")
+        if cat and v1.sdr_scan.CATEGORY_BANDS.get(cat): return _sweep_key(cat), cat
+    except (OSError, ValueError, AttributeError): pass
+    return "all", "All"
+def sweep_only(folder):
+    """'' for a full sweep; else the label of the band set this sweep folder was started for (its name ends in the label's tag)"""
+    m = re.match(r"scan_\d{4}-\d\d-\d\d_\d{4}_(.+)$", folder or "")
+    if not m: return ""
+    return next((c for c in v1.sdr_scan.CATEGORY_BANDS if _sweep_tag(c) == m.group(1)), m.group(1))
 
 # ---------------------------------------------------------------- SDRTrunk call recordings -> the app's Recordings tab
 SDRT_REC_DIR = os.path.expanduser("~/SDRTrunk/recordings"); _SDRT_SEEN = set(); _SDRT_T0 = time.time() - 600
@@ -1499,7 +1529,8 @@ def sweep_when_idle():
             if v1.scan_running(): idle_since = None; continue
             idle_since = idle_since or time.time()
             if time.time() - idle_since > 60 and v1.BG_STATE.get("what", "") == "":
-                idle_since = None; v1.start_scan("all", "All", "no sweep running and idle for 60 s")
+                idle_since = None; key, cat = sweep_choice()                 # (v250) the sweep that was chosen, not always the full one
+                v1.start_scan(key, cat, "no sweep running and idle for 60 s" + ("" if key == "all" else f"; {cat} is the sweep that was chosen - All brings everything back"))
         except Exception as e:
             print("sweep_when_idle:", e)
 def _hang_watchdog():
@@ -2761,7 +2792,7 @@ class H2(v1.H):
             cat = q.get("cat", ["All"])[0]
             bands = v1.sdr_scan.CATEGORY_BANDS.get(cat)
             if not bands: return self.send(json.dumps({"error": f"no band set for {cat}"}), "application/json")
-            key = cat.lower().replace("/", "").replace(" ", "_")
+            key = sweep_choice(cat)[0]                                         # (v250) remembered: this sweep is taken up again when it has run its hours
             names = [v1.sdr_scan.BANDS[b][0] for b in bands]
             try:
                 # A listen is never interrupted by a sweep: while something plays, the new sweep is queued and starts
@@ -3358,7 +3389,7 @@ const CAP={n:{},step:20};function capList(el,sel,key){const id=key||el.id||'x';c
 async function poll(){try{const r=await fetch('/api/state',{cache:'no-store'});S=await r.json();render();}catch(e){$('#hdrsub').textContent='dashboard unreachable - is Dashboard.command running?';}}
 const LIVE=location.pathname==='/live';if(LIVE){document.body.classList.add('live');document.title='SDR Live';}
 function render(){
- $('#hdrsub').textContent=S.folder+' · updated '+S.now+(S.ms>400?' · server '+S.ms+' ms':'');$('#phone').textContent='phone: http://'+S.ip+':'+S.port;
+ $('#hdrsub').textContent=(S.sweep_only?'sweeping only '+S.sweep_only+' (All = everything) · ':'')+S.folder+' · updated '+S.now+(S.ms>400?' · server '+S.ms+' ms':'');$('#phone').textContent='phone: http://'+S.ip+':'+S.port;
  const st=$('#status');st.className='pill '+(S.running?(S.paused?'pause':'run'):'dead');st.lastElementChild.textContent=S.running?(S.paused?'PAUSED FOR LISTENING':'SCANNING'):'SCAN NOT RUNNING';
  const en=$('#engine');const act=S.bands.find(b=>b.active);{const db=$('#dbanner');if(S.dongle_flat){db.style.display='';db.innerHTML='&#9888; DONGLE NOT RECEIVING - '+esc(S.dongle_flat)+'.<br>Unplug it, wait 10 seconds, plug it into a USB port directly on the Mac mini (not the dock). The sweep resumes by itself.';}else db.style.display='none';}const usb=S.usb_errors||0;en.className='pill '+((usb||S.dongle_lost)?'pause':'run');en.title=S.background_last||'';en.lastElementChild.textContent=S.dongle_lost?'dongle: NOT RESPONDING - reconnect it (auto-resume)':'dongle: '+(S.player&&S.player.mhz?(S.player.mhz===1?'monitor (channelizer)':'listening '+fmt(S.player.mhz)):(S.background?S.background:(act?'sweeping '+act.band:'idle')))+(usb?' · '+usb+' USB errors':'');
  st.lastElementChild.textContent=S.running?(S.paused?(S.background?'PAUSED - '+S.background.split(':')[0].toUpperCase():(S.player&&S.player.mhz?'PAUSED FOR LISTENING':'PAUSED')):'SCANNING'):'SCAN NOT RUNNING';
