@@ -1846,6 +1846,9 @@ def audition(mhz, mode, secs=6.0):
             if g.open: opened += 1; zs.append(g.zcr); levels.append(g.level)
     finally:
         ses.stop()
+    if getattr(ses, "stall", False):                                   # (v251) the receiver went silent mid-check (audio.Session._guard): no verdict, and say so
+        say(f"background check on {mhz:.4f}: {ses.err} - the check is dropped and the dongle handed back")
+        return "QUIET", "receiver stalled"
     if blocks < 10: return "QUIET", "no audio from rtl_fm"
     g = ses.gate
     if data_blocks >= 3 or g.data_latched: return "DATA", f"flat bursts (level cv {g.voice_cv:.2f}) {data_blocks} blocks"
@@ -1936,6 +1939,7 @@ def verify_worker():
                     BG_STATE["what"] = f"auditioning {m:.4f} ({h.get('name') or 'unknown'})"; BG_STATE["since"] = time.time()
                     label, note = audition(m, mode)
                     BG_STATE["what"] = ""
+                    if note == "receiver stalled": break                      # (v251) the dongle has just dropped off USB: no more auditions this round
                     if note in ("no audio from rtl_fm", "user pressed play"):   # not a verdict - try again another round
                         if USER_WANTS.is_set(): break
                         time.sleep(2); continue

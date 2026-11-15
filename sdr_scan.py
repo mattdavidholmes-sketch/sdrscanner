@@ -222,20 +222,27 @@ except Exception:
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 _LIC = None
+_LIC_LOCK = __import__("threading").Lock()
 def licences():
-    """licences_gta.csv (built by tafl_lookup.py from ISED's public licence database): {mhz: [rows sorted by distance]}"""
+    """licences_gta.csv (built by tafl_lookup.py from ISED's public licence database): {mhz: [rows sorted by distance]}
+    (v251) The table used to be handed out while it was still being filled: a second thread asking in the first tenth of a
+    second after a start walked a dict that was growing - "RuntimeError: dictionary changed size during iteration", twice in
+    dashboard.log (early November). It is now built on the side and shown only when complete; a second asker waits for it."""
     global _LIC
     if _LIC is None:
-        _LIC = {}
-        path = os.path.join(HERE, "licences_gta.csv")
-        if os.path.exists(path):
-            try:
-                with open(path, newline="", encoding="utf-8") as f:
-                    for r in csv.DictReader(f):
-                        try: _LIC.setdefault(round(float(r["mhz"]), 4), []).append(r)
-                        except (ValueError, KeyError): pass
-                for v in _LIC.values(): v.sort(key=lambda r: float(r.get("km") or 99))
-            except OSError: pass
+        with _LIC_LOCK:
+            if _LIC is None:
+                lic = {}
+                path = os.path.join(HERE, "licences_gta.csv")
+                if os.path.exists(path):
+                    try:
+                        with open(path, newline="", encoding="utf-8") as f:
+                            for r in csv.DictReader(f):
+                                try: lic.setdefault(round(float(r["mhz"]), 4), []).append(r)
+                                except (ValueError, KeyError): pass
+                        for v in lic.values(): v.sort(key=lambda r: float(r.get("km") or 99))
+                    except OSError: pass
+                _LIC = lic
     return _LIC
 
 _LIC_IDX = {"n": -1, "keys": [], "ord": {}}

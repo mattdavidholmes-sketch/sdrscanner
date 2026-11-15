@@ -495,6 +495,14 @@ def wav_header(nbytes):
     return (b"RIFF" + struct.pack("<I", (nbytes + 36) & 0xFFFFFFFF) + b"WAVE" + b"fmt " + struct.pack("<IHHIIHH", 16, 1, 1, RATE, RATE * 2, 2, 16)
             + b"data" + struct.pack("<I", nbytes & 0xFFFFFFFF))
 
+# (v251) A RECEIVER THAT IS ALIVE AND SILENT. When the dongle drops off USB and comes back, rtl_fm does not end: it holds a handle to
+# a device that is gone and sends nothing. read() below waited for it for ever. The app's own files have it for 15 Nov: a
+# background check started rtl_fm on 418.500 at 00:02:25, got 3.8 s of audio and then nothing; the check came back at 01:55, when
+# Matt pressed play and that killed rtl_fm (verified.csv: "01:55,418.5000,QUIET,1,squelch open 0/38 blocks"). For those 113
+# minutes there was no voice check and no audition; the sweep went on only because it has its own way out ("PAUSE flag has had no
+# heartbeat for 3 min"). Somebody's own listen has had a watchdog for this since v136 (8 s, in dashboard.py); every other user of
+# a Session had none. Now the Session ends its receiver itself after STALL_S without a block, and read() returns the end.
+STALL_S = 10.0
 class Session:
     """One tuned channel. read() yields 24 kHz processed PCM blocks; stop() tears everything down."""
     def __init__(self, mhz, mode, manual=None, voice=True, gain="49.6", record_dir=None, name="", log_path=None, raw_path=None, listen=False):
@@ -518,12 +526,23 @@ class Session:
         self.sox = subprocess.Popen(sox_cmd(mode, voice), stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=lf)
         self.blk = 9600 if mode == "wbfm" else 4800
         self.denoise_rate = 48000 if mode == "wbfm" else RATE
+        self.stall = False
         self.t = threading.Thread(target=self._pump, daemon=True); self.t.start()
+        threading.Thread(target=self._guard, daemon=True).start()
+    def _guard(self):
+        """(v251) ends a receiver that is alive but has sent nothing for STALL_S: stall is set, err says why, read() then ends"""
+        while self.alive:
+            time.sleep(min(1.0, STALL_S / 4))
+            try:
+                if self.alive and self.rtl.poll() is None and time.time() - self.last_data > STALL_S:
+                    self.stall = True; self.err = f"the receiver sent nothing for {STALL_S:.0f} s (the dongle dropped off USB and came back?)"
+                    self.rtl.kill(); return
+            except Exception: return
     def _pump(self):
         try:
             while self.alive:
                 b = self.rtl.stdout.read(self.blk)
-                if not b: self.err = "rtl_fm stopped"; break
+                if not b: self.err = self.err or "rtl_fm stopped"; break
                 self.last_data = tb = time.time()
                 if self._fn == 0: self._ft = tb
                 else:
