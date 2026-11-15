@@ -8,7 +8,9 @@ same ones the Aircraft tab draws (monitor_panel.html freqs()):
   on final, lined up with a runway (GPS position against the centreline) or low and close -> the tower for that runway
   on approach, further out          -> Toronto Arrival: 132.800 (the main channel) first, then 124.475, 125.400
   just airborne                     -> the tower for the runway it left, below 1,500 ft; above that already Toronto Departure (v230)
-  climbing out                      -> Toronto Departure: 127.575 north of the field, 128.800 south
+  climbing out                      -> Toronto Departure: 127.575 north of the field, 128.800 south - unless only one of the two has
+                                       had a voice on it here in the last day (v242): then that one, wherever the aircraft is;
+                                       from 6,000 ft Centre's sector for that side joins the list, from 9,500 ft it leads
   leaving Billy Bishop              -> its tower below 1,500 ft, then Toronto Terminal's East Satellite 133.400 (v230)
   on the ground                     -> Ground North / South + Apron;  Billy Bishop -> 118.200
   low, not arriving or departing    -> (v214) inside a control zone: that tower. Otherwise Toronto Terminal's "satellite" position for
@@ -64,6 +66,7 @@ def phase(x):
     # of that flight number. A firm climb close to Pearson voids "to Pearson", a firm descent voids "from Pearson"; the rules for
     # an aircraft without a route then decide. And JZA541, on file "-> CYYZ", landed at Billy Bishop: a turboprop below 3,500 ft,
     # nearer the island than Pearson and pointing at it, is the island's.
+    if (to_ytz or from_ytz) and x.get("type") and not _small(x.get("type")): to_ytz = from_ytz = False     # (v242) Billy Bishop takes no jets: the route table has another leg of that flight number
     if to_yyz and vr > 300 and alt < 9000 and dz < 35: to_yyz = False
     if from_yyz and vr < -300 and alt < 10000 and dz < 60: from_yyz = False
     if to_yyz and _small(x.get("type")) and dt < dz and dt < 15 and alt < 3500 and at < 45: to_yyz = False; to_ytz = True
@@ -114,6 +117,48 @@ def lined_up(x, dep=False):
         if ok and (best is None or cross < best[2]): best = (n, along if dep else -along, cross)
     return best
 
+# (v242) WHAT THE RECEIVER HAS HEARD, AS EVIDENCE. heard_check.csv, 84 calls matched to an aircraft from 14 Nov 11:04 to 15 Nov 10:18:
+# the channel offered first was the one the aircraft was on 27 times, a later one 33 times, none 24 times. 23 of the 33 were one
+# rule: "north of the field -> Departure 127.575". Every one of those 23 departures was on 128.800. monitor_opens.log agrees:
+# 127.575 has opened 28 times in ten days and never with speech; 128.800 has speech every day (284 openings on 11 Nov alone, a
+# day on which both were being listened to). Which of its two channels Departure is working cannot be told from where an
+# aircraft is; it can be told from what has been heard. _air_activity() counts, per channel, the openings with speech of the
+# last 24 hours. (Not proof that 127.575 is silent: the Monitor listens to the channels heard most recently, and since
+# 11 Nov that has probably not included it. So 127.575 stays in every list, second.)
+_ACT = {"t": 0.0, "d": {}}
+def _air_activity():
+    """{MHz rounded to 3 places: openings with speech in the last 24 h} from monitor_opens.log; read again every five minutes"""
+    if time.time() - _ACT["t"] < 300: return _ACT["d"]
+    d = {}
+    try:
+        import os, re
+        path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "monitor_opens.log")
+        with open(path, "rb") as fh:
+            fh.seek(0, 2); n = fh.tell(); fh.seek(max(0, n - 900000)); txt = fh.read().decode("utf-8", "ignore")
+        now = time.time(); yr = time.localtime().tm_year
+        for m in re.finditer(r"^(\d\d)-(\d\d) (\d\d):(\d\d):(\d\d) .* (\d+\.\d{4}) am [\d.]+s .* voice yes", txt, re.M):
+            try: ts = time.mktime((yr, int(m.group(1)), int(m.group(2)), int(m.group(3)), int(m.group(4)), int(m.group(5)), 0, 0, -1))
+            except (ValueError, OverflowError): continue
+            if ts - now > 86400: ts = time.mktime((yr - 1,) + time.localtime(ts)[1:6] + (0, 0, -1))     # a line of 31 Dec read on 1 Jan
+            if 0 <= now - ts <= 86400: k = round(float(m.group(6)), 3); d[k] = d.get(k, 0) + 1
+    except Exception: pass
+    _ACT.update(t=time.time(), d=d); return d
+def _dep(north):
+    """Toronto Departure's two channels, most likely first -> (channels, True when the order comes from what was heard)"""
+    a = _air_activity(); n, s2 = a.get(127.575, 0), a.get(128.8, 0)
+    if s2 >= 3 and s2 >= 10 * n: return [CH["depS"], CH["depN"]], True      # ten to one or better: that one is the working channel
+    if n >= 3 and n >= 10 * s2: return [CH["depN"], CH["depS"]], True
+    return ([CH["depN"], CH["depS"]] if north else [CH["depS"], CH["depN"]]), False
+
+def _out_sectors(x):
+    """The two Centre sectors a Pearson departure is most likely handed to. By where it is around the field, as heard (v242): south
+    of the field 132.475 (WJA2136, JZA780, FLE2610, JZA757 - two of them east of the field, where the old rule 'east of Pearson ->
+    the east sectors' offered 124.925); north and east 124.925 (DLH471, ACA462, ACA880). North and west: nothing heard yet."""
+    K = CH["ctr"]
+    if x["lat"] < YYZ[0]: return [K["wl"][0], K["el"][0]]
+    if x["lon"] >= YYZ[1]: return [K["el"][0], K["wl"][0]]
+    return [K["wl"][0], K["wl"][2]]
+
 def tower_for(rwy):
     """most likely tower first: North works 05/23, South the 06/24 pair; for 15/33 either one"""
     return [CH["twrS"], CH["twrN"]] if rwy[:2] in ("06", "24") else [CH["twrN"], CH["twrS"]]
@@ -130,7 +175,7 @@ def detail(x):
     dz, _ = _geo((x["lat"], x["lon"]), YYZ); dt, _ = _geo((x["lat"], x["lon"]), YTZ)
     if x.get("on_ground"):
         if dz < 4: return "on the ground at Pearson", [CH["gndN"] if x["lat"] > YYZ[0] else CH["gndS"], CH["apron"]], ""
-        if dt < 2: return "on the ground at Billy Bishop", [CH["ytzGnd"]], ""
+        if dt < 2: return "on the ground at Billy Bishop", [CH["ytzGnd"], CH["ytzTwr"]], ""     # (v242) POE2267 was heard on the tower, on the ground (lining up)
         return "on the ground", [], ""
     # (v230) What the app's own on-air check showed on 14 Nov (heard_check.csv, 24 calls matched to an aircraft, 01:51-10:46): the
     # first channel offered was the one the aircraft was heard on 13 times, another of the list twice, none of them 9 times.
@@ -144,20 +189,34 @@ def detail(x):
     if p == "departing YTZ":
         if alt < 1500: return "departing Billy Bishop - with its tower", [CH["ytzTwr"], CH["vfr"]], ""
         return "departing Billy Bishop - with Toronto Terminal (East Satellite)", [CH["vfr"], CH["ytzTwr"]], ""
-    if "YTZ" in p: return p.replace("YTZ", "Billy Bishop"), [CH["ytzTwr"]], ""
+    if "YTZ" in p:
+        # (v242) further out an island arrival is still with the East Satellite: POE2476 (3,850 ft) and POE2122 (1,700 ft) were heard
+        # on 133.400 while only the tower was offered; POE2208 and POE2630, closer in, were on the tower.
+        if dt > 18: return "arriving Billy Bishop - with Toronto Terminal (East Satellite), then its tower", [CH["vfr"], CH["ytzTwr"]], ""
+        return "arriving Billy Bishop - with its tower", [CH["ytzTwr"], CH["vfr"]], ""
     if p == "arriving YYZ":
         r = lined_up(x)
         if (r and r[1] < 13) or (dz < 14 and alt < 3500):
-            return (f"final for runway {r[0]}, {r[1]:.0f} km out" if r else "short final") + " - with the tower", tower_for(r[0]) if r else [CH["twrN"], CH["twrS"]], r[0] if r else ""
+            twr = tower_for(r[0]) if r else [CH["twrN"], CH["twrS"]]
+            # (v242) the change from Arrival to the tower is not at one distance: at 11-12 km out CPA826 and POE318 (runway 05) were
+            # on the tower, WJA859 and POE150 (06L) still on Arrival 132.800 - which was not in the list. From 8 km out it now is.
+            if r and r[1] >= 8: twr = twr[:1] + _arr()[:1] + twr[1:]
+            return (f"final for runway {r[0]}, {r[1]:.0f} km out" if r else "short final") + " - with the tower", twr, r[0] if r else ""
         return (f"lined up for runway {r[0]}, {r[1]:.0f} km out" if r else "on approach") + " - with Toronto Arrival" + (" (overnight: on 128.800 with Departure)" if _night() else ""), _arr(), r[0] if r else ""
     if p == "departing YYZ":
-        north = x["lat"] > YYZ[0]; dep = [CH["depN"], CH["depS"]] if north else [CH["depS"], CH["depN"]]
+        north = x["lat"] > YYZ[0]; dep, by_ear = _dep(north)
         if dz < 9 and alt < 3000:
             r = lined_up(x, dep=True); twr = tower_for(r[0]) if r else [CH["twrN"], CH["twrS"]]; off = f" off runway {r[0]}" if r else ""
             if alt < 1500: return "just airborne" + off + " - with the tower", twr[:1] + dep[:1] + twr[1:], ""
             return "just airborne" + off + " - changing from the tower to Toronto Departure", dep[:1] + twr[:1] + dep[1:], ""
-        K = CH["ctr"]; ctr = (K["wl"] if x["lon"] < YYZ[1] else K["el"])[:2] if alt >= 9000 else []
-        return f"climbing out, {'north' if north else 'south'} of the field - with Toronto Departure", dep + ctr, ""
+        # (v242) The hand-over to Centre, as heard: DLH471 was on Centre at 7,100 ft; from 9,500 ft up five of five were (ACA462,
+        # WJA2136, ACA880, FLE2610, JZA780), below that three of four on Departure. So: Centre's sectors join the list at 6,000 ft
+        # and lead it from 9,500 ft; which sectors: _out_sectors().
+        ctr = _out_sectors(x) if alt >= 6000 else []
+        where = f"climbing out, {'north' if north else 'south'} of the field"
+        ear = f" ({dep[0][0]:.3f}: the one of its two channels heard here in the last day)" if by_ear else ""
+        if alt >= 9500: return where + " - with Toronto Departure or already with Centre" + ear, ctr[:1] + dep[:1] + ctr[1:] + dep[1:], ""
+        return where + " - with Toronto Departure" + ear, dep + ctr, ""
     # (v214) Low and neither arriving nor departing. Until now a helicopter crossing Pearson at 2,900 ft fell through every rule and
     # came out as "level - with Toronto Centre": the rule for light aircraft began 10 km from Pearson, the rule for airliners excluded
     # light aircraft, and Centre was what was left.
@@ -178,17 +237,33 @@ def detail(x):
         return f"low and {'local' if light else 'away from Pearson'} - probably with Toronto Terminal's satellite controller for {where}", ch, ""
     if alt < 10000 and dz < 50 and not light:                                 # an airliner low inside the terminal area that phase() could not place
         if vr > 300 and _small(x.get("type")) and dt < dz:                    # (v230) a turboprop climbing nearer the island than Pearson: it left Billy Bishop
-            return "climbing away from Billy Bishop - probably with Toronto Terminal (East Satellite)", [CH["vfr"], CH["depS"], CH["depN"]], ""
-        if vr > 300: return "climbing near Pearson - probably with Toronto Departure", [CH["depN"], CH["depS"]] if north else [CH["depS"], CH["depN"]], ""
+            return "climbing away from Billy Bishop - probably with Toronto Terminal (East Satellite)", [CH["vfr"]] + _dep(False)[0], ""
+        if vr > 300: return "climbing near Pearson - probably with Toronto Departure", _dep(north)[0], ""
         return "low near Pearson, being vectored - probably with Toronto Arrival", _arr(), ""
     # (v212) enroute: Toronto Centre. THIS line wrote "with Toronto Centre (not in the bank)" into the Aircraft tab - v210 added the
     # sectors everywhere else and left this file alone. Its side of Pearson, low sectors first below 18,000 ft (where Canadian
     # high-level airspace begins; the sectors' real limits are not in the sources used).
     K = CH["ctr"]; west = x["lon"] < YYZ[1]; high = alt >= 18000
-    order = ((K["wh"] + K["wl"]) if high else (K["wl"] + K["wh"])) if west else ((K["eh"] + K["el"]) if high else (K["el"] + K["eh"]))
-    if p == "climbing" and alt < 15000 and dz < 60 and not light:             # (v230) may still be with Departure
-        order = order + ([CH["depN"]] if north else [CH["depS"]])
-    return f"{p or 'enroute'} - with Toronto Centre, {'west' if west else 'east'} side (which sector is a best guess)", order, ""
+    own_hi, own_lo, oth_hi = (K["wh"], K["wl"], K["eh"]) if west else (K["eh"], K["el"], K["wh"])
+    # (v242) up high the side of Pearson does not settle the sector: TSC938 at 38,000 ft was "east" and on 134.925, ASL507 at
+    # 37,000 ft "west" and on 134.575 - each on a high sector of the other side, which was not in the list. Now it is.
+    order = (own_hi + oth_hi + own_lo) if high else (own_lo + own_hi)
+    lead = []; what = f"with Toronto Centre, {'west' if west else 'east'} side (which sector is a best guess)"
+    if p == "climbing" and alt < 16000 and dz < 60 and not light:
+        # (v230, v242) may still be with Departure - FLE639 (10,050 ft), JZA757 (13,700 ft) and POE2519 (15,325 ft) were, on
+        # 128.800 - or just handed to one of the two sectors that take the departures (JZA757 was on 132.475 at 14,100 ft)
+        o = _out_sectors(x); lead = o[:1] + _dep(north)[0][:1] + o[1:]; what = "just handed to Toronto Centre, or still with Departure (a best guess)"
+    elif p in ("descending", "level") and alt < 15000 and dz < 75 and not light and x["lat"] < YYZ[0]:
+        # (v242) arrivals from the south come in through Centre's Grimsby sector and go to Arrival from there: JZA7188 (11,000 ft)
+        # and WJA4112 (13,150 ft) were on 133.300, WJA4112 twenty seconds later on Arrival 132.800 - "east of Pearson", where
+        # neither channel was in the list
+        lead = [K["wl"][1]] + _arr()[:1] + [K["wl"][0]]; what = "coming in from the south: with Toronto Centre (Grimsby), then Arrival (a best guess)"
+    elif p == "descending" and alt < 11000 and not west and _small(x.get("type")):
+        # (v242) a turboprop coming down east of Toronto is the island's and already with the East Satellite: POE2632 (8,500 ft)
+        # and JZA7959 (10,375 ft), both more than 60 km out, were on 133.400
+        lead = [CH["vfr"]]; what = "a turboprop coming down east of Toronto: probably the island's, with Toronto Terminal (East Satellite)"
+    if lead: order = lead + [c for c in order if c not in lead]
+    return f"{p or 'enroute'} - {what}", order, ""
 
 def freqs(x):
     """channels this aircraft is on right now, most likely first"""
