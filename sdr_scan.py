@@ -23,8 +23,13 @@ from collections import defaultdict
 
 # ---------------------------------------------------------------- band plan
 # (name, start MHz, stop MHz, mode, channel raster kHz)
+# (v248) The airband began at 108 MHz. 108 to 118 is navigation aids (VOR, ILS localisers): after ten days of sweeps the bank held
+# 38 entries from there and not one with a voice (6 carriers, 1 quiet, 31 never judged), against 228 from 118-137 with 25 voice
+# channels - and those 10 MHz were 6 of the band's 17 sweep windows. With 11 windows the sweep stays 2.7 s on each per lap instead
+# of 1.8 s (fastscan shares a slice out over the windows), and retunes 11 times a lap instead of 17. The beacons have a band of
+# their own ("nav"), swept only by the full-range sweep. Tuning by hand, AM below 137 MHz, the transcriber: all unchanged.
 BANDS = {
-    "air":  ("Airband",        108.000, 137.000, "AM",  25.0),
+    "air":  ("Airband 118-137", 118.000, 137.000, "AM",  25.0),
     "vhf":  ("VHF 137-174",    137.000, 174.000, "NFM",  2.5),
     "uhf":  ("UHF 400-520",    400.000, 520.000, "NFM",  2.5),
 }
@@ -38,12 +43,13 @@ BAND_SETS = {
 BAND_SETS["toronto"] = ["yyz", "rpt2m_lo", "rpt2m_hi", "rpt70"]
 BAND_SETS["airfrs"]  = ["yyz", "gmrs"]
 BAND_SETS["nets"]    = ["rpt2m_lo", "rpt2m_hi", "rpt70", "gmrs"]
-BANDS["yyz"]      = ("YYZ arrivals/tower", 118.000, 135.000, "AM",  25.0)
+BANDS["yyz"]      = ("YYZ arrivals/tower", 118.000, 137.000, "AM",  25.0)       # (v248) to 137, was 135: Centre's Kitchener sector is on 135.625 (heard 14 Nov)
 BANDS["rpt2m_lo"] = ("2m repeaters A",     145.100, 145.500, "NFM",  2.5)
 BANDS["rpt2m_hi"] = ("2m repeaters B",     146.600, 147.400, "NFM",  2.5)
 BANDS["rpt70"]    = ("70cm repeaters",     442.000, 445.000, "NFM",  2.5)
 # Whole RTL-SDR range, in slices (what the dongle can hear, not just the UV-32)
-BAND_SETS["full"] = ["lowvhf", "air", "vhf", "band3", "milair", "uhf", "uhf7", "uhf8", "uhf9", "l1", "l2"]
+BAND_SETS["full"] = ["lowvhf", "nav", "air", "vhf", "band3", "milair", "uhf", "uhf7", "uhf8", "uhf9", "l1", "l2"]
+BANDS["nav"]    = ("Nav aids 108-118",  108.000, 118.000, "AM",  25.0)       # (v248) VOR / ILS: only the full-range sweep goes there
 BANDS["lowvhf"] = ("Low VHF 24-88",     24.000,  88.000, "NFM",  5.0)
 BANDS["fmbc"]   = ("FM broadcast",      88.000, 108.000, "WFM", 100.0)
 BANDS["band3"]  = ("174-225 / 1.25m",  174.000, 225.000, "NFM",  5.0)
@@ -232,11 +238,22 @@ def licences():
             except OSError: pass
     return _LIC
 
+_LIC_IDX = {"n": -1, "keys": [], "ord": {}}
 def licence_for(mhz, tol=0.0026):
-    """All licence rows within tol of mhz, nearest first."""
+    """All licence rows within tol of mhz, nearest first.
+    (v248) It walked the whole table - 3,000 frequencies - for every question, and the page's list asks about 500 times each
+    time it is worked out: a third of that work (profiled on the bank and sweep of 15 Nov). Now the frequencies are kept sorted
+    and the few in reach are found by halving; the rows come back in exactly the order they did before."""
+    import bisect
+    lic = licences()
+    if _LIC_IDX["n"] != len(lic):
+        _LIC_IDX.update(n=len(lic), keys=sorted(lic), ord={f: i for i, f in enumerate(lic)})
+    keys = _LIC_IDX["keys"]; i = bisect.bisect_left(keys, mhz - tol - 1e-6); near = []
+    while i < len(keys) and keys[i] <= mhz + tol + 1e-6:
+        if abs(keys[i] - mhz) <= tol: near.append(keys[i])
+        i += 1
     out = []
-    for f, rows in list(licences().items()):
-        if abs(f - mhz) <= tol: out.extend(rows)
+    for f in sorted(near, key=_LIC_IDX["ord"].get): out.extend(lic[f])        # the table's own order, as the walk gave it
     out.sort(key=lambda r: float(r.get("km") or 99))
     return out
 
