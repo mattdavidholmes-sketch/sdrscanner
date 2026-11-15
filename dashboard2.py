@@ -1331,14 +1331,21 @@ def siren_log_pins():
     except OSError: return []
 
 # ---------------------------------------------------------------- what each 700 MHz P25 voice channel actually carries (from SDRTrunk's call logs)
-_P25F = {"t": 0, "sig": None, "data": {}}
+_P25F = {"t": 0, "sig": None, "data": {}, "looked": 0}
 def p25_freq_stats():
     """Every call SDRTrunk ever logged carries the voice frequency it used: roll that up per frequency -> which talkgroups
     (Fire / EMS / unnamed), how many calls, how much was encrypted (Police), last used, and which site's control channel heard it."""
     import csv, collections
+    # (v249) This is asked about 2,300 times every time the page's list is worked out (once for each bank entry in a digital
+    # band), and it used to list the log folder and stat every file in it BEFORE looking at what it already had: measured on
+    # the Mac on 15 Nov with 35 log files, 0.22 s per list (everything else in the list takes 0.12 s on the test bench), and
+    # more with every SDRTrunk session.
+    # Now: what was read less than 90 s ago is the answer, and the folder is looked at no more than once in 10 s.
+    now = time.time()
+    if _P25F["sig"] is not None and (now - _P25F["t"] < 90 or now - _P25F["looked"] < 10): return _P25F["data"]
     files = sorted(glob.glob(os.path.expanduser("~/SDRTrunk/event_logs/*call_events*.log")))
-    sig = (len(files), max([os.path.getmtime(f) for f in files] or [0]))
-    if _P25F["sig"] is not None and (time.time() - _P25F["t"] < 90 or (_P25F["sig"] == sig and time.time() - _P25F["t"] < 600)): return _P25F["data"]   # (v153) was: re-parse ~36 MB of call logs every time the live log grew = a pinned CPU core, clicking audio
+    sig = (len(files), max([os.path.getmtime(f) for f in files] or [0])); _P25F["looked"] = now
+    if _P25F["sig"] is not None and _P25F["sig"] == sig and now - _P25F["t"] < 600: return _P25F["data"]   # (v153) was: re-parse ~36 MB of call logs every time the live log grew = a pinned CPU core, clicking audio
     agg = {}
     for f in files[-400:]:
         m = re.search(r"Hz_(.+?)_call_events", os.path.basename(f)); ms = re.search(r"(West|South|North|East) Simulcast|PATH|Metrolinx|City_of_Toronto_services|Billy_Bishop|DMR", m.group(1) if m else ""); site = (ms.group(0) if ms else "").replace("_", " ")
