@@ -1583,8 +1583,22 @@ def monitor_list(cat="All", minutes=30, limit=30):
         mode = "am" if m < 137 else ("wbfm" if 88 <= m < 108 else "fm")
         rows.append(((0 if sure else 1) if not quick else -(e.get("times") or 0), age, m, mode, e.get("name") or f"{m:.4f}"))     # confirmed voice first, then the freshest (quick: busiest first)
     rows.sort()
-    rows = [(a, m, mo, n) for _, a, m, mo, n in rows]
-    return [(m, mode, name) for _, m, mode, name in rows if round(m, 4) not in lo][:limit]
+    cand = [(m, mo, n) for _, a, m, mo, n in rows if round(m, 4) not in lo]
+    # (v239) One station is one channel. The sweep files a strong station under the neighbouring bin as well ("145.12 R" beside VE3WOO
+    # on 145.110; 451.185 beside the licensed 451.1875; 463.96 beside 463.9625) and the Monitor decoded both: in a day and a half the
+    # copy of VE3WOO, 10 kHz off the repeater, opened 948 times without giving clean speech once. Taken best first - a real name
+    # before a made-up one, then the one nearest a channel of the reference table, then one that holds a licence exactly there - a channel is left
+    # out when one already taken lies within 6 kHz of it (12.5 kHz when its own name is made up from the frequency).
+    made_up = lambda n: bool(re.fullmatch(r"[\d.]+( [A-Z]{1,2})?", (n or "").strip()))
+    taken = []
+    ref = sorted(sdr_scan.REFERENCE)
+    def off_ref(m):                                                # how far from a channel of the reference table (0 = on it); 9 when none is near
+        d = min((abs(f - m) for f in ref), default=9.0); return round(d, 4) if d <= 0.0126 else 9.0
+    for m, mo, n in sorted(cand, key=lambda c: (made_up(c[2]), off_ref(c[0]), not sdr_scan.licence_for(c[0], 0.0006))):
+        if any(mo2 == mo and abs(m - m2) <= (0.0125 if made_up(n) else 0.006) + 1e-9 for m2, mo2 in taken): continue
+        taken.append((m, mo))
+    keep = {round(m, 4) for m, _ in taken}
+    return [c for c in cand if round(c[0], 4) in keep][:limit]
 
 def monitor_heard(mhz, name, secs, tones):
     """A monitor hop heard voice: stamp the bank so the dashboard and the next monitor list know."""

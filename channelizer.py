@@ -191,6 +191,37 @@ def fm_noise_level(blocks=40, seed=3):
         ch.process((rng.standard_normal(BLOCK) + 1j * rng.standard_normal(BLOCK)).astype(np.complex64), i * 0.1)
         if i >= 8: lv.append(ch.gate.level)
     return float(np.mean(lv)), float(min(lv)), float(max(lv))
+# (v239) WHAT AN EMPTY FM CHANNEL REALLY READS IN THE SCAN. FM_N0 is the figure for white noise. Through rtl_fm (a listen) real empty
+# channels read 97 % of rtl_fm's own figure on 2 m and 68-78 % on 70 cm, which is why the listen squelch measures the level itself
+# (audio.FmSquelch, v231). Whether this file's receiver shows the same on the air is not known: nothing ever recorded it. This
+# records it and changes nothing else: for every FM channel of a scan, per visit, the level it stood at when highest (an empty
+# channel: its noise; one with a carrier all through: lower) and when lowest. The last 200 visits of each channel are kept in
+# _state/fm_empty.json, written every five minutes.
+_FME = {"d": None, "t": 0.0}
+def fm_empty_note(chans, now=None):
+    now = now or time.time()
+    path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "_state", "fm_empty.json")
+    if _FME["d"] is None:
+        try:
+            import json
+            with open(path) as fh: _FME["d"] = json.load(fh).get("channels", {})
+        except Exception: _FME["d"] = {}
+    for ch in chans or []:
+        lv = (getattr(ch, "fm_all", None) or [])[2:]              # the first two blocks of a visit still carry the retune
+        if len(lv) < 3: continue
+        med = [float(np.median(lv[i:i + 10])) for i in range(0, len(lv) - 9, 5)] if len(lv) >= 10 else [float(np.median(lv))]
+        e = _FME["d"].setdefault(f"{ch.mhz:.4f}", {"name": ch.name, "top": [], "low": []})
+        e["name"] = ch.name; e["top"] = (e["top"] + [round(max(med))])[-200:]; e["low"] = (e["low"] + [round(min(med))])[-200:]
+    if now - _FME["t"] >= 300 and _FME["d"]:
+        _FME["t"] = now
+        try:
+            import json
+            out = {"about": "FM channels in the scan (channelizer.py): per visit, the level the channel stood at when highest (top) and lowest (low) - the last 200 visits each. "
+                            "white_noise is what the receiver gives for noise alone; the carrier squelch calls it a carrier under 0.70 of that.",
+                   "white_noise": FM_N0, "written": time.strftime("%Y-%m-%d %H:%M"), "channels": _FME["d"]}
+            with open(path + ".tmp", "w") as fh: json.dump(out, fh)
+            os.replace(path + ".tmp", path)
+        except Exception: pass
 def _sos(cut, fs, order=6):
     return signal.butter(order, cut / (fs / 2), output="sos")
 
@@ -234,7 +265,7 @@ class Channel:
         self.pending = []; self.pending_raw = []; self.live = b""; self.max_mod = 0.0; self.open_n = 0; self.snr_sum = 0.0; self.confirmed = True   # confirmed: the last AM open carried speech (FM: always)
         self.nb = None                                             # noise blanker state
         # (v224) FM in a scan with the squelch on automatic: carrier squelch + speech on the carrier. See _fm_gate.
-        self.fmq = mode == "fm" and manual is None
+        self.fmq = mode == "fm" and manual is None; self.fm_all = []
         self.fm_q = False; self.fm_blocks = 0; self.fm_hang = 0; self.fm_idle = 0; self.fm_hist = []; self.fm_conf = False; self.fm_lv = []
         self.zdh = signal.sosfilt_zi(self.sosh) * 0.0; self.zdv = signal.sosfilt_zi(self.sosv) * 0.0
         if self.fmq: self.confirmed = False
@@ -262,6 +293,7 @@ class Channel:
         Digital channels (a steady buzz in the voice band) never show speech and never open; the data detector is still there
         behind this for bursts that do."""
         g = self.gate; q_was = self.fm_q
+        if len(self.fm_all) < 600: self.fm_all.append(g.level)       # (v239) for fm_empty_note: what the channel read, block by block
         self.fm_q = g.level < (0.80 if q_was else 0.70) * FM_N0
         a = np.frombuffer(raw, dtype=np.int16).astype(np.float64)
         b, self.zdh = signal.sosfilt(self.sosh, a, zi=self.zdh); b, self.zdv = signal.sosfilt(self.sosv, b, zi=self.zdv)
@@ -664,6 +696,8 @@ class Channelizer:
                 if self.center != center:
                     self.tcp.retune(center); self.center = center
                     for _ in range(2 if fast else 4): self.tcp.block()                  # flush the retune transient (0.5 s: the tuner's gain ramps after a retune)
+                try: fm_empty_note(self.chans)                                         # (v239) the visit that just ended: what its FM channels read
+                except Exception: pass
                 self.chans = [Channel(m, mo, n, center, self.manual, self.record_dir) for m, mo, n in chans if round(m, 4) not in self.lockout] or \
                              [Channel(m, mo, n, center, self.manual, self.record_dir) for m, mo, n in chans[:1]]
                 if self.air:
