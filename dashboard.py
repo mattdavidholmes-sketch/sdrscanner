@@ -1268,6 +1268,17 @@ def trim_log(path, over, keep):
 # files creeping up over days. perf.log gets one line every ten minutes; a restart begins again at minute 0.
 T_START = time.time()
 PERF_LOG = os.path.join(HERE, "perf.log")
+def _cpu_now():
+    """(CPU seconds of this process, CPU seconds of the helpers it ran that have finished)"""
+    try:
+        import resource; ru = resource.getrusage(resource.RUSAGE_CHILDREN); kids = ru.ru_utime + ru.ru_stime
+    except Exception: kids = 0.0
+    return time.process_time(), kids
+# (v245) The app's restart keeps the process (it starts itself again in place), and the process keeps its CPU clock: one minute
+# after v244 started, its first line said 17,603 CPU seconds "since this start". That was the CPU since the process was first
+# started on 13 Nov, 58 hours before - 8.4 % of one core on average, listening and transcribing included. The clock is read
+# once here, at the start, and the lines count from it.
+CPU_START = _cpu_now()
 def perf_note():
     try:
         try: rss = int(subprocess.run(["ps", "-o", "rss=", "-p", str(os.getpid())], capture_output=True, text=True, timeout=5).stdout.strip() or 0) / 1024
@@ -1276,13 +1287,11 @@ def perf_note():
         except OSError: fds = 0
         try: arch = len(os.listdir(os.path.join(HERE, "transcripts_archive")))
         except OSError: arch = 0
-        try:
-            import resource; ru = resource.getrusage(resource.RUSAGE_CHILDREN); kids = ru.ru_utime + ru.ru_stime
-        except Exception: kids = 0
+        cpu, kids = _cpu_now(); cpu -= CPU_START[0]; kids -= CPU_START[1]
         new = not os.path.exists(PERF_LOG)
         with open(PERF_LOG, "a") as f:
             if new: f.write("when,minutes since this start,memory MB,cpu seconds used by the app since this start,cpu seconds of the helpers it ran and that have finished,threads,open files,files in transcripts_archive\n")
-            f.write(f"{dt.datetime.now():%m-%d %H:%M},{(time.time() - T_START) / 60:.0f},{rss:.0f},{time.process_time():.0f},{kids:.0f},{threading.active_count()},{fds},{arch}\n")
+            f.write(f"{dt.datetime.now():%m-%d %H:%M},{(time.time() - T_START) / 60:.0f},{rss:.0f},{cpu:.0f},{kids:.0f},{threading.active_count()},{fds},{arch}\n")
     except Exception: pass
 def _prune_loop():
     time.sleep(30); n = 0
