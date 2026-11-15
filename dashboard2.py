@@ -977,21 +977,56 @@ def _digits_close(a, b):
     if abs(len(a) - len(b)) != 1: return False
     s, l = (a, b) if len(a) < len(b) else (b, a)
     return any(l[:i] + l[i + 1:] == s for i in range(len(l)))
+# (v243) THE REACH OF A CHANNEL. heard_check.csv, 85 calls matched to an aircraft (14 Nov 11:04 - 15 Nov 10:38), had two that cannot
+# be: SWA3578, 99 km away at 2,250 ft - on approach to Buffalo - "heard" on Billy Bishop's tower, and SWA1537, 99 km away at
+# 32,000 ft, "heard" on Toronto Departure. Both transcripts are marked (unsure), the recognisers agreeing 0.13 and 0.0 with each
+# other: the airband recogniser is primed with the callsigns in the air (asr_atc.adsb_callsigns) and wrote one of them out of
+# noise - then this function "confirmed" it against the same list. Being unsure is not the test (four of the seven unsure
+# transcripts in that file name the right aircraft); where the aircraft is, is. A tower or ground channel belongs to aircraft at
+# that airport, Toronto Terminal's channels (Arrival, Departure, the satellites) to aircraft in its airspace. Centre's sectors
+# and every channel without a place here: anything in range. The limits are wide of every real call in the file (the highest on
+# a Terminal channel: 15,325 ft; the farthest from its tower: about 25 km).
+REACH_LOCAL_KM, REACH_LOCAL_FT, REACH_TERMINAL_FT = 40, 8000, 20000
+def air_reach(mhz, x):
+    """'' when aircraft x can be on this channel, otherwise why it cannot (no commas: the text goes into heard_check.csv)"""
+    try:
+        if not x or x.get("lat") is None or x.get("lon") is None: return ""
+        FT = sys.modules.get("follow_traffic")
+        if FT is None:
+            hp = os.path.join(HERE, "_helpers")
+            if hp not in sys.path: sys.path.insert(0, hp)
+            import follow_traffic as FT
+        C = FT.CH; on = lambda *keys: any(abs(C[k][0] - mhz) < 0.0006 for k in keys)
+        alt = x.get("alt_ft") or 0; here = (x["lat"], x["lon"])
+        for keys, ap, name in ((("twrN", "twrS", "gndN", "gndS", "apron"), FT.YYZ, "Pearson"), (("ytzTwr", "ytzGnd"), FT.YTZ, "Billy Bishop")):
+            if on(*keys):
+                km = FT._geo(here, ap)[0]
+                if km > REACH_LOCAL_KM: return f"{km:.0f} km from {name}: not on that airport's tower or ground channel"
+                if alt > REACH_LOCAL_FT: return f"at {alt:.0f} ft: not on {name}'s tower or ground channel"
+                return ""
+        if on("depN", "depS", "vfr", "satW", "satHam", "satKW") or any(abs(c[0] - mhz) < 0.0006 for c in C["arr"]):
+            if alt > REACH_TERMINAL_FT: return f"at {alt:.0f} ft: above Toronto Terminal's channels"
+    except Exception: pass
+    return ""
 def air_heard(window=900, only=None, detail=None):
     """callsign -> 'HH:MM on 128.800 - "what was said"' for the aircraft named in the airband transcripts of the last 15 minutes.
     The airline's radio name and the WHOLE flight number have to be in the text ((v180): "air canada two" used to match every Air
     Canada 2xx). (v214) One slip in the number is allowed when it can only mean one aircraft: on 13 Nov at 02:07 the controller
     said "Cathay zero seven five", the recogniser wrote "cathay zero six five", and the panel for CPA075 said "not in the recent
     transcripts" while Matt was listening to it. A number one digit off (one wrong, missing or extra; two digits at least) is
-    taken for the flight when exactly one aircraft of that airline in the air is that close - and the line says so."""
+    taken for the flight when exactly one aircraft of that airline in the air is that close - and the line says so.
+    (v243) An aircraft that cannot be on the channel (air_reach) is not a candidate: it is not shown as heard, and it does not
+    stand in the way of another aircraft's match. `detail` gets (MHz, callsign, how it was matched, '' or why it was refused)."""
     out = {}
     try:
         import asr_atc
         live = {}                                                                # radio name -> {flight number without leading zeros: callsign}
         bynum = {}                                                               # (v218) four-digit flight number -> the aircraft in the air that carry it
+        acd = {}                                                                 # (v243) callsign -> the aircraft
         for x in aircraft_now().get("aircraft", []):
             cs = x.get("callsign") or ""; m = re.match(r"([A-Z]{3})(\d+)", cs)
             if not m: continue
+            acd[cs] = x
             if len(m.group(2).lstrip("0")) >= 4 and not x.get("on_ground"): bynum.setdefault(m.group(2).lstrip("0"), []).append(cs)
             sp = asr_atc.spoken(cs).lower()
             if sp == cs.lower() or len(sp.split()) <= len(m.group(2)): continue
@@ -1008,13 +1043,20 @@ def air_heard(window=900, only=None, detail=None):
                 # (v217) the radio name with or without spaces inside it: at 04:21 on 13 Nov the recogniser wrote "good morning star
                 # eight zero eight two" four times for MAL8082, whose radio name is "Morningstar", and none of them matched
                 for mm in re.finditer(r"\b" + r" ?".join(re.escape(c) for c in tel.replace(" ", "")) + r" ?(\d{1,5})(?!\d)", norm):
-                    said = mm.group(1).lstrip("0") or "0"; how = ""
-                    if said in nums: cs = nums[said]
+                    said = mm.group(1).lstrip("0") or "0"; how = ""; far = lambda n: air_reach(mhz, acd.get(nums[n]))
+                    if said in nums:
+                        if far(said):                                            # (v243) named in full, but it cannot be on this channel: to the csv only, and no second guess at a neighbour
+                            if detail is not None: detail.append((mhz, nums[said], "name and number", far(said)))
+                            continue
+                        cs = nums[said]
                     else:
-                        near = [n for n in nums if len(n) >= 2 and len(said) >= 2 and _digits_close(said, n)]
-                        if len(near) != 1: continue
-                        cs = nums[near[0]]; how = f" (the transcript has {mm.group(1)} for {re.sub(r'^[A-Z]+', '', cs)}; no other {tel.title()} flight in the air has a number that close)"
-                    if detail is not None: detail.append((mhz, cs, "one digit off" if how else "name and number"))
+                        cand = [n for n in nums if len(n) >= 2 and len(said) >= 2 and _digits_close(said, n)]
+                        near = [n for n in cand if not far(n)]
+                        if len(near) != 1:
+                            if detail is not None and len(cand) == 1 and not near: detail.append((mhz, nums[cand[0]], "one digit off", far(cand[0])))
+                            continue
+                        cs = nums[near[0]]; how = f" (the transcript has {mm.group(1)} for {re.sub(r'^[A-Z]+', '', cs)}; no other {tel.title()} flight in the air that can be on this channel has a number that close)"
+                    if detail is not None: detail.append((mhz, cs, "one digit off" if how else "name and number", ""))
                     if cs not in out: out[cs] = f'{stamp} on {mhz:.3f} - "{said_txt}"{how}'
             # (v218) The number without the name. The recogniser learned its airlines in Europe: on 13 Nov, 07:28-07:30, Envoy 3524 was
             # written "Envoy" once and then "on boeing", "voz" and "aero flot three five two four". A four-digit flight number that
@@ -1024,9 +1066,13 @@ def air_heard(window=900, only=None, detail=None):
             toks = norm.split()
             for i, t in enumerate(toks):
                 c = bynum.get(t.lstrip("0")) if t.isdigit() else None
-                if not c or len(c) != 1 or c[0] in out: continue
+                if not c: continue
                 if i and toks[i - 1] in ("squawk", "squawking", "altimeter", "heading", "runway", "level", "decimal", "point", "frequency", "contact"): continue
-                if detail is not None: detail.append((mhz, c[0], "number only"))
+                c_in = [k for k in c if not air_reach(mhz, acd.get(k))]         # (v243) only the aircraft that can be on this channel
+                if not c_in and len(c) == 1 and c[0] not in out and detail is not None: detail.append((mhz, c[0], "number only", air_reach(mhz, acd.get(c[0]))))
+                c = c_in
+                if len(c) != 1 or c[0] in out: continue
+                if detail is not None: detail.append((mhz, c[0], "number only", ""))
                 out[c[0]] = f'{stamp} on {mhz:.3f} - "{said_txt}" (the flight number {t} is in the transcript without this airline\'s name; it is the only aircraft in the air with that number)'
     except Exception: pass
     return out
@@ -1037,23 +1083,48 @@ def air_heard(window=900, only=None, detail=None):
 # suggestion, or any suggestion, was the channel the aircraft was really on, for each phase and each channel - Centre sectors and
 # the Terminal's satellite channels included. Only channels something was listening to can appear (the Monitor scan, the voice
 # check, a listen), and only calls the recogniser could put a flight on.
+# (v243) Eight columns more, at the end; the eleven before them are as they were, and the rows written before v243 keep their eleven.
+# With position, track, climb rate and type a row can be put through the rules again exactly - POE2735 ("arriving at the island",
+# heard on Departure) and POE2445 could not be explained from eleven columns. "transcript": sure / unsure, as the recogniser
+# marked it. "out of reach": why the aircraft cannot be on that channel (air_reach) - such a row is kept so the limits can be
+# checked against what was said, but its place is left EMPTY and it does not count: the aircraft was not shown as heard.
 HEARD_CHECK = os.path.join(HERE, "heard_check.csv")
+HEARD_COLS = ("when,callsign,heard on,matched by,phase,suggested (in order),place of the heard channel in that list (0 = not in it),km,altitude ft,"
+              "seconds from the call to this line,why,transcript,lat,lon,track,climb ft/min,type,km from Pearson,out of reach (then the place is empty and the row does not count)")
+def _heard_header():
+    """the file's first line names every column; a file that began before v243 gets the new first line, its rows untouched"""
+    if not os.path.exists(HEARD_CHECK):
+        with open(HEARD_CHECK, "w") as fh: fh.write(HEARD_COLS + "\n")
+        return
+    with open(HEARD_CHECK) as fh:
+        if fh.readline().rstrip("\n") == HEARD_COLS: return
+        rest = fh.read()
+    with open(HEARD_CHECK + ".tmp", "w") as fh: fh.write(HEARD_COLS + "\n" + rest)
+    os.replace(HEARD_CHECK + ".tmp", HEARD_CHECK)
 def heard_check(tp):
     det = []; air_heard(window=600, only=tp, detail=det)
     if not det: return
     by = {x.get("callsign"): x for x in aircraft_now().get("aircraft", [])}
-    new = not os.path.exists(HEARD_CHECK); seen = set()
+    seen = set(); _heard_header()
+    try:
+        with open(tp, errors="ignore") as fh: sure = "unsure" if fh.read(12).lstrip().startswith("(unsure)") else "sure"
+    except OSError: sure = ""
     with open(HEARD_CHECK, "a") as fh:
-        if new: fh.write("when,callsign,heard on,matched by,phase,suggested (in order),place of the heard channel in that list (0 = not in it),km,altitude ft,seconds from the call to this line,why\n")
         try: lag = int(time.time() - dt.datetime.strptime("".join(os.path.basename(tp)[:-4].split("_")[-2:]), "%Y%m%d%H%M%S").timestamp())
         except ValueError: lag = ""
-        for mhz, cs, how in det:
+        for mhz, cs, how, far in det:
             if cs in seen: continue
             seen.add(cs); x = by.get(cs) or {}
             fr = [round(float(q[0]), 3) for q in (x.get("freqs") or [])]
-            rank = next((i + 1 for i, q in enumerate(fr) if abs(q - mhz) < 0.0006), 0)
+            rank = "" if far else next((i + 1 for i, q in enumerate(fr) if abs(q - mhz) < 0.0006), 0)
             why = str(x.get("why") or "").replace(",", ";").replace("\n", " ")[:160]
-            fh.write(f"{dt.datetime.fromtimestamp(os.path.getmtime(tp)):%Y-%m-%d %H:%M:%S},{cs},{mhz:.3f},{how},{x.get('phase') or ''},{' '.join(f'{q:.3f}' for q in fr)},{rank},{x.get('km', '')},{x.get('alt_ft', '')},{lag},{why}\n")
+            def g(k, nd=None):
+                try: return "" if x.get(k) is None else (f"{float(x[k]):.{nd}f}" if nd is not None else str(x[k]).replace(",", " "))
+                except (TypeError, ValueError): return ""
+            try: kz = f"{sys.modules['follow_traffic']._geo((x['lat'], x['lon']), sys.modules['follow_traffic'].YYZ)[0]:.1f}"
+            except Exception: kz = ""
+            fh.write(f"{dt.datetime.fromtimestamp(os.path.getmtime(tp)):%Y-%m-%d %H:%M:%S},{cs},{mhz:.3f},{how},{x.get('phase') or ''},{' '.join(f'{q:.3f}' for q in fr)},{rank},{x.get('km', '')},{x.get('alt_ft', '')},{lag},{why}"
+                     f",{sure},{g('lat', 4)},{g('lon', 4)},{g('track', 0)},{g('vrate', 0)},{g('type')},{kz},{str(far).replace(',', ';')}\n")
 v1.ON_TRANSCRIPT[0] = heard_check
 _LAST_UREQ = {"target": None, "t": 0.0}
 def sdrt_user_start(target):
@@ -1748,9 +1819,11 @@ def _from_opensky(j):
         lat, lon = st[6], st[5]
         if lat is None or lon is None: continue
         km, brg = _geo(lat, lon); alt = st[7] or st[13]
+        # (v243) OpenSky reports metres and metres per second; everything here is in feet, knots and ft/min. The climb rate went
+        # through unconverted (10 m/s read as "10 ft/min": level) - never seen live, this source is the last stand-in.
         out.append({"icao": st[0], "callsign": (st[1] or "").strip(), "reg": "", "type": "", "desc": "", "operator": "", "lat": lat, "lon": lon,
                     "alt_ft": round(alt * 3.281) if alt else None, "on_ground": bool(st[8]), "speed_kt": round((st[9] or 0) * 1.944), "track": round(st[10] or 0),
-                    "vrate": st[11], "squawk": st[14] or "", "emergency": str(st[14]) in ("7500", "7600", "7700"), "km": km, "bearing": brg, "seen": None})
+                    "vrate": round(st[11] * 196.85) if st[11] is not None else None, "squawk": st[14] or "", "emergency": str(st[14]) in ("7500", "7600", "7700"), "km": km, "bearing": brg, "seen": None})
     return out
 
 def _from_fr24(j):
