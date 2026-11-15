@@ -19,9 +19,15 @@ import audio as AU
 USER_WANTS = threading.Event()        # set the moment a play request arrives: auditions stop and stay out of the way
 LAST_USER_PLAY = [0.0]; PRIO_LAST = [0.0]; BG_STATE = {"what": "", "since": 0.0}; AUDIO_LAST = [0.0]
 MAC_VOL = [1.0]                      # (v223) the page's Vol slider for sound that comes out of the Mac (0..1, 1 = as it always was); until now the slider only reached audio played by a browser
+_SAY_DAY = [""]
 def say(msg):
-    """One place for every event worth seeing: it prints to the dashboard's own terminal window (the only one)."""
-    try: print(f"{dt.datetime.now():%H:%M:%S}  {msg}", flush=True)
+    """One place for every event worth seeing: it prints to the dashboard's own terminal window (the only one).
+    (v246) The window's lines carry the time of day only, and dashboard.log is that window, days on end: on 15 Nov I read lines
+    of two different days as one morning. The first line after a start, and the first of every new day, is now the date."""
+    try:
+        now = dt.datetime.now(); day = f"{now:%Y-%m-%d}"
+        if _SAY_DAY[0] != day: _SAY_DAY[0] = day; print(f"--- {now:%A %d %B %Y} ---", flush=True)
+        print(f"{now:%H:%M:%S}  {msg}", flush=True)
     except Exception: pass
     try:                                                     # and to events.log, so a closed window never loses the story
         with open(os.path.join(HERE, "events.log"), "a") as f: f.write(f"{dt.datetime.now():%m-%d %H:%M:%S}  {msg}\n")
@@ -1190,7 +1196,8 @@ def prune_recordings(keep=KEEP_RECORDINGS, keep_quiet=KEEP_QUIET, keep_total=KEE
     all again, and what v225 was for - one busy channel (128.800 filled the 40 in eight minutes on 13 Nov, and whatever had been
     said anywhere else went with it) - is kept by the share: no channel holds more than 10 of the 40. 230 MB is 40 clips of
     the full two minutes. The loop below now runs every 2 minutes (it was 10), so the count stays near the cap.
-    Transcripts are never deleted, they move to transcripts_archive. A clip still being written (touched in the last 60 s) is
+    Transcripts are never deleted, they move to transcripts_archive ((v246) where archive_pack() gathers them into one file
+    per day). A clip still being written (touched in the last 60 s) is
     never removed. trash: a folder to move the surplus into instead of deleting it (used for the first trim after the rule changed)."""
     try:
         files = sorted(glob.glob(os.path.join(HERE, "scan_*", "recordings", "*.wav")), key=os.path.getmtime, reverse=True)
@@ -1293,11 +1300,70 @@ def perf_note():
             if new: f.write("when,minutes since this start,memory MB,cpu seconds used by the app since this start,cpu seconds of the helpers it ran and that have finished,threads,open files,files in transcripts_archive\n")
             f.write(f"{dt.datetime.now():%m-%d %H:%M},{(time.time() - T_START) / 60:.0f},{rss:.0f},{cpu:.0f},{kids:.0f},{threading.active_count()},{fds},{arch}\n")
     except Exception: pass
+# (v246) THE TRANSCRIPT ARCHIVE, ONE FILE A DAY. The audio is capped at 40 clips; every transcript is kept (v154), as the clip's
+# own small files moved into transcripts_archive/. Counted on 15 Nov: 7,803 files for 5,148 clips after ten days, 1,000 to
+# 3,300 more every day, 1.4 MB of text in all - and every one of them in Spotlight's index. A year of that is 300,000 files.
+# Every ten minutes the small files are now packed into transcripts_archive/YYYY-MM-DD.jsonl, the day the clip was recorded:
+# one line per clip - {"file": the clip's name, "t": when the transcript was written, "text": ..., "asr": what each engine
+# wrote} - and removed once the line is safely on disk. Nothing is lost and nothing in the app reads the archive.
+ARCHIVE = os.path.join(HERE, "transcripts_archive")
+_ARCH_RX = re.compile(r"^(?P<base>.+?)\.(?P<ext>asr\.json|json|txt)$")
+def archive_pack(min_age=120, now=None):
+    """-> (lines written, small files removed). A clip whose files arrived less than min_age seconds ago waits for the next round
+    (its other file may still be on the way). Safe to run twice: a line that is already in the day file is not written again."""
+    now = now or time.time(); days = {}; packed = removed = 0
+    try: names = os.listdir(ARCHIVE)
+    except OSError: return 0, 0
+    for f in names:
+        m = _ARCH_RX.match(f)
+        if not m: continue                                                    # the day files themselves, anything else
+        path = os.path.join(ARCHIVE, f)
+        try: mt = os.path.getmtime(path)
+        except OSError: continue
+        base = m.group("base"); d = re.search(r"_(\d{4})(\d{2})(\d{2})_(\d{6})", base)
+        day = f"{d.group(1)}-{d.group(2)}-{d.group(3)}" if d else time.strftime("%Y-%m-%d", time.localtime(mt))
+        c = days.setdefault(day, {}).setdefault(base, {"files": [], "t": 0.0, "at": d.group(4) if d else ""})
+        c["files"].append((m.group("ext"), path)); c["t"] = max(c["t"], mt)
+    for day, clips in sorted(days.items()):
+        ready = {b: c for b, c in clips.items() if now - c["t"] >= min_age}
+        if not ready: continue
+        dayfile = os.path.join(ARCHIVE, day + ".jsonl")
+        try:
+            have = set()
+            if os.path.exists(dayfile):
+                with open(dayfile, encoding="utf-8", errors="ignore") as fh: have = {l.rstrip("\n") for l in fh}
+            lines = []
+            for base in sorted(ready, key=lambda b: (ready[b]["at"], b)):
+                rec = {"file": base, "t": int(ready[base]["t"])}
+                for ext, path in sorted(ready[base]["files"], reverse=True):       # txt, json, asr.json
+                    with open(path, encoding="utf-8", errors="ignore") as fh: body = fh.read()
+                    if ext == "txt": rec["text"] = body.strip()
+                    else:
+                        try: rec["asr" if ext == "asr.json" else "json"] = json.loads(body)
+                        except ValueError: rec["asr" if ext == "asr.json" else "json"] = body
+                line = json.dumps(rec, ensure_ascii=False)
+                if line not in have: lines.append(line); have.add(line)
+            if lines:
+                with open(dayfile, "a", encoding="utf-8") as fh:
+                    fh.write("\n".join(lines) + "\n"); fh.flush(); os.fsync(fh.fileno())
+            packed += len(lines)
+            for c in ready.values():                                          # only now, with the lines on disk
+                for _, path in c["files"]:
+                    try: os.remove(path); removed += 1
+                    except OSError: pass
+        except Exception as e: say(f"transcripts archive: {day} was not packed ({e!r}) - its files stay as they are")
+    if removed >= 200: say(f"transcripts archive: {removed} small files packed into one file per day ({packed} clips)")
+    return packed, removed
+
 def _prune_loop():
     time.sleep(30); n = 0
     while True:                                                # (v234) the recordings every 2 minutes, the rest of the housekeeping every 10 as before
         prune_recordings()
-        if n % 5 == 0: housekeeping(); perf_note()
+        if n % 5 == 0:
+            housekeeping()
+            try: archive_pack()
+            except Exception as e: say(f"transcripts archive: {e!r}")
+            perf_note()
         n += 1; time.sleep(120)
 threading.Thread(target=_prune_loop, daemon=True).start()
 
