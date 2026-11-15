@@ -186,8 +186,61 @@ def bank_load():
                 if isinstance(e, dict) and e.get("ver") != "DIGITAL" and v1.digital_freq(float(e.get("mhz", 0))):
                     e["ver"] = "DIGITAL"; e["cat"] = "Digital"; e["uv32"] = False; e.pop("voice_ts", None)   # uv32: an analog handheld cannot decode it
             except Exception: pass
+        try: bank_fold_copies(data)                                            # (v241) once: the copies the old snap filed 2.5 kHz off their channels
+        except Exception as e: v1.say(f"bank: folding the copies failed ({e}) - the bank is as it was")
         _bank["data"] = data; _bank["loaded"] = True; _bank["n0"] = len(data)
     return _bank["data"]
+# (v241) THE BANK'S OLD COPIES. Until v240 the sweep put a hit on the 5 kHz grid whenever its measured centre came within 2 kHz of it,
+# and a 12.5 kHz channel lies 2.5 kHz from that grid on both sides: 451.1875 was filed as 451.185 or 451.190 again and again, each
+# an entry of its own, counted apart from the real channel and listened to off its frequency. Of the bank's 4,985 entries 184 sat
+# exactly 2.5 kHz off a frequency on record. Those are folded into the real channel here, once: the times added, the best signal,
+# the earliest first-heard, the latest last-heard and voice stamp kept, a voice verdict carried over; where the real channel had
+# no entry yet the copy is moved onto it. Entries 5 kHz off are left alone - from the bank alone they cannot be told from a
+# 6.25 kHz channel of their own. bank.json as it was is kept beside it (bank.json.before_v241), and what was done is written to
+# _state/bank_folded_v241.txt, whose presence stops it running again.
+def bank_fold_copies(data, force=False):
+    mark = os.path.join(HERE, "_state", "bank_folded_v241.txt")
+    if os.path.exists(mark) and not force: return None
+    rank = {"KNOWN": 5, "VOICE": 4, "DIGITAL": 3, "": 2, "QUIET": 1, "DATA": 0}
+    plan = []
+    for k in sorted(data):
+        e = data.get(k)
+        if not isinstance(e, dict): continue
+        try: m = float(e.get("mhz", k))
+        except (TypeError, ValueError): continue
+        if m < 137 or tv_channel(m) or 764 <= m <= 776 or 851 <= m <= 870: continue      # the airband and broadcast grids, and the P25 bands, were never snapped this way
+        g = v1.sdr_scan.snap_known(m, 0.003)
+        if g is not None and abs(g - m) >= 0.0007: plan.append((k, g))
+    if plan and os.path.exists(BANK) and not os.path.exists(BANK + ".before_v241"): shutil_copy(BANK, BANK + ".before_v241")
+    folded = moved = 0; lines = []
+    for k, g in plan:
+        e = data.get(k); t = f"{g:.4f}"; x = data.get(t)
+        if not isinstance(e, dict): continue
+        if isinstance(x, dict):
+            x["times"] = (x.get("times") or 0) + (e.get("times") or 0)
+            x["best_snr"] = max(x.get("best_snr") or 0, e.get("best_snr") or 0)
+            fh = [v for v in (x.get("first_heard"), e.get("first_heard")) if v]
+            if fh: x["first_heard"] = min(fh)
+            x["last_heard"] = max(x.get("last_heard") or 0, e.get("last_heard") or 0)
+            if e.get("voice_ts") or x.get("voice_ts"): x["voice_ts"] = max(x.get("voice_ts") or 0, e.get("voice_ts") or 0)
+            if not x.get("tone") and e.get("tone"): x["tone"] = e["tone"]
+            ev, xv = e.get("ver") or "", x.get("ver") or ""
+            if ev in ("KNOWN", "VOICE", "DIGITAL") and rank[ev] > rank.get(xv, 2): x["ver"] = ev
+            if placeholder_name(x.get("name")) and not placeholder_name(e.get("name")): x["name"] = e["name"]
+            folded += 1; lines.append(f"{k} ({e.get('name')}, {e.get('times') or 0} times, {e.get('ver') or '-'}) folded into {t} ({x.get('name')}, now {x.get('times')} times, {x.get('ver') or '-'})")
+        else:
+            e["mhz"] = g
+            if placeholder_name(e.get("name")): e["name"] = " ".join([f"{g:.4f}".rstrip("0").rstrip(".")] + (e.get("name") or "").strip().split(" ")[1:])
+            data[t] = e; moved += 1; lines.append(f"{k} ({e.get('name')}, {e.get('times') or 0} times, {e.get('ver') or '-'}) moved to {t}")
+        del data[k]
+    try:
+        os.makedirs(os.path.dirname(mark), exist_ok=True)
+        with open(mark, "w") as fh: fh.write(f"{time.strftime('%Y-%m-%d %H:%M')}  {folded} copies folded into their channels, {moved} moved onto theirs; the bank as it was: bank.json.before_v241\n" + "\n".join(lines) + "\n")
+    except OSError: pass
+    if folded or moved:
+        _bank["dirty"] = True
+        v1.say(f"bank: {folded} entries that sat 2.5 kHz off their channel folded into it, {moved} moved onto theirs (the bank as it was: bank.json.before_v241)")
+    return folded, moved
 def bank_mark_data(keys):
     """Channels the scan classifies as data/digital are remembered as DATA in the bank so Monitor skips them for good."""
     if not keys: return
