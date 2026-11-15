@@ -65,6 +65,7 @@ def state():
     data_keys = []
     for h in d["hits"]:
         if 88.0 <= h["mhz"] < 108.0: continue                                  # broadcast FM is not part of the scanner (the FM Radio tab stays as the audio test)
+        if tv_channel(h["mhz"]) and placeholder_name(h.get("name")): continue  # (v237) nor are the bumps on a TV station's plateau
         ps = 764 <= h["mhz"] <= 776 or 851 <= h["mhz"] <= 870          # P25 trunked bands: listed and named, routed to SDRTrunk
         if ("water" in (h.get("name") or "").lower() and ("meter" in (h.get("name") or "").lower() or "toronto" in (h.get("name") or "").lower())) or any(abs(h["mhz"] - f) < 0.0026 for f in (458.7625, 460.3875)):
             data_keys.append(f"{h['mhz']:.4f}"); continue              # City of Toronto water-meter telemetry: data, nothing to hear
@@ -435,6 +436,11 @@ def bank_merge(live):
             if row["ver"] != "DIGITAL":
                 row["ver"] = "DIGITAL"; row["mode"] = "DMR"; row["uv32"] = False
                 if droute[1] and droute[1] not in row["name"]: row["name"] = droute[1] if re.fullmatch(r"[\d.]+( [A-Z]{1,2})?", row["name"] or "") else f"{droute[1]} · {row['name']}"
+        if 420 <= row["mhz"] < 430 and row["cat"] in ("Ham", "Ham repeater"): row["cat"] = "Other"     # (v237) filed as Ham before; 420-430 MHz is land mobile here
+        if placeholder_name(row["name"]):                                     # (v237) a made-up name: is there a real one, and is it a channel at all?
+            if tv_channel(row["mhz"]): continue                               # a bump on a TV station's plateau (the entry stays in bank.json; it is not listed)
+            nm, kind = display_name(row["mhz"])
+            if nm: row["name"] = nm; row["named_by"] = kind
         row["vrank"] = 2 if row["ver"] == "VOICE" else (1 if row["ver"] == "KNOWN" else 0)
         out.append(row)
     # (v191) what the "Last heard" column sorts by: channels where voice was heard in the last 24 h come first, newest first; below them
@@ -484,6 +490,7 @@ def retail_channel(m):
 def category(h):
     s = (h["service"] or "").upper(); m = h["mhz"]
     if s in ("PEARSON", "AIR", "AIR GUARD", "NAV", "MIL AIR") or 108 <= m < 137: return "Airport"
+    if 420 <= m < 430: return "Business" if "BIZ" in s else "Other"         # (v237) 420-430 MHz is land mobile in Canada - the amateur band is 430-450; these were filed as Ham
     if s in ("REPEATER", "2M RPT", "70CM RPT"): return "Ham repeater"
     if "2M" in s or "70CM" in s or "SAT" in s: return "Ham"
     if "FRS" in s or "GMRS" in s: return "FRS/GMRS"
@@ -2089,16 +2096,55 @@ def label_what(k):
         if lic: s += "; " + lic[1]
     except Exception: pass
     return s
+# (v237) THE BAND SAYS WHAT IT IS. Of the bank's 4,985 entries 4,535 carried a placeholder name ("483.1562 T"), and 1,438 of those lay
+# between 470 and 608 MHz - television. A digital TV station fills its whole 6 MHz channel; the sweep saw the plateau's bumps as
+# "channels" (860 of them in channel 16 alone) and the app filed them as Business. Where the allocation of a band says what a
+# signal there is, that is its name when nothing better is on record; in the TV bands such an entry is not a channel at all and
+# is left out of the lists, as broadcast FM is. (Canadian allocations: TV 54-72, 76-88, 174-216 and 470-608 MHz in 6 MHz
+# channels; mobile broadband 617-652 / 663-698 MHz, 698-758 and 776-806 MHz, 824-849 / 869-894 MHz.)
+def tv_channel(mhz):
+    """the North American TV channel a frequency lies in (6 MHz each: 2-4, 5-6, 7-13, 14-36); None outside the TV bands"""
+    for lo, hi, first in ((54.0, 72.0, 2), (76.0, 88.0, 5), (174.0, 216.0, 7), (470.0, 608.0, 14)):
+        if lo <= mhz < hi: return first + int((mhz - lo) // 6)
+    return None
+def band_name(mhz):
+    """(name, what) for a frequency in a band whose allocation says what is heard there; ('', '') elsewhere"""
+    n = tv_channel(mhz)
+    if n:
+        lo = next(l + 6 * (n - f) for l, h, f in ((54.0, 72.0, 2), (76.0, 88.0, 5), (174.0, 216.0, 7), (470.0, 608.0, 14)) if l <= mhz < h)
+        return f"TV channel {n} (broadcast)", f"television broadcasting, channel {n} ({lo:.0f}-{lo + 6:.0f} MHz): a digital TV signal fills the whole 6 MHz, so a sweep shows a plateau with bumps on it, not channels"
+    if 88.0 <= mhz < 108.0: return "FM broadcast", "FM radio broadcasting"
+    for lo, hi, nm in ((617.0, 652.0, "600 MHz mobile (cell towers)"), (663.0, 698.0, "600 MHz mobile (phones)"), (698.0, 758.0, "700 MHz mobile (LTE)"), (776.0, 806.0, "700 MHz mobile (LTE)"),
+                       (824.0, 849.0, "850 MHz cellular (phones)"), (869.0, 894.0, "850 MHz cellular (cell towers)")):
+        if lo <= mhz < hi: return nm, "mobile broadband: wide digital signals, nothing to listen to"
+    return "", ""
 def whatis(mhz, tol=0.0065):
     """(name, kind, what, MHz of what was found) for a frequency that the strip's own labels do not cover: a researched label,
-    else the licence on record; name '' when there is neither."""
+    else the licence on record, else what the band is for (kind 'band'); name '' when there is none of these."""
     fl = freq_labels(); k = min(fl, key=lambda f: abs(f - mhz)) if fl else None
     if k is not None and abs(k - mhz) <= tol: return fl[k]["name"], "research", label_what(k), k
     try:
         lic = licence_at(mhz, tol)
         if lic: return lic[0], "licence", lic[1], lic[2]
     except Exception: pass
+    nm, what = band_name(mhz)
+    if nm: return nm, "band", what, mhz
     return "", "", "", mhz
+_PLACEHOLDER = re.compile(r"[\d.]+( [A-Z]{1,2})?")
+def placeholder_name(name):
+    """True for a name the app made up from the frequency ("123.925 A", "483.1562 T", "142.11") or no name at all"""
+    return not name or bool(_PLACEHOLDER.fullmatch(str(name).strip()))
+_DN = {"gen": None, "d": {}}
+def display_name(mhz):
+    """(name, kind) to show for a bank entry that only has a placeholder name: the researched label or the licence holder for
+    that frequency (within 2.6 kHz), ('', '') when there is neither. Kept per frequency; thrown away when freq_labels.json changes."""
+    freq_labels()
+    if _DN["gen"] != _FL["t"]: _DN["gen"] = _FL["t"]; _DN["d"] = {}
+    k = round(mhz, 4); v = _DN["d"].get(k)
+    if v is None:
+        nm, kind, _, _ = whatis(mhz, 0.0026)
+        v = _DN["d"][k] = (nm, kind) if kind in ("research", "licence") else ("", "")
+    return v
 def find_comb(fs, raster, step=0.005):
     """Lines thrown by one source of interference: a row of peaks standing at one spacing that is not the band's channel spacing
     (a switching power supply or other electronics near the antenna or the receiver puts a line every so many kHz either side of
