@@ -353,6 +353,32 @@ def snap(mhz, raster_khz):
         if abs(s - mhz) <= tol: return s
     return mhz
 
+# (v240) A HIT BELONGS TO THE CHANNEL THAT IS ON RECORD THERE. snap() above prefers the 5 kHz grid, and a 12.5 kHz channel - 451.1875,
+# 413.6125 - lies 2.5 kHz from it either way: whenever the measured centre was half a kHz off, the hit was filed on 451.185 or
+# 451.190 instead, as a channel of its own, under the licence holder's name of the real one. bank.json on 15 Nov: 282 entries on
+# a frequency that is on record (reference table, licence, researched label) and 295 within 6.25 kHz of one but not on it - 184 of
+# them exactly 2.5 kHz off, 76 exactly 5 kHz - and for 113 the real channel is in the bank as well. A hit whose centre lies within
+# 5.5 kHz of a frequency on record is that channel (not 6.25: half way to the next 12.5 kHz channel belongs to neither).
+_KNOWN = {"t": 0.0, "f": []}
+def known_freqs():
+    """every frequency something on record sits on - the reference table, the licences within 50 km, the researched labels
+    (freq_labels.json) - sorted; read again every ten minutes"""
+    import time as _t, json as _j
+    if not _KNOWN["f"] or _t.time() - _KNOWN["t"] > 600:
+        f = set(REFERENCE) | set(licences())
+        try:
+            with open(os.path.join(HERE, "freq_labels.json"), encoding="utf-8") as fh: f |= {round(float(k), 4) for k in _j.load(fh).get("labels", {})}
+        except Exception: pass
+        _KNOWN["f"] = sorted(f); _KNOWN["t"] = _t.time()
+    return _KNOWN["f"]
+def snap_known(mhz, tol=0.0055):
+    """the frequency on record nearest to mhz and within tol of it; None when there is none"""
+    import bisect
+    f = known_freqs(); i = bisect.bisect_left(f, mhz); best = None
+    for j in (i - 1, i):
+        if 0 <= j < len(f) and abs(f[j] - mhz) <= tol and (best is None or abs(f[j] - mhz) < abs(best - mhz)): best = f[j]
+    return best
+
 def find_hits(bins, mode, raster_khz, thresh_db, min_pct, centers=None):
     if not bins: return []
     if centers is None: centers = set().union(*HOP_CENTERS.values()) if HOP_CENTERS else set()
@@ -418,7 +444,8 @@ def find_hits(bins, mode, raster_khz, thresh_db, min_pct, centers=None):
                     wgt = 10 ** ((mx[k] - floor[k]) / 10)
                     wsum += wgt; fsum += wgt * freqs[k]
                 mhz = (fsum / wsum if wsum else freqs[best]) / 1e6
-                snapped = snap(mhz, raster_khz)
+                on_record = snap_known(mhz) if raster_khz < 25 else None       # (v240) the airband and broadcast grids are right as they are
+                snapped = on_record if on_record is not None else snap(mhz, raster_khz)
                 hits.append({
                     "mhz": round(snapped, 4), "raw_mhz": round(mhz, 5),
                     "peak_db": round(mx[best], 1), "floor_db": round(floor[best], 1),
