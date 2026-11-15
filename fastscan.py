@@ -13,7 +13,14 @@ Why it is faster and catches more:
   a 60 s slice that only sampled it.
 
 Usage (what sdr_scan.py calls):  fastscan.py -f LO:HI:BIN -e SECONDS -g GAIN [-d DWELL]   -> rows on stdout
-SIGINT/SIGTERM = stop cleanly (the dashboard's PAUSE flag path)."""
+SIGINT/SIGTERM = stop cleanly (the dashboard's PAUSE flag path).
+
+(v247) WHERE A SLICE BEGINS. Every slice began at the bottom of its band, and a slice is over before its second lap is (the
+retune costs 0.3 s a window, which the dwell did not count) or is broken off when the dashboard wants the dongle. Counted in the
+sweep of 15 Nov, 09:14 to 11:53, visits per window from the bottom of the band to the top: airband 74 ... 32, VHF 75 ... 31,
+UHF 60 ... 40 ... 19 - the top of each band was looked at half as often as the bottom, and in the airband the bottom is the
+navigation aids (108-118 MHz) and the top is Arrival and Centre. A slice now begins at the window after the one the last
+slice of that band ended on: the CSV this process appends to says which that was."""
 import argparse, datetime as dt, os, signal, sys, time
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import numpy as np
@@ -25,6 +32,36 @@ STOP = False
 def _stop(*_):
     global STOP; STOP = True
 signal.signal(signal.SIGINT, _stop); signal.signal(signal.SIGTERM, _stop)
+
+def stdout_path():
+    """the file this process's rows go to (sdr_scan.py opens power_<band>.csv for appending and hands it over as stdout), or
+    None when stdout is a pipe or a terminal"""
+    try:
+        import fcntl
+        if hasattr(fcntl, "F_GETPATH"):                                  # macOS
+            p = fcntl.fcntl(1, fcntl.F_GETPATH, b"\0" * 1024).split(b"\0", 1)[0].decode()
+        else: p = os.readlink("/proc/self/fd/1")                          # Linux (the test bench)
+        return p if p and os.path.isfile(p) else None
+    except Exception: return None
+
+def last_low(path):
+    """the low edge (Hz) of the window in the last whole row of a power CSV, or None"""
+    try:
+        with open(path, "rb") as fh:
+            fh.seek(0, 2); n = fh.tell(); fh.seek(max(0, n - 40000)); tail = fh.read().decode("ascii", "ignore")
+        for line in reversed(tail.split("\n")[:-1]):                       # [:-1]: what follows the last line end is a row still being written (or nothing)
+            f = line.split(", ", 6)
+            if len(f) == 7 and f[2].strip().isdigit() and f[3].strip().isdigit(): return int(f[2])
+    except Exception: pass
+    return None
+
+def first_window(cents, lo_hz, last_lo):
+    """index of the window to begin with: the one after the window whose low edge is last_lo; 0 when there is no last row or it
+    is not a window of this band"""
+    if last_lo is None or not cents: return 0
+    edges = [max(lo_hz, c - WINDOW / 2) for c in cents]
+    i = min(range(len(cents)), key=lambda k: abs(edges[k] - last_lo))
+    return (i + 1) % len(cents) if abs(edges[i] - last_lo) <= WINDOW / 4 else 0
 
 def windows(lo_hz, hi_hz):
     """centres covering lo..hi in WINDOW-wide steps (the last one is pulled back so nothing past hi is scanned twice)"""
@@ -56,11 +93,12 @@ def main():
     win = np.hanning(nfft).astype(np.float32); wpow = float(np.sum(win ** 2))
     cents = windows(lo, hi)
     cents = sorted({round(c / step) * step for c in cents})               # every window on ONE bin grid: overlapping windows share bins exactly (no 1 Hz-apart neighbours for the hit finder)
-    dwell = min(a.dwell, max(0.4, total / (2 * len(cents))))           # every slice covers its band at least twice (UHF 400-520: 67 windows -> 0.45 s each; airband: 3 s)
+    dwell = min(a.dwell, max(0.4, total / (2 * len(cents))))           # meant as two laps a slice; with 0.3 s to retune each window it is 1.7 laps of the airband (1.76 s a window), 1.2 of UHF (0.45 s)
     t_end = time.time() + total; tcp = None; out = sys.stdout
+    start = first_window(cents, lo, last_low(stdout_path() or ""))       # (v247) on from where the last slice of this band ended
     try:
-        tcp = CH.RtlTcp(cents[0], gain_tenths)
-        wi = -1
+        tcp = CH.RtlTcp(cents[start], gain_tenths)
+        wi = start - 1
         while not STOP and time.time() < t_end:
             wi = (wi + 1) % len(cents); center = cents[wi]
             tcp.retune(center)
