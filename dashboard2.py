@@ -2002,6 +2002,227 @@ def aircraft_now(max_age=10):
         _AC.update(t=time.time(), data=data, src=name); return data
     return dict(_AC["data"] or {"aircraft": [], "n": 0}, error="; ".join(errs))
 
+# (v233) WHAT IS THAT PEAK. Matt, 15 Nov: "there is a lot of stuff 'not in the bank' can we expand to research what these
+# frequencies are and label them in the future?" The legend under the strip named a peak only from the short reference table and
+# from bank channels already confirmed as voice, and took any such channel within 1/400 of the span (47 kHz on the airband) as
+# the peak's name; everything else read "not in the bank". What his screenshot showed, measured from the sweep of that minute:
+# seven of the nine peaks were lines of ONE comb - a carrier on 134.000 MHz with a line every 49.3 kHz either side of it, the
+# same in every pass - and the other two were single steady carriers on exactly 120.000 and 125.000 MHz. None was a station,
+# and two of the comb's lines wore the names of real channels they stood beside (TOR VFR, CTR E RDR2).
+# Now each peak is looked up and measured here, where the sweep's own bins are (the page only has the thinned-out trace):
+#   name    1. the reference table, 2. freq_labels.json (researched labels, each with its source - the file to add to),
+#           3. bank channels confirmed as voice, 4. the ISED licence database (who holds a licence there within 50 km);
+#           a name is given only when the TOP of the peak is within a bin or so of the channel;
+#   steady  the same level in every pass of the sweep: a carrier that stays on;
+#   comb    one of a row of lines standing at a spacing that is not the band's channel spacing: interference from one source.
+# What still has no name goes to unknown_freqs.json with when and how strongly it was seen - the list to research from.
+FREQ_LABELS = os.path.join(HERE, "freq_labels.json"); UNKNOWN_FREQS = os.path.join(HERE, "unknown_freqs.json")
+_FL = {"t": 0.0, "d": {}, "src": {}}; _UNK = {"t": {}, "lock": __import__("threading").Lock()}
+def freq_labels():
+    """freq_labels.json as {MHz: {"name", "what", "src"}}; read again whenever the file changes, so a label added there shows
+    without a restart. A file that cannot be read (half-written) leaves the labels already loaded in place."""
+    try:
+        t = os.path.getmtime(FREQ_LABELS)
+        if t != _FL["t"]:
+            with open(FREQ_LABELS, encoding="utf-8") as fh: j = json.load(fh)
+            _FL["d"] = {round(float(k), 4): v for k, v in j.get("labels", {}).items() if isinstance(v, dict) and v.get("name")}
+            _FL["src"] = {k: re.sub(r"^https?://(www\.)?", "", str(v)).split("/")[0] for k, v in j.get("sources", {}).items()}
+            _FL["t"] = t
+    except (OSError, ValueError, AttributeError, TypeError): pass
+    return _FL["d"]
+_LIC_ACR = {"CN", "CP", "TTC", "OPP", "RCMP", "GTAA", "OPG", "UHN", "YMCA", "CBC", "CTV", "TD", "RBC", "BMO", "CIBC", "UPS", "DHL", "IBM", "GM", "GE", "II", "III", "IV", "FBO", "ARINC", "SITA"}
+_LIC_SMALL = {"of", "the", "and", "for", "at", "in", "on", "de", "la", "le", "du", "des"}
+def lic_who(s):
+    """A licence holder's name as a label: the organisation only (the records carry contact people - 'Attn: ...', '- <a name>' -
+    and those are not shown), no legal tail or what the record adds after it, no 'The Corporation of the', capitals only where they belong."""
+    s = re.split(r"\s*[-\u2013,:]?\s*\b(?:attn|attention|c/o)\b", str(s or ""), flags=re.I)[0]
+    m = re.search(r"\s+(?:o/a|d/b/a|dba|doing business as|operating as)\s+(.+)$", s, flags=re.I)
+    if m: s = m.group(1)                                                            # "... Ltd. o/a NAC Constructors Ltd.": the name it trades under
+    s = re.sub(r"\s*\([^)]*\)?", "", s)                                             # (GMCB), (formerly ...), an unclosed "(Execaire / Ima"
+    s = re.split(r"\s+[-\u2013]\s+|-\s+(?=[A-Z])", s)[0].strip(" ,.-\u2013")
+    if s and not any(c.islower() for c in s):                                       # ALL CAPITALS in the record
+        s = " ".join(x if (x in _LIC_ACR or any(c.isdigit() for c in x)) else (x.lower() if i and x.lower() in _LIC_SMALL else x.capitalize()) for i, x in enumerate(s.split()))
+    s = re.sub(r"^(?:the\s+)?(?:corporation|corpn)\s+of\s+(?:the\s+)?", "", s, flags=re.I)
+    s = re.sub(r"^(?:the\s+)?regional municipality of\s+", "Region of ", s, flags=re.I)
+    s = re.sub(r"^h(?:is|er) majesty the (?:king|queen) in right of (?:the\s+)?", "", s, flags=re.I)
+    if s.lower() == "canada": s = "Government of Canada"
+    s = re.sub(r"[,\s]+(?:inc|ltd|limited|corp|incorporated|llc|ulc)\b\.?(?=\s|,|$).*$", "", s, flags=re.I)        # a legal tail and whatever follows it (a department, a branch)
+    for _ in range(2): s = re.sub(r"[,\s]+(?:limited partnership|corporation|company|co\.|l\.?p\.?|g\.?p\.?)$", "", s, flags=re.I).strip(" ,")
+    s = re.sub(r"^the\s+", "", s, flags=re.I).strip(" ,.-\u2013&")
+    if len(s) > 36: s = s[:37].rsplit(" ", 1)[0]
+    while s and s.split()[-1].lower().strip(",&") in _LIC_SMALL | {"", "&"}: s = s.rsplit(" ", 1)[0] if " " in s else ""
+    s = s.rstrip(" ,&-")
+    return s[:1].upper() + s[1:]
+def lic_where(loc):
+    """the place of a licence record in a word or two: the airport when it is one, otherwise the town"""
+    loc = str(loc or "")
+    if re.search(r"\bl[bp]{2}ia\b", loc, re.I): return "Pearson airport"
+    if re.search(r"toronto city cent(?:re|er)|city cent(?:re|er) a(?:ir)?p|city ctr a/p|island a(?:ir)?p(?:or)?t|\by[tz]{2}\b|stolport", loc, re.I): return "Billy Bishop airport"
+    for part in loc.split(","):
+        part = re.split(r"\s+On(?:t)?\b\.?|\s+\(|\s+-\s+", part.strip())[0].strip(" .")
+        if len(part) >= 4 and not part[0].isdigit() and len(part) <= 24: return part
+    return ""
+def licence_at(mhz, tol=0.0026):
+    """Who holds a licence here (ISED database, transmitters within 50 km): (label, sentence, MHz of the licence) or None.
+    The licensed frequency nearest the peak is taken, and its holders nearest transmitter first."""
+    rows = v1.sdr_scan.licence_for(mhz, tol)
+    if not rows: return None
+    f0 = min((float(r["mhz"]) for r in rows), key=lambda f: abs(f - mhz))
+    rows = [r for r in rows if abs(float(r["mhz"]) - f0) < 1e-5]
+    who = []; first = {}
+    for r in rows:
+        n = lic_who(r.get("licensee"))
+        if n and n not in first: who.append(n); first[n] = r
+    if not who: return None
+    wh = lic_where(first[who[0]].get("location"))
+    name = who[0] + (f" +{len(who) - 1}" if len(who) > 1 else (f", {wh}" if wh and wh.lower() not in who[0].lower() and len(who[0]) + len(wh) <= 36 else ""))
+    what = "licensed to " + "; ".join(f"{n} ({lic_where(first[n].get('location')) or str(first[n].get('location') or '')[:30]}, {first[n].get('km')} km)" for n in who[:4])
+    what += (f" and {len(who) - 4} more" if len(who) > 4 else "") + " - ISED licence database"
+    if all((r.get("digital") or "").upper().startswith("D") for r in rows): what += ", digital"
+    return name, what, f0
+def label_what(k):
+    """the one line that goes with a researched label: what it is, where that was read, and the licence on record if there is one"""
+    v = freq_labels().get(k) or {}; s = v.get("what", ""); src = _FL["src"].get(v.get("src", ""), "")
+    if src: s += f" ({src})"
+    try:
+        lic = licence_at(k, 0.0026)
+        if lic: s += "; " + lic[1]
+    except Exception: pass
+    return s
+def whatis(mhz, tol=0.0065):
+    """(name, kind, what, MHz of what was found) for a frequency that the strip's own labels do not cover: a researched label,
+    else the licence on record; name '' when there is neither."""
+    fl = freq_labels(); k = min(fl, key=lambda f: abs(f - mhz)) if fl else None
+    if k is not None and abs(k - mhz) <= tol: return fl[k]["name"], "research", label_what(k), k
+    try:
+        lic = licence_at(mhz, tol)
+        if lic: return lic[0], "licence", lic[1], lic[2]
+    except Exception: pass
+    return "", "", "", mhz
+def find_comb(fs, raster, step=0.005):
+    """Lines thrown by one source of interference: a row of peaks standing at one spacing that is not the band's channel spacing
+    (a switching power supply or other electronics near the antenna or the receiver puts a line every so many kHz either side of
+    one of its clock frequencies). fs: where the tops of the peaks are, MHz; raster: the band's channel spacing, MHz; step: the
+    width of one bin of the sweep, MHz. Returns ({frequency: True for each member}, spacing in kHz) - ({}, 0.0) when there is none.
+    Calling stations interference is the worse mistake, so it has to be sure. Asked of the set:
+      1. ten or more peaks lie on one lattice to within half a bin of the sweep (plus 1 kHz), the spacing six times that or more;
+      2. seven of them stand on consecutive places of the lattice, or on every second place (a comb whose odd lines are weak);
+      3. each member has another within three spacings (a far-off peak that happens to fit is not part of it);
+      4. they are at least six in ten of ALL the peaks between the first and the last of them (random stations put one in five
+         on any lattice by chance; a comb is nearly everything that shows where it stands);
+      5. the spacing is not a multiple of the band's channel spacing with the members on the channels (FM broadcast stands
+         every 200 kHz, repeaters every 15 or 25: those are stations).
+    Measured on 15 Nov against 28 kinds of station sets (channel plans of 6.25 to 200 kHz, dense and thin, flat-topped wide
+    signals), 500 random sets of each: no false comb in 14,000; the comb of that night and its like found 500 times in 500; thin
+    combs of 9 to 12 lines among many stations are missed more often than found, which is the side to err on."""
+    fs = sorted(set(fs))
+    if len(fs) < 10: return {}, 0.0
+    tol = 0.5 * step + 0.001
+    hist = {}
+    for i, a in enumerate(fs):                                 # each peak against the next three: a station standing between two lines does not hide their spacing
+        for b in fs[i + 1:i + 4]:
+            if max(0.02, 6 * tol) <= b - a <= 0.4: k = round((b - a) / 0.0025); hist[k] = hist.get(k, 0) + 1
+    score = {k: hist.get(k - 1, 0) + hist[k] + hist.get(k + 1, 0) for k in hist}
+    best = None
+    for k in sorted(score, key=lambda k: -score[k])[:8]:
+        if score[k] < 4: break
+        d0 = k * 0.0025
+        for f0 in fs:                                          # every peak as the anchor; spacing and offset are then fitted through the members, the gate closing each time
+            c, dd, mem = f0, d0, []
+            for gate in (tol + 0.003, tol + 0.0015, tol):
+                mem = [g for g in fs if abs((g - c) - round((g - c) / dd) * dd) <= gate]
+                ns = [round((g - c) / dd) for g in mem]
+                if len(set(ns)) < 6: mem = []; break
+                mn = sum(ns) / len(ns); mg = sum(mem) / len(mem); den = sum((x - mn) ** 2 for x in ns)
+                dd2 = sum((x - mn) * (g - mg) for x, g in zip(ns, mem)) / den
+                if not max(0.018, 5.5 * tol) <= dd2 <= 0.42: mem = []; break
+                dd = dd2; c = mg - dd * mn
+            if not mem: continue
+            mem = [g for g in fs if abs((g - c) - round((g - c) / dd) * dd) <= tol]
+            mem = [g for g in mem if any(h != g and abs(h - g) <= 3.2 * dd for h in mem)]
+            if len(mem) < 10: continue
+            ns = sorted({round((g - c) / dd) for g in mem}); run = 1
+            for stp in (1, 2):
+                for par in range(stp):
+                    e = [n for n in ns if n % stp == par]; cur = 1
+                    for a, b in zip(e, e[1:]):
+                        cur = cur + 1 if b == a + stp else 1; run = max(run, cur)
+            if run < 7: continue
+            if len(mem) < 0.6 * sum(1 for g in fs if mem[0] <= g <= mem[-1]): continue
+            if raster and abs(dd - round(dd / raster) * raster) < 0.0006 and sum(abs(g - round(g / raster) * raster) for g in mem) / len(mem) < 0.002: continue
+            if len({n % 2 for n in ns}) == 1: dd *= 2                                # every member on every second place: the spacing is twice that
+            if best is None or (run, len(mem)) > best[2]: best = (mem, dd, (run, len(mem)))
+    if best is None: return {}, 0.0
+    return {g: True for g in best[0]}, best[1] * 1000.0
+def spectrum_ids(key, xs, ys, floor, passes, labels, fr, stride, bins):
+    """What each peak of the strip is (up to 40 of them, 8 dB over the floor). For each: where its top really is (the sweep's own
+    bin, not the strip's coarser point); the channel that sits THERE if any; whether its level has been the same every time the
+    sweep looked; whether it is one line of a comb (fr: the sweep's bin frequencies in Hz; one point of the strip = `stride` of them)."""
+    import bisect
+    step = passes[-1][0][3] if passes and passes[-1] else 5000.0
+    tol = max(0.003, 1.3 * step / 1e6)
+    cand = sorted((i for i in range(1, len(ys) - 1) if ys[i] - floor >= 8 and ys[i] >= ys[i - 1] and ys[i] > ys[i + 1]), key=lambda i: -ys[i])[:40]
+    need = {i: fr[i * stride:(i + 1) * stride] for i in cand}; allk = sorted({h for v in need.values() for h in v})
+    per = []                                                   # per pass, newest last (up to 12): {Hz: [every reading of that bin in the pass]}
+    for ps in passes[-12:]:
+        d = {}
+        for ts, lo, hi, st, vals in ps:
+            for h in allk[bisect.bisect_left(allk, lo):bisect.bisect_left(allk, lo + len(vals) * st)]:
+                j = int(round((h - lo) / st))
+                if 0 <= j < len(vals) and vals[j] > -1e9: d.setdefault(h, []).append(vals[j])
+        per.append(d)
+    try: bank = bank_load()
+    except Exception: bank = {}
+    fl = freq_labels(); out = []
+    for i in cand:
+        hp = max(need[i], key=lambda h: bins.get(h, -999.0)) if need[i] else xs[i] * 1e6; fp = round(hp / 1e6, 4)
+        seen = [d[hp] for d in per if hp in d]; series = [v for s in seen for v in s]
+        # steady: looked at in 3 passes or more with 6 readings (or in 2 with 10), never under 6 dB over the floor, all within 2 dB of each other
+        steady = (min(series) - floor >= 6 and max(series) - min(series) <= 2.0) if ((len(seen) >= 3 and len(series) >= 6) or (len(seen) >= 2 and len(series) >= 10)) else None
+        lab = min(labels, key=lambda l: abs(l["mhz"] - fp)) if labels else None
+        if lab is not None and abs(lab["mhz"] - fp) <= tol:
+            nm, kind, at = lab["name"], lab.get("kind", "ref"), lab["mhz"]
+            what = label_what(round(at, 4)) if kind == "research" else ""
+        else: nm, kind, what, at = whatis(fp, tol)
+        e = bank.get(f"{at:.4f}") or bank.get(f"{fp:.4f}") or {}
+        out.append({"at": xs[i], "mhz": round(at, 4), "top": fp, "name": nm, "kind": kind, "what": what, "steady": steady, "passes": len(seen),
+                    "db": round(ys[i] - floor, 1), "nov": e.get("ver") == "DATA"})      # nov: the app tried this frequency before and found no voice on it
+    comb, khz = {}, 0.0
+    if xs and xs[-1] < 960:                                    # (above 960 MHz there are systems with channel spacings of their own that are no multiple of anything here)
+        comb, khz = find_comb([o["top"] for o in out], (v1.sdr_scan.BANDS.get(key) or (0, 0, 0, 0, 0))[4] / 1000.0, step / 1e6)
+    for o in out:
+        if o["top"] in comb: o["comb"] = round(khz, 1); o["n_comb"] = len(comb)
+    now = time.time()
+    if out and now - _UNK["t"].get(key, 0) > 60 and _UNK["lock"].acquire(False):       # the research list, at most once a minute per band
+        try:
+            _UNK["t"][key] = now
+            try:
+                with open(UNKNOWN_FREQS, encoding="utf-8") as fh: u = json.load(fh)
+            except (OSError, ValueError): u = {}
+            if not isinstance(u, dict): u = {}
+            u.setdefault("about", "Peaks seen on the spectrum strip that nothing could name (see freq_labels.json for the ones that have been researched). freqs: MHz -> first/last seen, "
+                                   "times seen (counted at most once a minute while the strip is on screen), strongest level over the floor in dB, the band, whether the level was the same in every "
+                                   "pass (steady), and 'no voice found' when the app had checked the frequency before. combs: rows of interference lines found, per band.")
+            fq = u.setdefault("freqs", {}); cb = u.setdefault("combs", {}); stamp = time.strftime("%Y-%m-%d %H:%M"); ch = False
+            for o in out:
+                if o["name"] or o.get("comb"): continue
+                k = next((x for x in fq if abs(float(x) - o["top"]) <= 1.3 * step / 1e6), f"{o['top']:.4f}")     # the same signal read one bin over is the same entry
+                e = fq.setdefault(k, {"first": stamp, "n": 0, "best_db": 0, "band": key})
+                e["last"] = stamp; e["n"] += 1; e["best_db"] = max(e["best_db"], o["db"]); e["band"] = key; ch = True
+                if o["steady"] is not None: e["steady"] = bool(o["steady"])
+                if o["nov"]: e["note"] = "no voice found when the app checked it"
+            if comb:
+                top = max((o for o in out if o.get("comb")), key=lambda o: o["db"])
+                e = cb.setdefault(key, {"first": stamp, "n": 0})
+                e.update(last=stamp, n=e["n"] + 1, lines=len(comb), khz=round(khz, 1), strongest=top["top"], strongest_db=top["db"], lo=min(comb), hi=max(comb)); ch = True
+            if len(fq) > 600: u["freqs"] = dict(sorted(fq.items(), key=lambda kv: kv[1].get("last", ""))[-500:])
+            if ch:
+                with open(UNKNOWN_FREQS + ".tmp", "w", encoding="utf-8") as fh: json.dump(u, fh, indent=0, ensure_ascii=False)
+                os.replace(UNKNOWN_FREQS + ".tmp", UNKNOWN_FREQS)
+        except Exception: pass
+        finally: _UNK["lock"].release()
+    return out
+
 def spectrum(key, points=1400):
     """The live spectrum of one band, like SDRTrunk's strip: the newest sweep pass of power_<key>.csv in the newest scan folder
     (max of the last 3 passes so brief transmissions still show), downsampled to <= `points` bins, plus the known channel labels in range."""
@@ -2043,6 +2264,8 @@ def spectrum(key, points=1400):
     labels = []
     for f, v in v1.sdr_scan.REFERENCE.items():
         if lo_m <= f <= hi_m: labels.append({"mhz": f, "name": v[0], "kind": "ref"})
+    for f, v in freq_labels().items():                         # (v233) researched labels: a tick on the baseline and a name under the cursor, like the reference table's
+        if lo_m <= f <= hi_m and not any(abs(l["mhz"] - f) < 0.003 for l in labels): labels.append({"mhz": f, "name": v["name"], "kind": "research"})
     for k, e in bank_load().items():
         try: m = float(k)
         except ValueError: continue
@@ -2052,7 +2275,9 @@ def spectrum(key, points=1400):
         for f in frs:
             if lo_m <= f <= hi_m: labels.append({"mhz": f, "name": n_ + " CC", "kind": "cc"})
     floor = sorted(ys)[len(ys) // 2]
-    return {"key": key, "lo": lo_m, "hi": hi_m, "x": xs, "y": ys, "floor": floor, "labels": labels, "when": use[-1][0][0] if use and use[-1] else "", "passes": len(use)}
+    try: ids = spectrum_ids(key, xs, ys, floor, passes, labels, fr, stride, bins)  # (v233)
+    except Exception: ids = []
+    return {"key": key, "lo": lo_m, "hi": hi_m, "x": xs, "y": ys, "floor": floor, "labels": labels, "ids": ids, "when": use[-1][0][0] if use and use[-1] else "", "passes": len(use)}
 def SP_SITES():
     try:
         import sdrtrunk_playlist as SP; return SP.P25_SITES
@@ -2860,12 +3085,30 @@ function specPeaks(d,n,minSep){const c=[],w=Math.max(8,Math.round(d.y.length/60)
  for(let i=1;i<d.y.length-1;i++){const v=d.y[i];if(v-d.floor<8||v<d.y[i-1]||v<=d.y[i+1])continue;
   const nb=d.y.slice(Math.max(0,i-w),i-2).concat(d.y.slice(i+3,i+w+1)).sort((p,q)=>p-q);            // it has to stand 8 dB clear of its own neighbourhood too:
   if(nb.length&&v-nb[nb.length>>1]<8)continue;c.push({mhz:d.x[i],db:v});}                              // a hump in the receiver's passband is not a signal
- c.sort((p,q)=>q.db-p.db);const out=[],tol=Math.max(0.0065,(d.hi-d.lo)/400);
+ // (v233) what a peak is comes from the server (d.ids): it sees the sweep's own bins, names a peak only when its top is ON a channel,
+ // looks the rest up (researched labels, the licence database) and says when a peak is a steady carrier. Without that list
+ // (an older server) a label within one and a half points of the trace is used (it was 1/400 of the span: 47 kHz on the airband).
+ c.sort((p,q)=>q.db-p.db);const out=[],tol=Math.max(0.0065,1.5*(d.hi-d.lo)/Math.max(1,d.x.length));
  for(const p of c){if(out.length>=n)break;if(out.some(o=>Math.abs(o.at-p.mhz)<minSep))continue;
   let best=null;d.labels.forEach(l=>{const dd=Math.abs(l.mhz-p.mhz);if(dd<=tol&&(!best||dd<Math.abs(best.mhz-p.mhz)))best=l;});
   const hit=best?null:((typeof S!=='undefined'&&S.hits)||[]).find(h=>Math.abs(h.mhz-p.mhz)<=tol);       // not a labelled channel: the bank may still know it
-  out.push({at:p.mhz,mhz:best?best.mhz:(hit?hit.mhz:p.mhz),db:p.db,name:best?best.name:(hit?hit.name:''),cc:!!(best&&best.kind==='cc')||!!(hit&&hit.cat==='Digital')});}
+  let id=null;(d.ids||[]).forEach(o=>{const dd=Math.abs(o.at-p.mhz);if(dd<=tol&&(!id||dd<Math.abs(id.at-p.mhz)))id=o;});
+  if(id){out.push({at:p.mhz,mhz:id.mhz,db:p.db,name:id.name||'',steady:id.steady===true,passes:id.passes||0,comb:id.comb||0,ncomb:id.n_comb||0,what:id.what||'',kind:id.kind||'',nov:!!id.nov,srv:true,cc:id.kind==='cc'});continue;}     // the server looked at the sweep's own bins: its finding stands
+  const nm=best?best.name:(hit&&hit.name?hit.name:'');
+  out.push({at:p.mhz,mhz:best?best.mhz:(hit?hit.mhz:p.mhz),db:p.db,name:nm,steady:false,what:'',kind:best?best.kind:(hit?'bank':''),cc:!!(best&&best.kind==='cc')||!!(hit&&hit.cat==='Digital')});}
  return out.sort((p,q)=>p.at-q.at);}
+// (v233) what the legend says about a peak. With a name: the name, and a word when the peak is a steady carrier or one line of an interference comb
+// (the channel then lies under it). Without one: what was measured - never "not in the bank", which said nothing and was often untrue.
+function specName(p){if(p.name)return p.name+(p.comb?' · interference line':(p.steady?' · steady carrier':''));
+ if(p.comb)return 'interference - 1 of '+p.ncomb+' lines';
+ if(p.steady)return 'steady carrier - '+(p.nov?'no voice found':'unidentified');
+ return p.nov?'no voice found when checked':(p.srv?'unidentified - logged for research':'unidentified');}
+function specTip(p){if(p.cc)return 'digital - opens the Digital tab';let s=p.what?p.what+'. ':'';
+ if(p.comb)s+='One of '+p.ncomb+' peaks standing '+p.comb+' kHz apart, which is not the channel spacing of this band: lines from one source of interference - typically a switching power supply or other electronics near the antenna or the receiver. '+(p.name?'The channel named here lies under one of them. ':'');
+ else if(p.steady)s+='The same level in '+(p.passes>2?'each of the last '+p.passes+' sweeps':'both sweeps so far')+': a carrier that stays on - a beacon or data link, a continuous broadcast such as ATIS or weather radio, a repeater held open, or interference from electronics. ';
+ if(p.nov)s+='When the app checked this frequency before, it found no voice on it. ';
+ if(!p.name&&!p.comb&&p.srv)s+='Nothing on record names this frequency; it is on the research list (unknown_freqs.json). ';
+ return s+'Click to listen.';}
 function drawSpec(){const d=SPEC.data;if(!d)return;const c=$('#spec');const W=c.clientWidth||800,H=c.clientHeight||230,dpr=window.devicePixelRatio||1;c.width=W*dpr;c.height=H*dpr;const g=c.getContext('2d');g.scale(dpr,dpr);g.clearRect(0,0,W,H);
  const lo=d.lo,hi=d.hi,span=hi-lo||1,PL=40,PR=8,PT=24,PB=20;                 // plot box: dB scale on the left, MHz underneath, flags along the top
  const top=Math.max(...d.y),ymin=d.floor-4,ymax=Math.max(top+3,d.floor+30);
@@ -2892,11 +3135,13 @@ function drawSpec(){const d=SPEC.data;if(!d)return;const c=$('#spec');const W=c.
  $('#sfband').textContent=d.key.toUpperCase();$('#sfrange').textContent=lo.toFixed(3)+' - '+hi.toFixed(3)+' MHz';
  $('#sfpeak').textContent=best?best.mhz.toFixed(4):'—';$('#sfpeakn').textContent=best?('+'+Math.round(best.db-d.floor)+' dB'+(best.name?' · '+best.name:'')):'nothing 8 dB above the floor';
  $('#sffloor').textContent=d.floor+' dB';$('#sfwhen').textContent='sweep '+String(d.when||'').split(' ').pop();
- $('#speclegend').innerHTML=pk.map((p,i)=>`<button class="ghost sl${p.cc?' cc':''}" data-m="${p.mhz}" data-cc="${p.cc?1:0}" data-n="${esc(p.name)}" title="${p.cc?'digital - opens the Digital tab':'listen'}"><i>${i+1}</i><b>${p.mhz.toFixed(4)}</b><span>${esc(p.name||'not in the bank')}</span><u>+${Math.round(p.db-d.floor)} dB</u></button>`).join('');
+ $('#speclegend').innerHTML=pk.map((p,i)=>`<button class="ghost sl${p.cc?' cc':''}" data-m="${p.mhz}" data-cc="${p.cc?1:0}" data-n="${esc(p.name)}" title="${esc(specTip(p))}"><i>${i+1}</i><b>${p.mhz.toFixed(4)}</b><span>${esc(specName(p))}</span><u>+${Math.round(p.db-d.floor)} dB</u></button>`).join('');
  $('#spectitle').textContent=SPEC.pin?'pinned to this band - click the sweeping band to follow the sweep again':'';}
 (function(){const c=$('#spec');
  const at=e=>{const d=SPEC.data;if(!d)return null;const r=c.getBoundingClientRect(),PL=40,PR=8;const m=d.lo+Math.max(0,Math.min(1,(e.clientX-r.left-PL)/(r.width-PL-PR)))*(d.hi-d.lo);let bi=0,bd=1e9;d.x.forEach((x,i)=>{const dd=Math.abs(x-m);if(dd<bd){bd=dd;bi=i;}});
-  const lab=d.labels.find(l=>Math.abs(l.mhz-m)<(d.hi-d.lo)/120);return {d,m,bi,lab};};
+  // (v233) the known channel NEAREST the pointer and within five pixels of it. It was the first one in the list within 1/120 of the span,
+  // which with the researched labels on the strip too would often have been the wrong one of several.
+  const tolm=Math.max(0.004,(d.hi-d.lo)*5/Math.max(50,r.width-PL-PR));let lab=null;d.labels.forEach(l=>{const dd=Math.abs(l.mhz-m);if(dd<=tolm&&(!lab||dd<Math.abs(lab.mhz-m)))lab=l;});return {d,m,bi,lab};};
  c.onpointermove=e=>{const q=at(e);if(!q)return;$('#sfcur').textContent=q.m.toFixed(4);$('#specread').textContent=(q.d.y[q.bi]-q.d.floor>=0?'+':'')+Math.round(q.d.y[q.bi]-q.d.floor)+' dB over the floor'+(q.lab?' · '+q.lab.name:'');};
  c.onclick=e=>{const q=at(e);if(!q)return;let m=q.lab?q.lab.mhz:Math.round(q.m/0.0125)*0.0125;const md=m<137?'am':'fm';P.play(+m.toFixed(4),md,q.lab?q.lab.name:m.toFixed(4));};
  $('#speclegend').onclick=e=>{const b=e.target.closest('button.sl');if(!b)return;if(b.dataset.cc==='1'){const t=$('.tabs button[data-t="digital"]');if(t)t.click();toast('digital channel - play it from the Digital tab');return;}const m=+b.dataset.m;P.play(+m.toFixed(4),m<137?'am':'fm',b.dataset.n||m.toFixed(4));};

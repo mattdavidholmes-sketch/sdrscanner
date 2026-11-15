@@ -59,3 +59,5 @@ remote_access.txt
 chirp_car.csv
 chirp_layout.json
 heard_check.csv
+unknown_freqs.json
+unknown_freqs.json.tmp

@@ -1,0 +1,426 @@
+{
+ "about": "Researched labels for frequencies the app's own reference table does not name. dashboard2.py reads this file whenever it changes (no restart needed) and uses it to name what shows on the spectrum strip. An entry is: MHz with four decimals -> name (short label, capitals like the rest of the airband set), what (one line), src (a key under sources). The reference table in sdr_scan.py comes first, this file second, the ISED licence database third. Peaks that none of them can name collect in unknown_freqs.json - the list to research from. Rule kept when this file was built: where the ISED licence database names a different holder than a hobby list does, the hobby list's entry was left out.",
+ "sources": {
+  "canairradio": "https://canairradio.ca/yyz.html - Toronto Pearson and Toronto ACC frequency list (page last updated 15 April 2020), read 15 Nov 2026",
+  "rr_ytz": "https://radioreference.com/db/aid/5636 - Billy Bishop Toronto City Airport, read 15 Nov 2026",
+  "sigid_acars": "https://www.sigidwiki.com/wiki/ACARS - ACARS channel list, read 15 Nov 2026",
+  "wiki_vdl": "https://en.wikipedia.org/wiki/VHF_Data_Link - VDL Mode 2 channels, read 15 Nov 2026"
+ },
+ "labels": {
+  "118.0000": {
+   "name": "YYZ TWR BU",
+   "what": "Pearson tower, backup",
+   "src": "canairradio"
+  },
+  "118.2000": {
+   "name": "YTZ TWR",
+   "what": "Billy Bishop tower",
+   "src": "rr_ytz"
+  },
+  "119.2000": {
+   "name": "YTZ TWR ALT",
+   "what": "Billy Bishop tower, alternate",
+   "src": "rr_ytz"
+  },
+  "119.7000": {
+   "name": "TML HAMILT",
+   "what": "Toronto Terminal, West Satellite (Hamilton)",
+   "src": "canairradio"
+  },
+  "119.7750": {
+   "name": "ACC SPARE",
+   "what": "Toronto ACC, spare frequency",
+   "src": "canairradio"
+  },
+  "120.1750": {
+   "name": "ACC SPARE 2",
+   "what": "Toronto ACC, spare frequency",
+   "src": "canairradio"
+  },
+  "121.2250": {
+   "name": "CTR N BAY",
+   "what": "Toronto Centre, North Bay sector, high altitude (transmitter at North Bay)",
+   "src": "canairradio"
+  },
+  "121.5000": {
+   "name": "EMERGENCY",
+   "what": "international VHF emergency frequency",
+   "src": "canairradio"
+  },
+  "121.7000": {
+   "name": "YTZ GND",
+   "what": "Billy Bishop ground",
+   "src": "rr_ytz"
+  },
+  "122.6750": {
+   "name": "YYZ FIRE",
+   "what": "Pearson emergency services, pilot to fire vehicles",
+   "src": "canairradio"
+  },
+  "122.7000": {
+   "name": "ATS RAMP",
+   "what": "Airport Terminal Services, ramp",
+   "src": "canairradio"
+  },
+  "122.9500": {
+   "name": "FBO SIGNAT",
+   "what": "Signature Flight Support / Shell Aerocentre (FBO)",
+   "src": "canairradio"
+  },
+  "123.2750": {
+   "name": "LONDON FIC",
+   "what": "London Flight Information Centre, remote outlet at Pearson",
+   "src": "canairradio"
+  },
+  "123.5750": {
+   "name": "WESTJET OPS",
+   "what": "WestJet company frequency",
+   "src": "canairradio"
+  },
+  "124.0250": {
+   "name": "CTR WIARTN",
+   "what": "Toronto Centre, Wiarton sector, high altitude (Midland)",
+   "src": "canairradio"
+  },
+  "124.0750": {
+   "name": "CTR SAULT H",
+   "what": "Toronto Centre, Sault High sector (Wawa)",
+   "src": "canairradio"
+  },
+  "124.3750": {
+   "name": "CTR MITCHL",
+   "what": "Toronto Centre, Mitchell sector, high altitude (Wiarton)",
+   "src": "canairradio"
+  },
+  "124.6750": {
+   "name": "CTR PICTON",
+   "what": "Toronto Centre, Picton sector, high altitude (Coe Hill)",
+   "src": "canairradio"
+  },
+  "125.6250": {
+   "name": "CTR RANGER",
+   "what": "Toronto Centre, Ranger sector, high altitude (Sault Ste. Marie)",
+   "src": "canairradio"
+  },
+  "127.2500": {
+   "name": "N BAY TCU",
+   "what": "North Bay Terminal Control Unit",
+   "src": "canairradio"
+  },
+  "128.2750": {
+   "name": "TML KITCH",
+   "what": "Toronto Terminal, West Satellite (Kitchener)",
+   "src": "canairradio"
+  },
+  "128.3000": {
+   "name": "CTR TIMMIN",
+   "what": "Toronto Centre, Timmins sector, low altitude",
+   "src": "canairradio"
+  },
+  "128.8750": {
+   "name": "ACA RAPIDAIR",
+   "what": "Air Canada Rapidair, Billy Bishop",
+   "src": "rr_ytz"
+  },
+  "128.9500": {
+   "name": "FBO SKYSVC",
+   "what": "Skyservice / Esso Avitat (FBO)",
+   "src": "canairradio"
+  },
+  "128.9750": {
+   "name": "PORTER OPS",
+   "what": "Porter Airlines company frequency",
+   "src": "rr_ytz"
+  },
+  "129.0500": {
+   "name": "JAZZ OPS",
+   "what": "Jazz operations, domestic",
+   "src": "canairradio"
+  },
+  "129.1250": {
+   "name": "ACARS 3",
+   "what": "ACARS data link, USA and Canada additional channel - digital bursts, not voice",
+   "src": "sigid_acars"
+  },
+  "129.2750": {
+   "name": "ORNGE",
+   "what": "Ornge air ambulance",
+   "src": "canairradio"
+  },
+  "129.4250": {
+   "name": "UPS OPS",
+   "what": "UPS",
+   "src": "canairradio"
+  },
+  "129.4500": {
+   "name": "SWISSPORT",
+   "what": "Swissport ramp services",
+   "src": "canairradio"
+  },
+  "129.5500": {
+   "name": "JAZZ MX",
+   "what": "Jazz maintenance",
+   "src": "canairradio"
+  },
+  "129.5750": {
+   "name": "ACA TRANSB",
+   "what": "Air Canada operations, transborder",
+   "src": "canairradio"
+  },
+  "129.6250": {
+   "name": "YYZ DEICE",
+   "what": "Pearson central de-icing facility",
+   "src": "canairradio"
+  },
+  "129.6750": {
+   "name": "YTZ GATES",
+   "what": "Nieuport Aviation gate assignment at Billy Bishop (the 2020 Pearson list has it as VISTA Cargo)",
+   "src": "rr_ytz"
+  },
+  "129.7500": {
+   "name": "FBO EXECAIRE",
+   "what": "FBO at Pearson - the 2020 list has it as Skycharter / Executive Jet Aviation",
+   "src": "canairradio"
+  },
+  "129.8750": {
+   "name": "ACA DISPAT",
+   "what": "Air Canada flight dispatch",
+   "src": "canairradio"
+  },
+  "130.0250": {
+   "name": "ACARS 2",
+   "what": "ACARS data link, USA and Canada secondary channel - digital bursts, not voice",
+   "src": "sigid_acars"
+  },
+  "130.1500": {
+   "name": "ACA INTL",
+   "what": "Air Canada operations, international",
+   "src": "canairradio"
+  },
+  "130.1750": {
+   "name": "ACA W+B",
+   "what": "Air Canada weight and balance",
+   "src": "canairradio"
+  },
+  "130.2750": {
+   "name": "JAZZ MX 2",
+   "what": "Jazz maintenance",
+   "src": "canairradio"
+  },
+  "130.3500": {
+   "name": "JAZZ TRANSB",
+   "what": "Jazz operations, transborder",
+   "src": "canairradio"
+  },
+  "130.3750": {
+   "name": "ACA DOMEST",
+   "what": "Air Canada operations, domestic",
+   "src": "canairradio"
+  },
+  "130.4250": {
+   "name": "ACARS US",
+   "what": "ACARS data link, USA additional channel - digital bursts, not voice",
+   "src": "sigid_acars"
+  },
+  "130.4500": {
+   "name": "ACARS 4",
+   "what": "ACARS data link, USA and Canada additional channel - digital bursts, not voice",
+   "src": "sigid_acars"
+  },
+  "130.4750": {
+   "name": "DELTA OPS",
+   "what": "Delta Air Lines and Delta Connection",
+   "src": "canairradio"
+  },
+  "130.5750": {
+   "name": "DNATA RAMP",
+   "what": "GTA dnata ramp services and the airlines it serves",
+   "src": "canairradio"
+  },
+  "130.6500": {
+   "name": "SWISSPORT 2",
+   "what": "Swissport ramp services",
+   "src": "canairradio"
+  },
+  "130.6750": {
+   "name": "CARGOJET",
+   "what": "Cargojet",
+   "src": "canairradio"
+  },
+  "130.8000": {
+   "name": "ACA LINK",
+   "what": "Air Canada, peripheral air link",
+   "src": "canairradio"
+  },
+  "130.8750": {
+   "name": "YYZ DEICE H",
+   "what": "Pearson hangar de-icing facility; Air Canada",
+   "src": "canairradio"
+  },
+  "130.9750": {
+   "name": "ACA LINK 2",
+   "what": "Air Canada, peripheral air link",
+   "src": "canairradio"
+  },
+  "131.0500": {
+   "name": "PORTER OPS 2",
+   "what": "Porter Airlines company frequency",
+   "src": "rr_ytz"
+  },
+  "131.1000": {
+   "name": "ACA MX",
+   "what": "Air Canada maintenance",
+   "src": "canairradio"
+  },
+  "131.1250": {
+   "name": "ACARS US 2",
+   "what": "ACARS data link, USA additional channel - digital bursts, not voice",
+   "src": "sigid_acars"
+  },
+  "131.3750": {
+   "name": "YYZ DEICE 2",
+   "what": "Pearson central de-icing facility",
+   "src": "canairradio"
+  },
+  "131.4750": {
+   "name": "ACARS ACA",
+   "what": "ACARS data link, Air Canada company channel - digital bursts, not voice",
+   "src": "sigid_acars"
+  },
+  "131.5500": {
+   "name": "ACARS",
+   "what": "ACARS data link, world primary channel - short digital bursts between aircraft and ground, not voice",
+   "src": "sigid_acars"
+  },
+  "131.6500": {
+   "name": "AAL OPS 2",
+   "what": "American Airlines and American Eagle",
+   "src": "canairradio"
+  },
+  "131.7750": {
+   "name": "ACA DEICE",
+   "what": "Air Canada de-icing",
+   "src": "canairradio"
+  },
+  "131.8750": {
+   "name": "TRANSAT",
+   "what": "Air Transat",
+   "src": "canairradio"
+  },
+  "131.9250": {
+   "name": "FEDEX OPS 2",
+   "what": "FedEx / Morningstar Air Express",
+   "src": "canairradio"
+  },
+  "131.9500": {
+   "name": "YYZ DEICE BU",
+   "what": "Pearson central de-icing facility, backup",
+   "src": "canairradio"
+  },
+  "132.5750": {
+   "name": "CTR WIARTN L",
+   "what": "Toronto Centre, Wiarton sector, low altitude",
+   "src": "canairradio"
+  },
+  "132.6500": {
+   "name": "CTR SAULT L",
+   "what": "Toronto Centre, Sault Low sector (Sault Ste. Marie)",
+   "src": "canairradio"
+  },
+  "133.1000": {
+   "name": "YYZ ATIS 2",
+   "what": "Pearson ATIS, secondary - a recorded broadcast, on the air all the time",
+   "src": "canairradio"
+  },
+  "133.6000": {
+   "name": "YTZ ATIS",
+   "what": "Billy Bishop ATIS - a recorded broadcast, on the air all the time",
+   "src": "rr_ytz"
+  },
+  "133.7250": {
+   "name": "TIMMINS TCU",
+   "what": "Toronto ACC, Timmins / North Bay TCU (Moosonee)",
+   "src": "canairradio"
+  },
+  "134.1500": {
+   "name": "YYZ PAR MON",
+   "what": "Pearson PAR monitor",
+   "src": "canairradio"
+  },
+  "134.3750": {
+   "name": "CTR LONDON",
+   "what": "Toronto Centre, London sector, low altitude (Sarnia)",
+   "src": "canairradio"
+  },
+  "134.4250": {
+   "name": "CTR SAULT H2",
+   "what": "Toronto Centre, Sault High sector (Sault Ste. Marie)",
+   "src": "canairradio"
+  },
+  "135.3000": {
+   "name": "CTR LONDON 2",
+   "what": "Toronto Centre, London sector, low altitude (London)",
+   "src": "canairradio"
+  },
+  "135.4000": {
+   "name": "CTR SAULT L2",
+   "what": "Toronto Centre, Sault Low sector (Elliot Lake)",
+   "src": "canairradio"
+  },
+  "135.5000": {
+   "name": "SUDBURY TCU",
+   "what": "Toronto ACC, Sudbury / North Bay TCU",
+   "src": "canairradio"
+  },
+  "135.6250": {
+   "name": "CTR KITCHN",
+   "what": "Toronto Centre, Kitchener sector, low altitude",
+   "src": "canairradio"
+  },
+  "135.8250": {
+   "name": "CTR LUCAN",
+   "what": "Toronto Centre, Lucan sector, high altitude (London)",
+   "src": "canairradio"
+  },
+  "136.5250": {
+   "name": "YYZ TOW",
+   "what": "Pearson apron tow coordinator",
+   "src": "canairradio"
+  },
+  "136.5750": {
+   "name": "ATS RAMP 2",
+   "what": "Airport Terminal Services, ramp",
+   "src": "canairradio"
+  },
+  "136.7000": {
+   "name": "WESTJET OPS 2",
+   "what": "WestJet and WestJet Encore (Menzies ramp services)",
+   "src": "canairradio"
+  },
+  "136.7500": {
+   "name": "ACARS US 3",
+   "what": "ACARS data link, USA additional channel - digital bursts, not voice",
+   "src": "sigid_acars"
+  },
+  "136.8000": {
+   "name": "ACARS US 4",
+   "what": "ACARS data link, USA additional channel - digital bursts, not voice",
+   "src": "sigid_acars"
+  },
+  "136.8500": {
+   "name": "ACARS SITA",
+   "what": "ACARS data link, SITA North America - digital bursts, not voice",
+   "src": "sigid_acars"
+  },
+  "136.8750": {
+   "name": "PORTER OPS 3",
+   "what": "Porter Airlines company frequency",
+   "src": "rr_ytz"
+  },
+  "136.9750": {
+   "name": "VDL2 CSC",
+   "what": "VDL Mode 2 data link, common signalling channel - digital, not voice",
+   "src": "wiki_vdl"
+  }
+ }
+}
