@@ -1179,34 +1179,40 @@ def alerts_check_text(mhz, name, text):
 
 def transcript_path(wav): return wav[:-4] + ".txt"
 
-KEEP_RECORDINGS = 40; KEEP_QUIET = 10; KEEP_TOTAL = 400; KEEP_MB = 600
-def prune_recordings(keep=KEEP_RECORDINGS, keep_quiet=KEEP_QUIET, keep_total=KEEP_TOTAL, keep_mb=KEEP_MB):
+KEEP_RECORDINGS = 10; KEEP_QUIET = 5; KEEP_TOTAL = 40; KEEP_MB = 230; KEEP_UNREAD_S = 1800
+def prune_recordings(keep=KEEP_RECORDINGS, keep_quiet=KEEP_QUIET, keep_total=KEEP_TOTAL, keep_mb=KEEP_MB, trash=None):
     """Disk guard for the recordings, across every scan folder. Kept:
-      the newest `keep` clips with somebody talking (or not read yet) PER CHANNEL, `keep_total` of them and `keep_mb` MB in all,
-      the newest `keep_quiet` clips in which the transcriber found nobody (their .txt is there and empty).
-    (v225) Was 40 in all: on the morning of 13 Nov one busy channel (128.800) filled that in eight minutes - 20 to 50 clips
-    were pruned every ten minutes - and whatever had been said on any other channel went with them. Per channel a busy one can
-    only push out its own. Transcripts are never deleted, they move to transcripts_archive. A clip still being written (touched
-    in the last 60 s) is never removed."""
+      the newest `keep_total` clips with somebody talking, no more than `keep` of them from one channel and `keep_mb` MB in all,
+      the newest `keep_quiet` clips in which the transcriber found nobody (their .txt is there and empty),
+      and any clip the transcriber has not read yet, for up to half an hour (so that nothing is thrown away unheard).
+    (v234) Matt, 15 Nov: "why tf does it say there are 411 recordings? What happened here?" v225 kept 40 PER CHANNEL and 400 in
+    all, and that is not what he asked for on 6 Nov: only the most recent, never more than 40 recordings' worth. So it is 40 in
+    all again, and what v225 was for - one busy channel (128.800 filled the 40 in eight minutes on 13 Nov, and whatever had been
+    said anywhere else went with it) - is kept by the share: no channel holds more than 10 of the 40. 230 MB is 40 clips of
+    the full two minutes. The loop below now runs every 2 minutes (it was 10), so the count stays near the cap.
+    Transcripts are never deleted, they move to transcripts_archive. A clip still being written (touched in the last 60 s) is
+    never removed. trash: a folder to move the surplus into instead of deleting it (used for the first trim after the rule changed)."""
     try:
         files = sorted(glob.glob(os.path.join(HERE, "scan_*", "recordings", "*.wav")), key=os.path.getmtime, reverse=True)
-        gone = 0; said = 0; quiet = 0; size = 0; per = {}
+        gone = 0; said = 0; quiet = 0; size = 0; per = {}; now = time.time()
         for f in files:
             try:
-                tp = transcript_path(f)
-                if os.path.exists(tp) and os.path.getsize(tp) == 0: quiet += 1; over = quiet > keep_quiet
+                tp = transcript_path(f); age = now - os.path.getmtime(f); unread = not os.path.exists(tp)
+                if not unread and os.path.getsize(tp) == 0: quiet += 1; over = quiet > keep_quiet
                 else:
                     ch = os.path.basename(f).split("_")[0]; sz = os.path.getsize(f)
                     over = per.get(ch, 0) >= keep or said >= keep_total or size + sz > keep_mb * 1e6
                     if not over: per[ch] = per.get(ch, 0) + 1; said += 1; size += sz          # only what is kept counts against the totals
-                if not over or time.time() - os.path.getmtime(f) < 60: continue
-                os.remove(f); gone += 1
+                if not over or age < 60 or (unread and age < KEEP_UNREAD_S): continue
+                if trash: os.makedirs(trash, exist_ok=True); shutil.move(f, os.path.join(trash, os.path.basename(f)))
+                else: os.remove(f)
+                gone += 1
                 os.makedirs(os.path.join(HERE, "transcripts_archive"), exist_ok=True)
                 for ext in (".txt", ".asr.json", ".json"):                     # (v154) the audio is capped, the TRANSCRIPTS are kept for good ((v210) with what each engine wrote)
                     try: shutil.move(f[:-4] + ext, os.path.join(HERE, "transcripts_archive", os.path.basename(f)[:-4] + ext))
                     except OSError: pass
             except OSError: pass
-        if gone: say(f"recordings: {gone} older clips deleted (kept: {keep} with speech per channel, {keep_total} in all, {keep_quiet} without)")
+        if gone: say(f"recordings: {gone} older clips {'moved to the Trash' if trash else 'deleted'} (kept: the newest {keep_total} with speech, at most {keep} from one channel, {keep_quiet} without)")
         return gone
     except Exception: return 0
 def housekeeping():
@@ -1238,9 +1244,11 @@ def housekeeping():
     except Exception as e: say(f"housekeeping: {e}")
     if freed > 1_000_000: say(f"housekeeping: cleared {freed / 1e6:.0f} MB of old data")
 def _prune_loop():
-    time.sleep(30)
-    while True:
-        prune_recordings(); housekeeping(); time.sleep(600)
+    time.sleep(30); n = 0
+    while True:                                                # (v234) the recordings every 2 minutes, the rest of the housekeeping every 10 as before
+        prune_recordings()
+        if n % 5 == 0: housekeeping()
+        n += 1; time.sleep(120)
 threading.Thread(target=_prune_loop, daemon=True).start()
 
 def capture_health(folder):
