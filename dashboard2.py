@@ -443,6 +443,12 @@ def bank_merge(live):
             if nm: row["name"] = nm; row["named_by"] = kind
         row["vrank"] = 2 if row["ver"] == "VOICE" else (1 if row["ver"] == "KNOWN" else 0)
         out.append(row)
+    # (v238) The same transmitter read one sweep bin over is not another channel: "145.12 R" (voice heard 179 times, CTCSS 82.5) is
+    # VE3WOO on 145.110, whose tone that is. A row under a placeholder name that has a decoded tone is left out when a named row
+    # within 12.5 kHz carries the same tone.
+    tone_of = lambda t: (re.match(r"(?:CTCSS|DCS) [\d.]+", t or "") or re.match("", "")).group(0)
+    named_tones = [(r["mhz"], tone_of(r["tone"])) for r in out if tone_of(r["tone"]) and not placeholder_name(r["name"])]
+    out = [r for r in out if not (placeholder_name(r["name"]) and tone_of(r["tone"]) and any(abs(r["mhz"] - f) <= 0.0125 and t == tone_of(r["tone"]) for f, t in named_tones))]
     # (v191) what the "Last heard" column sorts by: channels where voice was heard in the last 24 h come first, newest first; below them
     # everything else by when the sweep last saw a signal there
     nowt = now.timestamp()

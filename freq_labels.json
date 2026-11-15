@@ -1,10 +1,13 @@
 {
- "about": "Researched labels for frequencies the app's own reference table does not name. dashboard2.py reads this file whenever it changes (no restart needed) and uses it to name what shows on the spectrum strip. An entry is: MHz with four decimals -> name (short label, capitals like the rest of the airband set), what (one line), src (a key under sources). The reference table in sdr_scan.py comes first, this file second, the ISED licence database third. Peaks that none of them can name collect in unknown_freqs.json - the list to research from. Rule kept when this file was built: where the ISED licence database names a different holder than a hobby list does, the hobby list's entry was left out.",
+ "about": "Researched labels for frequencies the app's own reference table does not name. dashboard2.py reads this file whenever it changes (no restart needed) and uses it to name what shows on the spectrum strip. An entry is: MHz with four decimals -> name (short label, capitals like the rest of the set), what (one line), src (a key under sources). The reference table in sdr_scan.py comes first, this file second, the ISED licence database third. Peaks that none of them can name collect in unknown_freqs.json - the list to research from. Rule kept when this file was built: where the ISED licence database names a different holder than a hobby list does, the hobby list's entry was left out.",
  "sources": {
   "canairradio": "https://canairradio.ca/yyz.html - Toronto Pearson and Toronto ACC frequency list (page last updated 15 April 2020), read 15 Nov 2026",
   "rr_ytz": "https://radioreference.com/db/aid/5636 - Billy Bishop Toronto City Airport, read 15 Nov 2026",
   "sigid_acars": "https://www.sigidwiki.com/wiki/ACARS - ACARS channel list, read 15 Nov 2026",
-  "wiki_vdl": "https://en.wikipedia.org/wiki/VHF_Data_Link - VDL Mode 2 channels, read 15 Nov 2026"
+  "wiki_vdl": "https://en.wikipedia.org/wiki/VHF_Data_Link - VDL Mode 2 channels, read 15 Nov 2026",
+  "rr_bm": "https://www.radioreference.com/db/sid/8964 - BrandMeister Canada amateur repeater network, read 15 Nov 2026",
+  "rr_marc": "https://www.radioreference.com/db/sid/8881 - DMR-MARC Ontario amateur repeater network, read 15 Nov 2026",
+  "wnysorc": "https://www.qsl.net/kc2bzj/rptr.html - Western New York - Southern Ontario Repeater Council, repeater listings by frequency (dated 10 September 1995), read 15 Nov 2026"
  },
  "labels": {
   "118.0000": {
@@ -421,6 +424,21 @@
    "name": "VDL2 CSC",
    "what": "VDL Mode 2 data link, common signalling channel - digital, not voice",
    "src": "wiki_vdl"
+  },
+  "146.3850": {
+   "name": "VE3SKY input",
+   "what": "the input of the VE3SKY repeater (output 146.985 MHz, 600 kHz down): a station nearby transmitting into the repeater - listen on 146.985",
+   "src": "wnysorc"
+  },
+  "442.1750": {
+   "name": "VE3WOO DMR",
+   "what": "DMR repeater in Toronto - the network's list has VE3WOO and VE3CBC on this frequency; digital, an FM receiver hears only a carrier",
+   "src": "rr_bm"
+  },
+  "444.5375": {
+   "name": "VE3DWR DMR",
+   "what": "DMR repeater VE3DWR, Kitchener, as the network's list has it; digital, an FM receiver hears only a carrier",
+   "src": "rr_marc"
   }
  }
 }
