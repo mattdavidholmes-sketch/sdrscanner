@@ -2891,6 +2891,20 @@ details.card>summary h3{margin:0;flex:1 1 auto}
 details.card>summary::after{content:'▾';color:var(--mute)}details.card[open]>summary::after{content:'▴'}
 details.card[open]>summary{margin-bottom:10px}
 @media(max-width:760px){.dgx>summary .tag{display:none}.dgn{flex:1 1 0;font-size:1rem}.dgs{max-width:34%}}
+/* (v235) from the audit of every tab at 390, 820 and 1440 px (15 Nov): what was cut off, too small for a thumb, or looked broken */
+.lvl s{opacity:0;transition:left .2s,opacity .2s}                       /* the peak marker of the level bar sat at the left edge as a yellow sliver while nothing played */
+#tune{width:140px!important}                                            /* "Tune MHz" was cut to "Tune MH" */
+@media(min-width:761px){#monsel{max-width:172px!important}#alval{min-width:330px!important}}    /* "Bank: all heard" and the alert box's hint were cut */
+@media(max-width:760px){
+.tile,.tile:nth-child(2),.tile:nth-child(5){flex:0 0 auto;min-width:132px;max-width:78vw}
+.tile b{overflow:visible;text-overflow:clip}                            /* the value in full: "128.8000" read "128.80..." */
+.tile span{white-space:normal;line-height:1.25;padding-right:0;max-width:190px}     /* and its label on two lines, not cut */
+#tune{width:100%!important}
+table:has(#airrows) :is(th,td):nth-child(2),table:has(#airrows) :is(th,td):nth-child(7),table:has(#airrows) :is(th,td):nth-child(8){display:none}   /* the aircraft table on a phone: flight, route, type, distance, altitude, heard */
+#airrows td{padding:8px 6px;font-size:.84rem;vertical-align:top}
+#airrows td:nth-child(5),#airrows td:nth-child(6){white-space:nowrap}
+#airrows td:first-child a{display:inline-block;min-height:32px;padding:6px 2px}
+}
 </style></head><body><div class="app">
 <div id="dbanner" style="display:none;background:#b33b3b;color:#fff;padding:10px 16px;font-weight:600;line-height:1.35"></div>
 <header>
@@ -3174,7 +3188,7 @@ function render(){
 }
 let lastTiles=[];function setTiles(v){lastTiles=v;const el=$('#tiles');if(!el.children.length){el.innerHTML=v.map(()=>'<div class="tile"><b></b><span></span><button class="play tplay" style="display:none" title="listen">▶</button></div>').join('');el.children[0].classList.add('clickable');el.children[0].title='click for the full list, most active first';el.children[0].onclick=e=>{if(e.target.closest('button'))return;openActive();};}
  v.forEach((t,i)=>{const c=el.children[i];const b=c.querySelector('b');if(b.textContent!==String(t[0])){b.textContent=t[0];c.classList.remove('flash');void c.offsetWidth;c.classList.add('flash');}
-  const sp=c.querySelector('span');if(sp.textContent!==t[1])sp.textContent=t[1];
+  const sp=c.querySelector('span');if(sp.textContent!==t[1]){sp.textContent=t[1];sp.title=t[1];}
   const h=t[2],pb=c.querySelector('.tplay');if(h){pb.style.display='';pb.dataset.mhz=h.mhz;pb.dataset.mode=h.mode==='AM'?'am':'fm';pb.dataset.name=h.name;}else{pb.style.display='none';delete pb.dataset.mhz;}});P.paint();}
 /* ---------- rows: patch in place ---------- */
 function visible(h){if(hideCont&&h.cont)return false;if(hideDig&&filter==='All'&&!query&&h.cat==='Digital')return false;if(filter==='UV-32 only'&&!h.uv32)return false;if(filter!=='All'&&filter!=='UV-32 only'&&h.cat!==filter)return false;
@@ -3504,7 +3518,7 @@ try{const m=await (await fetch('/meter',{cache:'no-store'})).json();const l=$('#
  gone=0;try{huPaint(m.monitor,m);}catch(e){}if(m.monitor){const mo=m.monitor;if(!P.cur)P.cur={mhz:1,mode:'monitor',name:'Monitor',where:'mac',mirror:true};P.cur.mhz=m.open?(mo.mhz||1):1;$('#pfreq').textContent=fmt(mo.mhz||0);$('#pname').textContent=(m.open?'LOCKED · ':'')+(mo.name||'')+' · '+(mo.groups?'slice '+mo.group+'/'+mo.groups+' · ':'')+mo.n+' ch';$('#monbtn').textContent='■ Stop monitor';$('#monbtn').classList.add('stopb');if(QUICK)$('#quickbtn').classList.add('stopb');P.paint();if(mo.heard&&mo.heard.length){$('#pstat').innerHTML=(m.open?'<b style="color:var(--acc)">ON AIR</b> · ':'')+'heard: '+mo.heard.slice(-4).reverse().map(x=>esc(x.name)+' '+x.when+' ('+x.secs+' s)').join(' · ');}else $('#pstat').textContent=(m.open?'ON AIR · ':'')+'scanning '+mo.n+' channels…';return;}else{$('#monbtn').textContent='Monitor all';$('#monbtn').classList.remove('stopb');}
  if(!P.cur&&m.playing&&m.playing>1.5){P.cur={mhz:m.playing,mode:m.mode||'fm',name:m.name||'',where:'mac',mirror:true};P.t0=Date.now();$('#pfreq').textContent=fmt(m.playing);$('#pname').textContent=(m.name?m.name+' · ':'')+(m.mode||'fm').toUpperCase()+' · playing on the Mac speakers';P.paint();}   // (v219) the channel's own name (from /meter), not a placeholder that was then sent back as its name
  if(P.cur&&P.cur.mode!=='monitor'&&Date.now()-(P.t0||0)>8000&&Math.abs(m.playing-P.cur.mhz)>0.0026){P.cur={mhz:m.playing,mode:m.mode||'fm',name:m.name||'',where:'mac',mirror:true};$('#pfreq').textContent=fmt(m.playing);$('#pname').textContent=(m.name?m.name+' · ':'')+(m.mode||'fm').toUpperCase()+' · playing on the Mac speakers';P.paint();}
- const pct=m.level>1?Math.max(0,Math.min(100,Math.round(100*(20*Math.log10(m.level/16384)+60)/60))):0;l.querySelector('i').style.width=pct+'%';l.classList.toggle('open',!!m.open);peak=Math.max(pct,peak*0.96);l.querySelector('s').style.left=peak+'%';
+ const pct=m.level>1?Math.max(0,Math.min(100,Math.round(100*(20*Math.log10(m.level/16384)+60)/60))):0;l.querySelector('i').style.width=pct+'%';l.classList.toggle('open',!!m.open);peak=Math.max(pct,peak*0.96);const pk=l.querySelector('s');pk.style.left=peak+'%';pk.style.opacity=peak>1?1:0;
  if(m.denoise_off&&!P._dnOff){P._dnOff=true;toast('noise suppression turned itself off for this session (fail-safe) - audio still plays normally');}
  if(P.cur&&!P.err){const ps=$('#pstat');const where=P.cur.where==='mac'?('Mac sound out: '+(macOut||'?')):('this device · '+(P.bytes/1024).toFixed(0)+' KB · audio '+(actx?actx.state:'-'));
   // (v196) an airband channel says what the receiver sees: how strong the carrier is, or why it is silent
