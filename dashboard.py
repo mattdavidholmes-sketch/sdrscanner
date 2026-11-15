@@ -1242,12 +1242,53 @@ def housekeeping():
                     try: os.remove(f)
                     except OSError: pass
     except Exception as e: say(f"housekeeping: {e}")
+    for name, over, keep in LOG_CAPS: freed += trim_log(os.path.join(HERE, name), int(over * 1e6), int(keep * 1e6))
     if freed > 1_000_000: say(f"housekeeping: cleared {freed / 1e6:.0f} MB of old data")
+# (v244) THE LOGS HAD NO LIMIT. Measured 15 Nov, ten days after the last tidy: monitor_opens.log 2.0 MB (2,500 to 5,000 lines a
+# day), rtl_fm.log 2.0 MB (83,000 lines), events.log 0.36, dashboard.log 0.31, stops.log 0.18. Nothing to worry about today, about
+# 200 MB after a year of running by itself. Megabytes: over the first figure a log is cut back to its newest second figure.
+# monitor_opens.log keeps 2 MB because two readers want its last day (dashboard2.airband_voice, follow_traffic._air_activity).
+LOG_CAPS = (("monitor_opens.log", 4.0, 2.0), ("rtl_fm.log", 3.0, 1.5), ("events.log", 2.0, 1.0), ("dashboard.log", 2.0, 1.0), ("stops.log", 1.0, 0.5),
+            ("transcribe.log", 1.0, 0.5), ("perf.log", 1.0, 0.5))
+def trim_log(path, over, keep):
+    """A log bigger than `over` bytes is cut back to its newest `keep` bytes, from the start of a line, IN PLACE: the file stays
+    the same file, so whoever holds it open for appending (tee for dashboard.log, the receiver's stderr for rtl_fm.log) goes on
+    writing at the new end. A line that arrives in the instant between the read and the cut is lost; these are logs.
+    -> bytes freed"""
+    try:
+        sz = os.path.getsize(path)
+        if sz <= over: return 0
+        with open(path, "r+b") as fh:
+            fh.seek(sz - keep); tail = fh.read(); tail = tail[tail.find(b"\n") + 1:]
+            fh.seek(0); fh.write(tail); fh.truncate()
+        return sz - len(tail)
+    except OSError: return 0
+# (v244) WHAT THE APP COSTS, WRITTEN DOWN BY THE APP. Measured by hand on 15 Nov (26 minutes after a start): 168 to 213 MB of
+# memory, 3.6 % of one of the Mac's twelve cores, 18 threads - no fault. What one look cannot show is a slope: memory or open
+# files creeping up over days. perf.log gets one line every ten minutes; a restart begins again at minute 0.
+T_START = time.time()
+PERF_LOG = os.path.join(HERE, "perf.log")
+def perf_note():
+    try:
+        try: rss = int(subprocess.run(["ps", "-o", "rss=", "-p", str(os.getpid())], capture_output=True, text=True, timeout=5).stdout.strip() or 0) / 1024
+        except (OSError, ValueError, subprocess.SubprocessError): rss = 0
+        try: fds = len(os.listdir("/dev/fd"))
+        except OSError: fds = 0
+        try: arch = len(os.listdir(os.path.join(HERE, "transcripts_archive")))
+        except OSError: arch = 0
+        try:
+            import resource; ru = resource.getrusage(resource.RUSAGE_CHILDREN); kids = ru.ru_utime + ru.ru_stime
+        except Exception: kids = 0
+        new = not os.path.exists(PERF_LOG)
+        with open(PERF_LOG, "a") as f:
+            if new: f.write("when,minutes since this start,memory MB,cpu seconds used by the app since this start,cpu seconds of the helpers it ran and that have finished,threads,open files,files in transcripts_archive\n")
+            f.write(f"{dt.datetime.now():%m-%d %H:%M},{(time.time() - T_START) / 60:.0f},{rss:.0f},{time.process_time():.0f},{kids:.0f},{threading.active_count()},{fds},{arch}\n")
+    except Exception: pass
 def _prune_loop():
     time.sleep(30); n = 0
     while True:                                                # (v234) the recordings every 2 minutes, the rest of the housekeeping every 10 as before
         prune_recordings()
-        if n % 5 == 0: housekeeping()
+        if n % 5 == 0: housekeeping(); perf_note()
         n += 1; time.sleep(120)
 threading.Thread(target=_prune_loop, daemon=True).start()
 
@@ -2081,11 +2122,12 @@ class H(BaseHTTPRequestHandler):
             import gzip as _gz
             body = _gz.compress(body, 5); enc = "gzip"
         else: enc = None
-        self.send_response(status); self.send_header("Content-Type", ctype)
-        if enc: self.send_header("Content-Encoding", enc); self.send_header("Vary", "Accept-Encoding")
-        self.send_header("Content-Length", str(len(body))); self.end_headers()
-        try: self.wfile.write(body)
-        except (BrokenPipeError, ConnectionResetError, OSError): pass
+        try:                                                     # (v244) the headers too: a page that closed while it was being answered left a 35-line traceback in dashboard.log (twice in ten days)
+            self.send_response(status); self.send_header("Content-Type", ctype)
+            if enc: self.send_header("Content-Encoding", enc); self.send_header("Vary", "Accept-Encoding")
+            self.send_header("Content-Length", str(len(body))); self.end_headers()
+            self.wfile.write(body)
+        except (BrokenPipeError, ConnectionResetError, OSError): self.close_connection = True
     def do_GET(self):
         u = urlparse(self.path); q = parse_qs(u.query)
         if u.path == "/stream":
