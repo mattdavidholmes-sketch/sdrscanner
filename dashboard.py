@@ -1512,6 +1512,15 @@ def save_verified(v):
 # (v137) "Walkies": what household bubble-pack radios, construction crews, stores and film sets in Canada actually use - the 22
 # FRS/GMRS channels, the 5 MURS channels and the licence-exempt / itinerant business "dot" and "star" channels. All NFM. The Monitor
 # hops these whether or not the sweep has banked them yet, so the first time a crew keys up next door you hear it.
+# (v259) "Ham simplex" (Matt, 26 Nov 23:50: "SIMPLEX net is also something we have to include. 2M, anything I can hear."):
+# the FM simplex channels of the Canadian band plans (RAC). 2 m: 146.415-146.595 on a 15 kHz raster, 146.520 the national
+# calling frequency; 147.420-147.570 on a 30 kHz raster. 70 cm: the plan gives the segment 446.000-446.175 with 446.000 the
+# national calling frequency and no raster - 25 kHz steps here. Two windows for the scanner. The Monitor hops them as a bank
+# of their own, and the idle voice check listens on them too, so a simplex net is stamped "last heard", recorded and in the
+# QSO log whether or not anybody had tuned to it.
+HAM_SIMPLEX = [(round(146.415 + 0.015 * i, 4), "fm", "2m CALLING" if i == 7 else f"2m simplex {146.415 + 0.015 * i:.3f}") for i in range(13)] + \
+              [(round(147.420 + 0.030 * i, 4), "fm", f"2m simplex {147.420 + 0.030 * i:.3f}") for i in range(6)] + \
+              [(round(446.000 + 0.025 * i, 4), "fm", "70cm CALLING" if i == 0 else f"70cm simplex {446.000 + 0.025 * i:.3f}") for i in range(8)]
 WALKIES = [(m, "fm", n) for m, n in (
     (462.5625, "FRS 1"), (462.5875, "FRS 2"), (462.6125, "FRS 3"), (462.6375, "FRS 4"), (462.6625, "FRS 5"), (462.6875, "FRS 6"), (462.7125, "FRS 7"),
     (467.5625, "FRS 8"), (467.5875, "FRS 9"), (467.6125, "FRS 10"), (467.6375, "FRS 11"), (467.6625, "FRS 12"), (467.6875, "FRS 13"), (467.7125, "FRS 14"),
@@ -1691,6 +1700,7 @@ def monitor_list(cat="All", minutes=30, limit=30):
     if cat == "GFL Environmental": return [c for c in GFL_ENV if round(c[0], 4) not in lo]        # (v169)
     if cat == "Solid Waste Mgmt": return [c for c in SOLID_WASTE if round(c[0], 4) not in lo]     # (v169)
     if cat == "Walkies": return [c for c in WALKIES if round(c[0], 4) not in lo]       # (v137) every licence-free handheld channel, banked or not
+    if cat == "Ham simplex": return [c for c in HAM_SIMPLEX if round(c[0], 4) not in lo]       # (v259)
     if cat == "CB": return [c for c in CB if round(c[0], 4) not in lo]                  # (v198) all 40 CB channels, one window
     if cat == "Top": return [c for c in top_today(24) if round(c[0], 4) not in lo][:20]   # (v137) the 20 most-used voice channels of the last 24 h
     if cat.lower().startswith("follow"):                                             # Follow traffic: channels from live ADS-B (_helpers/follow_traffic.py)
@@ -1950,6 +1960,7 @@ def verify_worker():
                 try:
                     import channelizer as CH
                     chans = [c for c in monitor_list("All", minutes=30, limit=400)]
+                    lo_ = lockouts(); chans += [c for c in HAM_SIMPLEX if round(c[0], 4) not in lo_ and not any(abs(c[0] - x[0]) < 0.006 for x in chans)]   # (v259) the simplex channels, heard before or not
                     try:
                         import ham_nets
                         on = [(round(float(o["mhz"]), 4), "fm", o["name"]) for o in ham_nets.view()["now"] if o.get("kind") == "net" and o.get("rx") and 30 < float(o["mhz"]) < 1700]
