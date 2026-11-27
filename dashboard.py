@@ -1903,43 +1903,65 @@ def audition(mhz, mode, secs=6.0):
     return "QUIET", f"squelch open {opened}/{blocks} blocks - nothing clear"
 
 VC_MEM = {}                                    # (v257) what the voice checks have learned about steady carriers, kept from one check to the next
-def voice_check_listen(ses, user_wants=None, heard=None, stay=10.0, clock=time.time):
-    """(v257) One silent voice check on a Channelizer: at least two laps, 45 s at most when nothing is on the air, 75 s in all.
-    v256 on the air (26 Nov 23:23, 168 channels): 1 lap in 78 s and 0 laps in 57 s - a conversation on one repeater held
-    the check where it was, as it should for somebody who is listening. Nobody is listening here: the point is to know who
-    is on the air everywhere. So a channel with confirmed speech is stamped as heard after `stay` seconds of it and is then
-    left out for the rest of THIS check (the session's own lock-out set, gone with the session): the scanner leaves it at
-    once and does not come back to it on the next stop, so a net cannot hold the laps up twice. The recording of those
-    seconds is kept. Returns the list of (mhz, name, secs) it moved on from."""
-    user_wants = user_wants or USER_WANTS; t0 = clock(); on = None; moved = []; seen = 0
-    # (v261) On the air with v259 (27 Nov 00:12, 189 channels): "0 laps, 58 s" - Centre on 124.925 made four short calls
-    # (2, 5, 2, 1 s) and each one earned the listener's 6 s wait for a reply, then a fifth held it 10 s. For this check a
-    # call that has ended has done its work (the scanner stamped it): the wait for a reply is 1 s here, and a channel that
-    # was heard is left out for the rest of this check like one that was moved on from.
-    try: ses.HOLD = 1.0
-    except Exception: pass
+FOLLOW_BANDS = ((50.0, 54.0), (144.0, 148.0), (222.0, 225.0), (430.0, 450.0))        # the amateur bands the dongle reaches
+def voice_check_listen(ses, user_wants=None, heard=None, stay=10.0, clock=time.time, follow=None, follow_max=1200.0, lap_every=300.0, lap_secs=20.0, note=None):
+    """One silent voice check on a Channelizer. Returns (moved, followed): the channels it moved on from and the
+    conversations it followed, each (mhz, name, seconds).
+    (v257/v261) Nobody is listening here; the point is to know who is on the air everywhere. At least two laps, 45 s at most
+    when nothing is on the air, 75 s in all. A short call (airband, a business channel) is heard out, the wait for a reply
+    is 1 s instead of the listener's 6, and the channel is then left out for the rest of this check; one that talks on is
+    stamped after `stay` seconds and left.
+    (v263) Matt, 27 Nov 00:23: "everything should organically work and pick up the strongest signal and focus as needed."
+    A conversation on an amateur band is not a short call: a net runs for an hour and its recording is what the QSO log is
+    made of. So there the check FOCUSES: it stays with the conversation over after over (the 6 s wait for the reply is
+    back while it runs), records all of it, and while nobody has spoken for a few seconds the scanner goes round the
+    other windows by itself and comes back (its own rule: every fifth stop returns to the window that was just talking).
+    If the overs follow each other without a gap, it steps aside for `lap_secs` every `lap_every` seconds so that the rest
+    is still looked at. The conversation has ended when nothing was said on it for 45 s; after `follow_max` the sweep
+    gets a turn and the next check finds the conversation again. A listen by Matt ends all of it at once, as before."""
+    user_wants = user_wants or USER_WANTS; t0 = clock(); on = None; moved = []; followed = []; seen = 0
+    follow = follow or (lambda mhz: any(a <= mhz <= b for a, b in FOLLOW_BANDS))
+    fol = None; lap_until = None                              # fol: [channel, name, since, last speech, last lap of the rest]
     while not user_wants.is_set():
+        now = clock(); el = now - t0
+        a = ses.active; conf = a is not None and getattr(a, "confirmed", False); ham = conf and follow(a.mhz)
+        if ham:
+            k = round(a.mhz, 4)
+            if fol is None or (fol[0] != k and now - fol[3] > 8):                 # another conversation only once the one in hand has gone quiet
+                if fol is not None: followed.append((fol[0], fol[1], round(fol[3] - fol[2])))
+                fol = [k, a.name, now, now, now]
+                if note:
+                    try: note(f"voice check: following {a.name} {a.mhz:.4f} (recording; the other channels in the pauses)")
+                    except Exception: pass
+            if fol[0] == k: fol[3] = now
+        if fol is not None and now - fol[3] > 45 and lap_until is None: followed.append((fol[0], fol[1], round(fol[3] - fol[2]))); fol = None
         try:
+            ses.HOLD = 6.0 if (fol is not None and now - fol[3] < 8) else 1.0
             hs = list(ses.heard)
-            for h in hs[seen:]: ses.lockout.add(round(float(h["mhz"]), 4))
+            for h in hs[seen:]:
+                if not follow(float(h["mhz"])): ses.lockout.add(round(float(h["mhz"]), 4))
             seen = len(hs)
         except Exception: pass
-        el = clock() - t0
-        if el >= 75 or (ses.active is None and ((el >= 20 and ses.laps >= 2) or el - sum(x[2] for x in moved) >= 45)): break   # the seconds spent on a channel it then left do not count against the 45
-        a = ses.active
-        if a is None or not getattr(a, "confirmed", False): on = None
+        if fol is not None:
+            if now - fol[2] >= follow_max: followed.append((fol[0], fol[1], round(fol[3] - fol[2]))); break
+            if lap_until is None and now - fol[4] >= lap_every and now - fol[3] < 8: lap_until = now + lap_secs; ses.lockout.add(fol[0])
+            if lap_until is not None and now >= lap_until: ses.lockout.discard(fol[0]); lap_until = None; fol[4] = now; fol[3] = max(fol[3], now - 30)
+        else:
+            held = sum(x[2] for x in moved) + sum(x[2] for x in followed)
+            if el - sum(x[2] for x in followed) >= 75 or (a is None and ((el >= 20 and ses.laps >= 2) or el - held >= 45)): break
+        if not conf or ham: on = None
         else:
             k = round(a.mhz, 4)
-            if on is None or on[0] != k: on = [k, clock()]
-            elif clock() - on[1] >= stay:
-                secs = round(clock() - on[1], 1); moved.append((a.mhz, a.name, secs))
+            if on is None or on[0] != k: on = [k, now]
+            elif now - on[1] >= stay:
+                secs = round(now - on[1], 1); moved.append((a.mhz, a.name, secs))
                 if heard:
                     try: heard(a.mhz, a.name, secs, a.tones.summary() if getattr(a, "tones", None) else "")
                     except Exception: pass
                 ses.lockout.add(k); on = None                 # the Channelizer drops a locked-out channel that is talking and hops
         b = ses.read(4800)
         if not b: break
-    return moved
+    return moved, followed
 
 def verify_worker():
     time.sleep(90)                                            # let the scan get going first
@@ -1983,8 +2005,8 @@ def verify_worker():
                             ses = CH.Channelizer(chans, None, True, "49.6", newest_scan() or HERE, FM_LOG, on_heard=monitor_heard, trusted=trusted_set(chans))
                             for k in ("steady", "dead_f", "dead_miss", "bias"): setattr(ses, k, VC_MEM.setdefault(k, {}))   # (v257) a carrier that never proved itself is not waited on again in the next check
                             t0 = time.time()
-                            moved = voice_check_listen(ses, heard=monitor_heard)
-                            got = [f"{h['name']} {h['mhz']:.4f} ({h['secs']:.0f} s)" for h in list(ses.heard)] + [f"{n} {m:.4f} ({s:.0f} s, moved on)" for m, n, s in moved]
+                            moved, followed = voice_check_listen(ses, heard=monitor_heard, note=lambda t: BG_STATE.update(what=t))
+                            got = [f"{n} {m:.4f} (followed {s:.0f} s)" for m, n, s in followed] + [f"{h['name']} {h['mhz']:.4f} ({h['secs']:.0f} s)" for h in list(ses.heard) if not any(abs(h["mhz"] - m) < 0.0005 for m, _, _ in followed)] + [f"{n} {m:.4f} ({s:.0f} s, moved on)" for m, n, s in moved]
                             ses.stop()
                             BG_STATE["last"] = f"{dt.datetime.now():%H:%M} voice check: " + (("heard " + ", ".join(got[:4])) if got else f"nothing on {len(chans)} channels in {ses.laps} laps") + f" ({len(chans)} ch, {ses.laps} laps, {time.time() - t0:.0f} s)"
                             if got: say("voice check: heard " + ", ".join(got[:6]))
