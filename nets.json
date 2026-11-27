@@ -1,6 +1,6 @@
 {
  "version": 1,
- "checked": "2026-11-11",
+ "checked": "2026-11-26",
  "timezone": "America/Toronto",
  "about": "GTA amateur radio nets, club meetings and dated events. Edited by hand or by the weekly schedule check; the dashboard works out what is on now.",
  "clubs": {
@@ -110,7 +110,7 @@
    "tone": "103.5",
    "conf": "site",
    "src": "skywide",
-   "checked": "2026-11-11",
+   "checked": "2026-11-26",
    "note": "daily morning round-table"
   },
   {
@@ -130,7 +130,7 @@
    "tone": "103.5",
    "conf": "site",
    "src": "skywide",
-   "checked": "2026-11-11",
+   "checked": "2026-11-26",
    "note": ""
   },
   {
@@ -150,7 +150,7 @@
    "tone": "103.5",
    "conf": "site",
    "src": "skywide",
-   "checked": "2026-11-11",
+   "checked": "2026-11-26",
    "note": "7 to 9 pm"
   },
   {
@@ -170,7 +170,7 @@
    "tone": "103.5",
    "conf": "site",
    "src": "skywide",
-   "checked": "2026-11-11",
+   "checked": "2026-11-26",
    "note": "club news, then a round-table on the questions of the week"
   },
   {
@@ -190,7 +190,7 @@
    "tone": "",
    "conf": "site",
    "src": "skywide",
-   "checked": "2026-11-11",
+   "checked": "2026-11-26",
    "note": "also on 446.025 - simplex, so only nearby stations will be heard"
   },
   {
@@ -210,7 +210,7 @@
    "tone": "127.3",
    "conf": "site",
    "src": "skywide",
-   "checked": "2026-11-11",
+   "checked": "2026-11-26",
    "note": "linked across Canada; VE3SKY 146.985 is the backup"
   },
   {
@@ -230,7 +230,7 @@
    "tone": "",
    "conf": "site",
    "src": "skywide",
-   "checked": "2026-11-11",
+   "checked": "2026-11-26",
    "note": "shortwave (SSB) - this receiver and antenna do not cover it",
    "rx": false
   },
@@ -257,7 +257,7 @@
    "tone": "103.5",
    "conf": "site",
    "src": "yrarc",
-   "checked": "2026-11-11",
+   "checked": "2026-11-26",
    "note": "nightly, except the club's meeting night (1st Tuesday, Sep to Jun); also on VE3YRC 444.225",
    "skip": [
     "1st Tue"
@@ -282,7 +282,7 @@
    "tone": "103.5",
    "conf": "site",
    "src": "yrarc",
-   "checked": "2026-11-11",
+   "checked": "2026-11-26",
    "note": "technical discussion, 4 to 5 pm"
   },
   {
@@ -302,7 +302,7 @@
    "tone": "103.5",
    "conf": "site",
    "src": "sarc",
-   "checked": "2026-11-11",
+   "checked": "2026-11-26",
    "note": ""
   },
   {
@@ -322,7 +322,7 @@
    "tone": "103.5",
    "conf": "site",
    "src": "sarc",
-   "checked": "2026-11-11",
+   "checked": "2026-11-26",
    "note": ""
   },
   {
@@ -342,7 +342,7 @@
    "tone": "103.5",
    "conf": "rac",
    "src": "rac",
-   "checked": "2026-11-11",
+   "checked": "2026-11-26",
    "note": "also on 443.550"
   },
   {
@@ -362,7 +362,7 @@
    "tone": "103.5",
    "conf": "rac",
    "src": "rac",
-   "checked": "2026-11-11",
+   "checked": "2026-11-26",
    "note": ""
   },
   {
@@ -382,7 +382,7 @@
    "tone": "103.5",
    "conf": "rac",
    "src": "rac",
-   "checked": "2026-11-11",
+   "checked": "2026-11-26",
    "note": "pictures sent as audio tones"
   },
   {
@@ -402,7 +402,7 @@
    "tone": "110.9",
    "conf": "rac",
    "src": "rac",
-   "checked": "2026-11-11",
+   "checked": "2026-11-26",
    "note": "not on the first Tuesday (club meeting night)",
    "skip": [
     "1st Tue"
@@ -426,7 +426,7 @@
    "tone": "103.5",
    "conf": "site",
    "src": "skywide",
-   "checked": "2026-11-11",
+   "checked": "2026-11-26",
    "note": ""
   },
   {
@@ -447,7 +447,7 @@
    "tone": "156.7",
    "conf": "site",
    "src": "skywide",
-   "checked": "2026-11-11",
+   "checked": "2026-11-26",
    "note": ""
   },
   {
@@ -467,7 +467,7 @@
    "tone": "",
    "conf": "site",
    "src": "skywide",
-   "checked": "2026-11-11",
+   "checked": "2026-11-26",
    "note": "VA3FVL - simplex, so only nearby stations will be heard"
   },
   {
@@ -858,7 +858,7 @@
    "tone": "103.5",
    "conf": "site",
    "src": "skywide",
-   "checked": "2026-11-11",
+   "checked": "2026-11-26",
    "note": "special event net, 10:30 to 11:30 am; the page does not name the frequency - Skywide nets are held on VE3SKY"
   },
   {
@@ -872,22 +872,8 @@
    "where": "Etobicoke Civic Centre, 399 The West Mall, and online",
    "conf": "site",
    "src": "skywide",
-   "checked": "2026-11-11",
+   "checked": "2026-11-26",
    "note": "second Monday of the month; doors 6 pm (main doors lock after 6). A holiday can move it by a week - check the club page."
-  },
-  {
-   "id": "sky-campfire-2026",
-   "name": "Skywide Campfire Night",
-   "club": "skywide",
-   "kind": "social",
-   "date": "2026-11-14",
-   "start": "19:30",
-   "mins": 150,
-   "where": "Home Smith Park",
-   "conf": "site",
-   "src": "skywide",
-   "checked": "2026-11-11",
-   "note": "campfire, HF radio, astronomy if the sky is clear"
   },
   {
    "id": "sky-dinner-2026",
@@ -900,7 +886,7 @@
    "where": "Connaught Masonic Hall",
    "conf": "site",
    "src": "skywide",
-   "checked": "2026-11-11",
+   "checked": "2026-11-26",
    "note": "doors 5:30, dinner 6:00; RSVP on the club site"
   },
   {
