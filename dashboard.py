@@ -171,7 +171,9 @@ def stop_player():
     with _lock:
         log_tones()
         ses = _player.get("session")
-        if ses: say("stopped listening")
+        if ses:
+            o = _player.get("out") if _player.get("where") == "mac" else None
+            say("stopped listening" + (f" - {o['sound'] / 10:.0f} s of sound went to the Mac's output in {o['blocks'] / 10:.0f} s" if o and o.get("blocks", 0) >= 20 else ""))
         if ses:
             try:
                 fr = feed_report(ses, time.time() - _player.get("since", time.time()), _player.get("mhz"))
@@ -190,7 +192,7 @@ def stop_player():
         if pl:
             try: pl.terminate()
             except Exception: pass
-        _player.update(proc=None, mhz=None, since=0, where=None, gate=None, play=None, rec=None, session=None)
+        _player.update(proc=None, mhz=None, since=0, where=None, gate=None, play=None, rec=None, session=None, out=None)
     for name in ("rtl_fm", "sox", "rtl_tcp"):
         subprocess.call(["pkill", "-x", name], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     for _ in range(30):
@@ -755,6 +757,11 @@ def play_mac(mhz, mode, manual, name, cat="All", resume=False):
         return subprocess.Popen(["play", "-q", "--buffer", "16384", "-r", str(RATE), "-t", "raw", "-e", "s", "-b", "16", "-c", "1", "-", "gain", "-3"], stdin=subprocess.PIPE,   # -3 dB: coreaudio/rate were clipping loud airband
                                 stderr=open(os.path.join(HERE, "play.log"), "a"))
     pl = spawn_play(); respawns = []
+    # (v254) What actually went to the Mac's sound output. Matt, 26 Nov: "Audio is an issue as far as I can tell" - and nothing in
+    # the app could say whether a listen had sent any sound at all: the recorder and the squelch are upstream of this pipe.
+    # Counted here, on the bytes handed to sox: 0.1 s pieces, and those that are not silence. /meter shows it, the page says
+    # "sound going out now", and the window gets one line when the listen ends.
+    out = {"blocks": 0, "sound": 0, "peak": 0, "last": 0.0}
     def pump():
         cur = pl
         try:
@@ -764,6 +771,11 @@ def play_mac(mhz, mode, manual, name, cat="All", resume=False):
                 AUDIO_LAST[0] = time.time()
                 v = MAC_VOL[0]
                 if v < 0.995: b = array.array("h", [int(x * v) for x in array.array("h", b[:len(b) // 2 * 2])]).tobytes()      # (v223) Vol slider
+                try:
+                    a = array.array("h", b[:len(b) // 2 * 2]); pk = max(max(a), -min(a)) if a else 0
+                    out["blocks"] += 1; out["peak"] = pk
+                    if pk >= 300: out["sound"] += 1; out["last"] = time.time()
+                except Exception: pass
                 try: cur.stdin.write(b); cur.stdin.flush()
                 except (BrokenPipeError, OSError):              # the sound output (sox play) died, e.g. the Mac switched output device: start it again, keep the stream
                     if not getattr(ses, "alive", True): break
@@ -778,7 +790,7 @@ def play_mac(mhz, mode, manual, name, cat="All", resume=False):
             try: cur.stdin.close()
             except Exception: pass
     threading.Thread(target=pump, daemon=True).start()
-    with _lock: _player.update(session=ses, mhz=mhz, since=time.time(), where="mac", gate=ses.gate, play=pl, mode=mode, manual=manual)
+    with _lock: _player.update(session=ses, mhz=mhz, since=time.time(), where="mac", gate=ses.gate, play=pl, mode=mode, manual=manual, out=out)
     return True, "ok"
 
 def dongle_watch():
@@ -2270,7 +2282,9 @@ class H(BaseHTTPRequestHandler):
             if not ses: return self.send(json.dumps({"playing": None, "paused": os.path.exists(pause_flag()), "fm": last_fm_error(),
                                                        "dongle_lost": DONGLE["lost"], "dongle_note": DONGLE["note"], "resume": LAST_PLAY.get("mhz") if DONGLE["lost"] else None}), "application/json")
             mt = ses.meter()
-            return self.send(json.dumps({"playing": m, "open": mt["open"], "level": mt["level"], "zcr": mt["zcr"], "thresh": mt["thresh"], "floor": 0, "mode": ses.mode,
+            with _lock: o = _player.get("out") if _player.get("where") == "mac" else None
+            if o: mt["out"] = {"sound_s": round(o["sound"] / 10.0, 1), "of_s": round(o["blocks"] / 10.0, 1), "ago": (round(time.time() - o["last"], 1) if o["last"] else None), "peak": o["peak"]}   # (v254)
+            return self.send(json.dumps({"playing": m, "out": mt.get("out"), "open": mt["open"], "level": mt["level"], "zcr": mt["zcr"], "thresh": mt["thresh"], "floor": 0, "mode": ses.mode,
                                          "name": (LAST_PLAY.get("name") or "") if abs((LAST_PLAY.get("mhz") or 0) - (m or 0)) < 0.0026 else "",      # (v219) what the channel playing on the Mac is called
                                          "auto": ses.gate.manual is None, "tones": mt["tones"], "tone_now": mt["tone_now"], "paused": True, "fm": mt["err"] or last_fm_error(),
                                          "data": mt.get("data", False), "monitor": mt.get("monitor"), "air": mt.get("air"), "feed": mt.get("feed"), "sq": mt.get("sq"),
