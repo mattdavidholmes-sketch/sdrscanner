@@ -564,10 +564,129 @@ def category(h):
     if s == "PAGING": return "Paging"
     return "Other"
 
+# (v258) KEPT RECORDINGS AND THE QSO LOG. Matt, 26 Nov 23:41, listening to a net on VA3RCI 444.800: "Can we create a QSO app
+# integration here?", "the recording being created right now is what we need to research", "just integrate the qso stuff",
+# "just stationary stuff and working from what we've already built here", "SIMPLEX net is also something we have to
+# include. 2M, anything I can hear."
+# 1. KEEP: the 40-clip rule deletes the audio of a net within the hour. A clip he keeps moves, with its transcript files,
+#    to kept/recordings/ - no rule touches that folder; it goes only when he removes it himself.
+# 2. QSO LOG: every transcript of a clip on an amateur band (repeater or simplex - whatever was heard and recorded), with
+#    the call signs said in it, newest first. Read from the clips still here, the kept ones and the transcript archive, so
+#    it reaches back as far as the archive does. A call sign is taken as written ("VE3ABC") or as spelled out ("Victor
+#    Echo Three Alpha Bravo Charlie", "V E 3 A B C"); the transcriber mishears call signs often, so a call is what was HEARD, not a fact.
+KEPT = os.path.join(HERE, "kept", "recordings")
+HAM_BANDS = ((50.0, 54.0), (144.0, 148.0), (222.0, 225.0), (430.0, 450.0))
+_PHON = {"alpha": "A", "alfa": "A", "bravo": "B", "charlie": "C", "delta": "D", "echo": "E", "foxtrot": "F", "golf": "G", "hotel": "H", "india": "I",
+         "juliet": "J", "juliett": "J", "kilo": "K", "lima": "L", "mike": "M", "november": "N", "oscar": "O", "papa": "P", "quebec": "Q", "romeo": "R",
+         "sierra": "S", "tango": "T", "uniform": "U", "victor": "V", "whiskey": "W", "whisky": "W", "xray": "X", "x-ray": "X", "yankee": "Y", "zulu": "Z",
+         "zero": "0", "one": "1", "two": "2", "three": "3", "four": "4", "five": "5", "six": "6", "seven": "7", "eight": "8", "nine": "9", "niner": "9"}
+_CALL_NA = re.compile(r"^(?:[KNW][A-Z]?|A[A-L]|V[AEOY]|C[F-KYZ]|X[J-O])\d[A-Z]{1,3}$")     # United States and Canada
+_CALL_DX = re.compile(r"^[A-Z]{1,2}\d[A-Z]{2,3}$")                                          # anywhere else: two or three letters after the digit
+def _is_call(c): return bool(_CALL_NA.match(c) or _CALL_DX.match(c))
+def qso_calls(text):
+    """The call signs in a transcript, in the order said, each once."""
+    toks = re.findall(r"[A-Za-z0-9]+(?:-[A-Za-z]+)?", text or ""); out = []; sym = []
+    for t in toks:
+        lo = t.lower(); up = t.upper()
+        if lo in _PHON: sym.append((_PHON[lo], lo not in ("one", "two", "three", "four", "five", "six", "seven", "eight", "nine", "zero")))   # (letter or digit, is it a spelling word)
+        elif len(t) == 1 and t.isalnum(): sym.append((up, t.isupper() or t.isdigit()))
+        elif len(t) <= 6 and up.isalnum() and (any(ch.isdigit() for ch in t) or t.isupper()) and not t.isdigit(): sym.append((up, True))    # "VE3", "ABC", "VE3ABC"
+        else: sym.append(None)
+    i = 0; n = len(sym)
+    while i < n:
+        if sym[i] is None: i += 1; continue
+        best = None
+        for j in range(min(n, i + 7), i, -1):                                  # the longest run of spelled pieces from here that makes a call sign
+            if any(x is None for x in sym[i:j]): continue
+            c = "".join(x[0] for x in sym[i:j])
+            if 3 <= len(c) <= 6 and _is_call(c) and any(x[1] for x in sym[i:j]): best = (c, j); break
+        if best:
+            if best[0] not in out: out.append(best[0])
+            i = best[1]
+        else: i += 1
+    return out
+def _clip_parts(base):
+    """'444.8000_VA3RCI_20261126_234209' -> (444.8, 'VA3RCI', epoch seconds) or None."""
+    m = re.match(r"^(\d+\.\d+)_(.*?)_?(\d{8})_(\d{6})$", base)
+    if not m: return None
+    try: return float(m.group(1)), m.group(2).replace("_", " ").strip(), time.mktime(time.strptime(m.group(3) + m.group(4), "%Y%m%d%H%M%S"))
+    except ValueError: return None
+_QSO = {"t": 0.0, "rows": []}
+def qso_log(limit=600, days=30):
+    if time.time() - _QSO["t"] < 5: return _QSO["rows"]
+    rows = {}
+    def add(base, text, audio=None, kept=False, secs=None):
+        p = _clip_parts(base)
+        if not p or not (text or "").strip(): return
+        mhz, name, ts = p
+        if not any(a <= mhz <= b for a, b in HAM_BANDS): return
+        old = rows.get(base)
+        if old and (old["audio"] or not audio): return                         # the copy that still has its audio wins
+        text = re.sub(r"^\(unsure\) ", "", text.strip()); own = (name.split() or [""])[0].upper()
+        rows[base] = {"file": base, "mhz": f"{mhz:.4f}", "name": name, "ts": ts, "when": time.strftime("%b %d %H:%M:%S", time.localtime(ts)), "day": time.strftime("%a %b %d", time.localtime(ts)),
+                      "text": text, "calls": [c for c in qso_calls(text) if c != own], "own": own if own in qso_calls(text) else "", "audio": audio, "kept": kept, "secs": secs}
+    def secs_of(wav):
+        try: return round(max(0, (os.path.getsize(wav) - 44) / (RATE * 2)), 1)
+        except OSError: return None
+    def read(path):
+        try: return open(path, encoding="utf-8", errors="ignore").read()
+        except OSError: return ""
+    for f in glob.glob(os.path.join(KEPT, "*.txt")):
+        b = os.path.basename(f)[:-4]; add(b, read(f), "/kept/" + b + ".wav" if os.path.exists(f[:-4] + ".wav") else None, True, secs_of(f[:-4] + ".wav"))
+    for f in glob.glob(os.path.join(HERE, "scan_*", "recordings", "*.txt")):
+        b = os.path.basename(f)[:-4]; add(b, read(f), "/rec/" + b + ".wav" if os.path.exists(f[:-4] + ".wav") else None, False, secs_of(f[:-4] + ".wav"))
+    arch = os.path.join(HERE, "transcripts_archive"); floor = time.strftime("%Y-%m-%d", time.localtime(time.time() - days * 86400))
+    for f in glob.glob(os.path.join(arch, "*.txt")):
+        if not f.endswith("threads.txt"): add(os.path.basename(f)[:-4], read(f))
+    for f in sorted(glob.glob(os.path.join(arch, "*.jsonl")), reverse=True):
+        if os.path.basename(f)[:10] < floor: continue
+        try:
+            with open(f, encoding="utf-8", errors="ignore") as fh:
+                for line in fh:
+                    try: r = json.loads(line)
+                    except ValueError: continue
+                    if isinstance(r, dict) and r.get("file"): add(str(r["file"]), str(r.get("text") or ""))
+        except OSError: pass
+    out = sorted(rows.values(), key=lambda r: -r["ts"])[:limit]
+    _QSO.update(t=time.time(), rows=out)
+    return out
+def keep_recording(name):
+    """Move a clip and its transcript files out of the scan folder into kept/recordings/. -> (ok, text)"""
+    name = os.path.basename(name or "")
+    if not name.endswith(".wav"): return False, "not a recording"
+    src = v1.find_recording(name)
+    if not src: return False, "that recording is no longer there"
+    if not os.path.exists(src[:-4] + ".txt"): return False, "its transcript is still on the way - try again in a moment"
+    if time.time() - os.path.getmtime(src) < 3: return False, "it is still being recorded - try again when the transmission has ended"
+    try:
+        os.makedirs(KEPT, exist_ok=True)
+        import shutil
+        for ext in (".txt", ".asr.json", ".json", ".wav"):                     # the audio last: if anything fails before it, the clip is still where it was
+            if os.path.exists(src[:-4] + ext): shutil.move(src[:-4] + ext, os.path.join(KEPT, name[:-4] + ext))
+    except OSError as e: return False, f"could not be moved ({e})"
+    _QSO["t"] = 0.0
+    v1.say(f"recordings: kept {name} (kept/recordings - the 40-clip rule does not touch it)")
+    return True, "kept"
+def unkeep_recording(name):
+    """Remove a kept clip's audio. Its transcript goes to the archive like every other transcript."""
+    name = os.path.basename(name or ""); src = os.path.join(KEPT, name)
+    if not (name.endswith(".wav") and os.path.exists(src)): return False, "not a kept recording"
+    try:
+        arch = os.path.join(HERE, "transcripts_archive"); os.makedirs(arch, exist_ok=True)
+        import shutil
+        for ext in (".txt", ".asr.json", ".json"):
+            if os.path.exists(src[:-4] + ext): shutil.move(src[:-4] + ext, os.path.join(arch, name[:-4] + ext))
+        os.remove(src)
+    except OSError as e: return False, f"could not be removed ({e})"
+    _QSO["t"] = 0.0
+    v1.say(f"recordings: {name} removed from the kept ones (its transcript stays in the archive)")
+    return True, "removed"
+
 def recordings(limit=1000):
     # every scan folder, newest clip first: a chip starts a new folder, the recordings tab must not go blank
     files = []
     for d in glob.glob(os.path.join(HERE, "scan_*")): files += glob.glob(os.path.join(d, "recordings", "*.wav"))
+    kept = set(glob.glob(os.path.join(KEPT, "*.wav"))); files += list(kept)   # (v258) the kept ones too, marked
     out = []
     for f in sorted(files, key=os.path.getmtime, reverse=True)[:limit]:
         base = os.path.basename(f); st = os.stat(f); parts = base.split("_")
@@ -584,7 +703,7 @@ def recordings(limit=1000):
         # (v229) the whole name: the file is <MHz>_<name with _ for spaces>_<date>_<time>.wav, and only its first word was shown ("YYZ" for "YYZ DEP 2")
         nm = " ".join(w for w in parts[1:-2] if w) if (len(parts) > 3 and parts[-2].isdigit()) else ""
         out.append({"file": base, "mhz": parts[0], "name": nm, "secs": round(max(0, (st.st_size - 44) / (RATE * 2)), 1),
-                    "time": dt.datetime.fromtimestamp(st.st_mtime).strftime("%b %d %H:%M:%S"), "text": txt, "agree": agree, "asr": asr, "done": os.path.exists(tp)})
+                    "time": dt.datetime.fromtimestamp(st.st_mtime).strftime("%b %d %H:%M:%S"), "text": txt, "agree": agree, "asr": asr, "done": os.path.exists(tp), "kept": f in kept})
     return out
 
 def mac_sound():
@@ -2586,6 +2705,15 @@ class H2(v1.H):
             t0 = time.time(); st = dict(state_cached()); st["ms"] = int((time.time() - t0) * 1000)
             return self.send(json.dumps(st), "application/json")
         if u.path == "/api/recordings": return self.send(json.dumps(recordings()), "application/json")
+        if u.path == "/api/qso": return self.send(json.dumps(qso_log()), "application/json")
+        if u.path in ("/api/keep", "/api/unkeep"):
+            ok, msg = (keep_recording if u.path == "/api/keep" else unkeep_recording)(parse_qs(u.query).get("f", [""])[0])
+            return self.send(json.dumps({"ok": ok, "msg": msg}), "application/json")
+        if u.path.startswith("/kept/"):
+            from urllib.parse import unquote
+            path = os.path.join(KEPT, os.path.basename(unquote(u.path[6:])))
+            if not (path.endswith(".wav") and os.path.exists(path)): self.send_response(404); self.end_headers(); return
+            return self.send(open(path, "rb").read(), "audio/wav")
         if u.path == "/api/radio": return self.send(json.dumps(RADIO), "application/json")
         if u.path == "/api/sound": return self.send(json.dumps(mac_sound()), "application/json")
         if u.path == "/api/digital":
@@ -3154,7 +3282,7 @@ table:has(#airrows) :is(th,td):nth-child(2),table:has(#airrows) :is(th,td):nth-c
   <div id="speclegend" class="speclegend"></div>
   <div class="sub" id="spectitle" style="margin-top:4px"></div>
  </div>
- <div class="tabs"><button class="on" data-t="freq">Frequencies</button><button data-t="dir">Directory</button><button data-t="nets">Nets</button><button data-t="radio">FM Radio</button><button data-t="recs">Recordings <span id="reccount" class="tag"></span></button><button data-t="digital">Digital</button><button data-t="map">Map</button><button data-t="air">Aircraft</button><button data-t="debug">Debug</button></div>
+ <div class="tabs"><button class="on" data-t="freq">Frequencies</button><button data-t="dir">Directory</button><button data-t="nets">Nets</button><button data-t="qso">QSO log</button><button data-t="radio">FM Radio</button><button data-t="recs">Recordings <span id="reccount" class="tag"></span></button><button data-t="digital">Digital</button><button data-t="map">Map</button><button data-t="air">Aircraft</button><button data-t="debug">Debug</button></div>
  <section id="tab-freq">
   <div class="toolbar"><input id="q" type="search" placeholder="Search frequency, callsign, service…"><div id="chips"></div><button id="digtog" class="ghost" style="margin-left:auto;padding:4px 10px;font-size:.82rem;display:none" title="P25 and DMR channels are decoded by SDRTrunk - they play from the Digital tab. Tap to show or hide them in this list (a search always finds them)."></button><input id="hidecont" type="checkbox" checked hidden></div>
   <div class="tablewrap"><table><thead><tr><th style="cursor:default"></th><th data-k="rank" data-t="n">#</th><th data-k="mhz" data-t="n">MHz</th><th data-k="name" data-t="s">Name</th><th data-k="vrank" data-t="n">Voice</th><th data-k="cat" data-t="s">Category</th><th data-k="service" data-t="s">Service</th><th data-k="mode" data-t="s">Mode</th><th data-k="snr" data-t="n">Signal</th><th data-k="busy" data-t="n">Busy</th><th data-k="recent" data-t="n">Activity</th><th data-k="heard_sort" data-t="n" class="desc" title="voice actually heard comes first (Monitor, the voice check, a listen, a decoded call); below that, when the sweep last saw a signal">Last heard</th><th data-k="tone" data-t="s">Tone</th><th data-k="uv32" data-t="n">Radio</th></tr></thead><tbody id="rows"></tbody></table><div class="empty" id="empty" style="display:none">Nothing above the noise floor yet - the first band takes a few minutes.</div><div id="morerow" style="display:none;text-align:center;padding:10px"><button class="ghost" id="morebtn">Show 20 more</button> <button class="ghost" id="allbtn">Show all</button> <span class="sv" id="morenote"></span></div></div>
@@ -3170,6 +3298,11 @@ table:has(#airrows) :is(th,td):nth-child(2),table:has(#airrows) :is(th,td):nth-c
   <p class="sub" id="nfoot" style="margin-top:10px"></p>
  </section>
  <section id="tab-radio" style="display:none"><p class="sub" style="color:var(--mute);margin-top:0">Broadcast FM - the audio test. If a station plays, dongle, antenna and player are all good.</p><div class="radio" id="radio"></div></section>
+ <section id="tab-qso" style="display:none">
+  <p class="sub" style="color:var(--mute);margin-top:0">Everything heard and recorded on the amateur bands - repeaters and simplex - with the call signs said in it. Listen to a net, or let the scanner run, and it fills by itself. Call signs are as the transcriber heard them: check one before you log it.</p>
+  <div class="btns" style="flex-wrap:wrap;margin-bottom:8px"><select id="qsoch" style="font:inherit;background:var(--card);color:var(--ink);border:1px solid var(--line);border-radius:8px;padding:6px 8px;max-width:100%"></select><input id="qsoq" type="search" placeholder="call sign or a word that was said" style="min-width:200px;flex:1 1 200px"><button class="ghost" id="qsocsv">Download CSV</button></div>
+  <div id="qsowho" style="margin:6px 0 10px;display:flex;gap:6px;flex-wrap:wrap;align-items:center"></div>
+  <div class="tablewrap" id="qso"></div></section>
  <section id="tab-recs" style="display:none">
   <div class="dig" style="margin-bottom:14px"><div class="card"><h3>Alerts <span class="sv">(Mac notification + log; phone too if you keep the dashboard open there)</span></h3>
    <div class="btns" style="flex-wrap:wrap"><input id="alval" type="search" placeholder="frequency, category or a word said on air" style="min-width:260px"><select id="alkind" style="font:inherit;background:var(--card);color:var(--ink);border:1px solid var(--line);border-radius:9px;padding:7px"><option value="mhz">when this MHz is heard</option><option value="cat">when this category is heard</option><option value="kw">when this word is said</option></select><button class="pri" id="aladd">Add alert</button></div>
@@ -3459,7 +3592,7 @@ $('#q').oninput=e=>{query=e.target.value.trim().toLowerCase();renderRows();};
 $('#morebtn').onclick=()=>{ROWCAP+=20;renderRows();};$('#allbtn').onclick=()=>{ROWCAP=100000;renderRows();};
 $('#hidecont').checked=hideCont;$('#hidecont').onchange=e=>{hideCont=e.target.checked;try{localStorage.setItem('hidecont',hideCont?'1':'0');}catch(x){}renderRows();};
 /* ---------- tabs ---------- */
-$$('.tabs button').forEach(b=>b.onclick=()=>{tab=b.dataset.t;$$('.tabs button').forEach(x=>x.classList.toggle('on',x===b));['freq','dir','nets','radio','recs','digital','map','air','debug'].forEach(t=>$('#tab-'+t).style.display=t===tab?'':'none');if(tab==='nets'){renderNets();loadNets();}if(tab==='air'){loadAir();loadAirToday();}if(tab==='digital'){loadDigital();loadRotation();}if(tab==='map')loadMap();if(tab==='dir')loadDir();if(tab==='recs')loadRecs();if(tab==='debug')loadDebug();if(tab==='radio')loadRadio();});
+$$('.tabs button').forEach(b=>b.onclick=()=>{tab=b.dataset.t;$$('.tabs button').forEach(x=>x.classList.toggle('on',x===b));['freq','dir','nets','qso','radio','recs','digital','map','air','debug'].forEach(t=>$('#tab-'+t).style.display=t===tab?'':'none');if(tab==='qso')loadQso();if(tab==='nets'){renderNets();loadNets();}if(tab==='air'){loadAir();loadAirToday();}if(tab==='digital'){loadDigital();loadRotation();}if(tab==='map')loadMap();if(tab==='dir')loadDir();if(tab==='recs')loadRecs();if(tab==='debug')loadDebug();if(tab==='radio')loadRadio();});
 let dSortK='snr',dSortDir=-1,dSortT='n';
 $$('th[data-dk]').forEach(th=>th.onclick=()=>{if(dSortK===th.dataset.dk)dSortDir=-dSortDir;else{dSortK=th.dataset.dk;dSortT=th.dataset.dt;dSortDir=dSortT==='n'?-1:1;}$$('th[data-dk]').forEach(x=>{x.classList.remove('asc','desc');if(x.dataset.dk===dSortK)x.classList.add(dSortDir>0?'asc':'desc');});if(DIR)renderDir();});
 let DIR=null;async function loadDir(){if(!DIR)DIR=await (await fetch('/api/directory')).json();renderDir();}
@@ -3596,8 +3729,28 @@ async function loadRecs(){loadAlerts();const every=await (await fetch('/api/reco
  const quiet=all.filter(x=>x.done&&!x.text).length,r=REC_ALL?all:all.filter(x=>!(x.done&&!x.text));
  const note=quiet?`<div class="sv" style="padding:8px 12px;border-bottom:1px solid var(--line)">${quiet} clip${quiet>1?'s':''} in which no speech could be made out (noise, a kerchunk, an open carrier, a voice too weak to read) ${REC_ALL?'shown':'hidden'} · <a href="#" onclick="REC_ALL=!REC_ALL;loadRecs();return false" style="color:var(--acc)">${REC_ALL?'hide':'show'}</a></div>`:'';
  if(all.length&&!r.length){el.innerHTML=pick+note+'<div class="empty">No clip with speech in it yet.</div>';return;}if(!r.length){el.innerHTML='<div class="empty">No recordings yet. Every transmission that opens the squelch while you listen is saved here.</div>';return;}
- el.innerHTML=pick+note+r.map(x=>`<div class="rec"><div><span class="f">${x.mhz}</span><br><span class="sv">${esc(x.name)}</span></div><div class="sv">${x.time} · ${x.secs} s${x.text?'<div class="tx">“'+esc(x.text.replace(/^\(unsure\) /,''))+'”'+recTag(x)+'</div>':'<div class="sv" style="opacity:.65">'+(x.done?'no speech could be made out':'transcript on its way…')+'</div>'}</div><audio controls preload="none" src="/rec/${encodeURIComponent(x.file)}"></audio><button class="ghost" onclick="delRec('${x.file}')">Delete</button></div>`).join('');capList(el,'.rec','rec');}
+ el.innerHTML=pick+note+r.map(x=>`<div class="rec"><div><span class="f">${x.mhz}</span><br><span class="sv">${esc(x.name)}</span></div><div class="sv">${x.time} · ${x.secs} s${x.text?'<div class="tx">“'+esc(x.text.replace(/^\(unsure\) /,''))+'”'+recTag(x)+'</div>':'<div class="sv" style="opacity:.65">'+(x.done?'no speech could be made out':'transcript on its way…')+'</div>'}</div><audio controls preload="none" src="${x.kept?'/kept/':'/rec/'}${encodeURIComponent(x.file)}"></audio><span style="display:flex;gap:6px;flex-wrap:wrap">${x.kept?`<span class="tag" title="kept: the 40-clip rule does not delete it">kept</span><button class="ghost" onclick="unkeepRec(this,'${x.file}')">Remove</button>`:`${x.done?`<button class="ghost" title="keep this recording: it moves out of reach of the 40-clip rule" onclick="keepRec('${x.file}')">Keep</button>`:''}<button class="ghost" onclick="delRec('${x.file}')">Delete</button>`}</span></div>`).join('');capList(el,'.rec','rec');}
 async function delRec(f){await fetch('/delrec?f='+encodeURIComponent(f));loadRecs();toast('deleted');}
+/* ---------- (v258) kept recordings and the QSO log ---------- */
+async function keepRec(f){let r={};try{r=await (await fetch('/api/keep?f='+encodeURIComponent(f))).json();}catch(e){r={msg:'the app did not answer'};}toast(r.ok?'kept - the 40-clip rule will not delete it':r.msg);loadRecs();if(tab==='qso')loadQso();}
+async function unkeepRec(b,f){if(b.dataset.sure!=='1'){b.dataset.sure='1';b.textContent='Sure? remove';setTimeout(()=>{b.dataset.sure='';b.textContent='Remove';},4000);return;}let r={};try{r=await (await fetch('/api/unkeep?f='+encodeURIComponent(f))).json();}catch(e){r={msg:'the app did not answer'};}toast(r.ok?'removed - its transcript stays in the log':r.msg);loadRecs();if(tab==='qso')loadQso();}
+let QSO=[],QSO_CH='',QSO_Q='';
+async function loadQso(){try{QSO=await (await fetch('/api/qso')).json();}catch(e){QSO=[];}renderQso();}
+function qsoRows(){const q=QSO_Q.trim().toUpperCase();return QSO.filter(x=>(!QSO_CH||x.mhz===QSO_CH)&&(!q||x.calls.some(c=>c.includes(q))||x.text.toUpperCase().includes(q)));}
+function renderQso(){const el=$('#qso');if(!el)return;const chans={};QSO.forEach(x=>{(chans[x.mhz]=chans[x.mhz]||{n:0,name:x.name}).n++;});if(QSO_CH&&!chans[QSO_CH])QSO_CH='';
+ $('#qsoch').innerHTML=`<option value="">All amateur channels (${QSO.length})</option>`+Object.keys(chans).sort((a,b)=>chans[b].n-chans[a].n).map(k=>`<option value="${k}"${k===QSO_CH?' selected':''}>${k} ${esc(chans[k].name)} (${chans[k].n})</option>`).join('');
+ const rows=qsoRows(),who={};rows.forEach(x=>x.calls.forEach(c=>{const w=who[c]=who[c]||{n:0,last:x.when,ts:x.ts};w.n++;}));
+ const ks=Object.keys(who).sort((a,b)=>who[b].ts-who[a].ts);
+ $('#qsowho').innerHTML=ks.length?'<span class="sv">call signs heard, latest first:</span>'+ks.slice(0,60).map(c=>`<button class="ghost qc" style="padding:3px 9px;font-size:.85em" data-c="${c}" title="heard in ${who[c].n} recording${who[c].n>1?'s':''}, last ${who[c].last} - tap to show only these">${c}${who[c].n>1?' ×'+who[c].n:''}</button>`).join(''):'';
+ if(!QSO.length){el.innerHTML='<div class="empty">Nothing on the amateur bands has been recorded yet. Listen to a repeater or a simplex channel (the Nets tab shows what is on tonight) and what is said appears here.</div>';return;}
+ if(!rows.length){el.innerHTML='<div class="empty">Nothing matches.</div>';return;}
+ let day='';el.innerHTML=rows.map(x=>{const hd=x.day!==day?`<div class="sv" style="padding:8px 12px;background:var(--card);border-bottom:1px solid var(--line);font-weight:600">${x.day}</div>`:'';day=x.day;
+  return hd+`<div class="rec"><div><span class="f">${x.mhz}</span><br><span class="sv">${esc(x.name)}</span></div><div class="sv">${x.when.slice(7)}${x.secs?' · '+x.secs+' s':''}${x.kept?' <span class="tag">kept</span>':''}${x.calls.length?'<div style="margin:4px 0;display:flex;gap:6px;flex-wrap:wrap">'+x.calls.map(c=>`<a class="tag" style="text-decoration:none;color:var(--acc)" href="https://www.qrz.com/db/${c}" target="_blank" rel="noopener" title="look ${c} up on QRZ">${c}</a>`).join('')+'</div>':''}<div class="tx">“${esc(x.text)}”</div></div>${x.audio?`<audio controls preload="none" src="${x.audio.split('/').map(encodeURIComponent).join('/')}"></audio>`:'<span class="sv" style="opacity:.65">audio no longer kept</span>'}<span style="display:flex;gap:6px;flex-wrap:wrap">${x.audio&&!x.kept?`<button class="ghost" title="keep this recording: it moves out of reach of the 40-clip rule" onclick="keepRec('${x.file}.wav')">Keep</button>`:''}${x.kept?`<button class="ghost" onclick="unkeepRec(this,'${x.file}.wav')">Remove</button>`:''}</span></div>`;}).join('');capList(el,'.rec','qso');}
+function qsoCsv(){const Q=String.fromCharCode(34),NL=String.fromCharCode(10),c=v=>Q+String(v??'').split(Q).join(Q+Q)+Q;const rows=qsoRows();if(!rows.length){toast('nothing to download');return;}
+ const t=['when,MHz,channel,call signs heard,seconds,what was said'].concat(rows.map(x=>[c(x.when),x.mhz,c(x.name),c(x.calls.join(' ')),x.secs??'',c(x.text)].join(','))).join(NL);
+ const a=document.createElement('a');a.href=URL.createObjectURL(new Blob([t],{type:'text/csv'}));a.download='qso_log.csv';document.body.appendChild(a);a.click();setTimeout(()=>{URL.revokeObjectURL(a.href);a.remove();},500);}
+(function(){const ch=$('#qsoch'),q=$('#qsoq'),w=$('#qsowho'),b=$('#qsocsv');if(!ch)return;ch.onchange=()=>{QSO_CH=ch.value;renderQso();};q.oninput=()=>{QSO_Q=q.value;renderQso();};b.onclick=qsoCsv;
+ w.onclick=e=>{const k=e.target.closest('.qc');if(!k)return;q.value=QSO_Q=(QSO_Q.toUpperCase()===k.dataset.c?'':k.dataset.c);renderQso();};})();
 async function loadDebug(){try{const d=await (await fetch('/debug')).json();const NL=String.fromCharCode(10);$('#dbgsum').textContent='scan '+(d.paused?'PAUSED (listening)':'running')+' · '+d.folder+' · recent USB errors: '+d.usb_errors_recent+(d.player.mhz?' · player on '+d.player.mhz:'');
  let t='WHAT HAPPENED (events.log, newest last)'+NL+((d.events||[]).join(NL)||'(nothing yet)')+NL+NL+'PROCESSES'+NL+(d.procs||'(none)')+NL+NL+'rtl_fm (listener)'+NL+d.fm_log;for(const k in d.logs)t+=NL+NL+'── '+k+NL+d.logs[k];$('#dbgout').textContent=t;}catch(e){$('#dbgout').textContent='debug failed: '+e;}}
 /* ---------- drawer ---------- */
