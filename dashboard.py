@@ -1911,8 +1911,19 @@ def voice_check_listen(ses, user_wants=None, heard=None, stay=10.0, clock=time.t
     left out for the rest of THIS check (the session's own lock-out set, gone with the session): the scanner leaves it at
     once and does not come back to it on the next stop, so a net cannot hold the laps up twice. The recording of those
     seconds is kept. Returns the list of (mhz, name, secs) it moved on from."""
-    user_wants = user_wants or USER_WANTS; t0 = clock(); on = None; moved = []
+    user_wants = user_wants or USER_WANTS; t0 = clock(); on = None; moved = []; seen = 0
+    # (v261) On the air with v259 (27 Nov 00:12, 189 channels): "0 laps, 58 s" - Centre on 124.925 made four short calls
+    # (2, 5, 2, 1 s) and each one earned the listener's 6 s wait for a reply, then a fifth held it 10 s. For this check a
+    # call that has ended has done its work (the scanner stamped it): the wait for a reply is 1 s here, and a channel that
+    # was heard is left out for the rest of this check like one that was moved on from.
+    try: ses.HOLD = 1.0
+    except Exception: pass
     while not user_wants.is_set():
+        try:
+            hs = list(ses.heard)
+            for h in hs[seen:]: ses.lockout.add(round(float(h["mhz"]), 4))
+            seen = len(hs)
+        except Exception: pass
         el = clock() - t0
         if el >= 75 or (ses.active is None and ((el >= 20 and ses.laps >= 2) or el - sum(x[2] for x in moved) >= 45)): break   # the seconds spent on a channel it then left do not count against the 45
         a = ses.active
