@@ -1683,6 +1683,13 @@ def monitor_list(cat="All", minutes=30, limit=30):
     if cat == "Top": return [c for c in top_today(24) if round(c[0], 4) not in lo][:20]   # (v137) the 20 most-used voice channels of the last 24 h
     if cat.lower().startswith("follow"):                                             # Follow traffic: channels from live ADS-B (_helpers/follow_traffic.py)
         sys.path.insert(0, os.path.join(HERE, "_helpers")); import follow_traffic; return follow_traffic.follow_list()
+    # (v253) "All airline" (Matt, 26 Nov: "monitor all airline frequencies ... a quick way to scan these"): every airband voice
+    # channel the app knows, 118-137 MHz - the bank's own (voice heard or on record, and anything heard in the last day), Pearson's
+    # arrival, departure and Centre lists, and the channels of the reference table that have not been heard here yet. One dongle:
+    # the Monitor decodes every channel of a 2 MHz window at once and hops between the windows, a quarter of a second on a quiet
+    # one, and goes back to a window that was just talking every fifth stop.
+    air_all = cat == "All airline"
+    if air_all: minutes, limit = 1440, 90
     if quick: minutes, limit = 1440, 80
     try: bank = json.load(open(os.path.join(HERE, "bank.json")))
     except Exception: bank = {}
@@ -1695,11 +1702,20 @@ def monitor_list(cat="All", minutes=30, limit=30):
         m = float(e.get("mhz", k)); age = (now - e.get("last_heard", 0)) / 60 if e.get("last_heard") else 1e9
         recent = age <= minutes; sure = e.get("ver") in ("VOICE", "KNOWN") or sdr_scan.reference_for(m) is not None
         if not (recent or sure): continue
-        if cat != "All" and (e.get("cat") or "") != cat: continue
+        if air_all:
+            if not (118.0 <= m < 137.0): continue
+        elif cat != "All" and (e.get("cat") or "") != cat: continue
         mode = "am" if m < 137 else ("wbfm" if 88 <= m < 108 else "fm")
         rows.append(((0 if sure else 1) if not quick else -(e.get("times") or 0), age, m, mode, e.get("name") or f"{m:.4f}"))     # confirmed voice first, then the freshest (quick: busiest first)
     rows.sort()
     cand = [(m, mo, n) for _, a, m, mo, n in rows if round(m, 4) not in lo]
+    if air_all:
+        have = {round(c[0], 4) for c in cand}
+        more = list(yyz_arrivals()) + list(YYZ_DEP) + list(TOR_CENTRE)
+        try: more += [(f, "am", (v[0] if isinstance(v, (tuple, list)) else str(v)) or f"{f:.4f}") for f, v in sorted(sdr_scan.REFERENCE.items()) if 118.0 <= f < 137.0]
+        except Exception: pass
+        for c in more:
+            if round(c[0], 4) not in have and round(c[0], 4) not in lo: cand.append((c[0], c[1], c[2])); have.add(round(c[0], 4))
     # (v239) One station is one channel. The sweep files a strong station under the neighbouring bin as well ("145.12 R" beside VE3WOO
     # on 145.110; 451.185 beside the licensed 451.1875; 463.96 beside 463.9625) and the Monitor decoded both: in a day and a half the
     # copy of VE3WOO, 10 kHz off the repeater, opened 948 times without giving clean speech once. Taken best first - a real name
