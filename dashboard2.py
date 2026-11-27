@@ -743,6 +743,7 @@ def asl_table():
     for mhz, name in sorted(chans.items()):
         w = (name.split() or [""])[0].upper(); call = w if _is_call(w) else ""
         m = asl_match(mhz, call, nodes)
+        if m and out and abs(float(out[-1]["mhz"]) - mhz) < 0.006 and {n["node"] for n in m} == {n["node"] for n in out[-1]["nodes"]}: continue   # (v264) one transmitter banked on two neighbouring frequencies (444.4750 / 444.4775): one row
         if m: out.append({"mhz": f"{mhz:.4f}", "name": name, "call": call or m[0]["call"], "nodes": m})
     return out
 def asl_status(node):
