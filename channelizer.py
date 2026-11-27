@@ -256,6 +256,7 @@ class Channel:
         self.nblk = 0                              # blocks processed since this channel object was made (retune)
         self.pinned = False                        # set when the carrier never dropped for 20 s: a beacon / ATIS / data, not a conversation
         self.pin_why = ""                          # (v193) why it was pinned, for the log line
+        self.rx_n = 0; self.rx_lv = []                              # (v252) blocks of this opening so far; the level of its audio in 50 ms steps (dB), the last 1.5 s
         self.rx = None; self.rx_was = False; self.rx_voice = 0     # (v196) airband.AmRx for this AM channel; its squelch last block; blocks with speech on the carrier
         self.rec_gate = False; self.rec_below = 0  # (v215) squelch held open: is the automatic squelch open (the recorder follows that one)
         self.rx_scan = False                       # (v197) part of a scan: nothing is played until speech shows on the carrier, and a carrier that never stops is locked out
@@ -505,12 +506,27 @@ class Channel:
         # "carrier" for the scan = one the squelch would open on or stay open for. (A line far under the squelch - Pearson's ATIS
         # arrives 6 dB below the noise here - is a carrier too, but the scan must not wait on it.)
         self.carrier = rx.line_db >= rx.LINE_DB and rx.cnr_db >= rx.threshold - (rx.OPEN_DB - rx.CLOSE_DB); self.am_open = bool(rx.open); self.voice_mod = rx.mod
-        if rx.open and not self.rx_was: self.rx_voice = 0; self.confirmed = False
+        if rx.open and not self.rx_was: self.rx_voice = 0; self.confirmed = False; self.rx_n = 0; self.rx_lv = []
         self.rx_was = bool(rx.open)
         # speech on the carrier, not only a carrier: three blocks whose sidebands stand well above what noise alone makes them
         # read. Only then does the opening count as "voice heard" (bank, Last heard, the log's "voice yes").
         if rx.open and rx.mod >= max(0.2, 3.0 * math.sqrt(16.0 / max(10 ** (rx.line_db / 10), 1e-9))): self.rx_voice += 1
-        if self.rx_voice >= 3: self.confirmed = True
+        # (v252) ... AND the sound has to rise and fall the way talking does. The three blocks alone were not enough: they are
+        # counted over the whole opening, and on a weak carrier with nothing on it noise passes that block test now and then
+        # (bench, a bare carrier of 5 or 8 dB held 20 s: taken for speech 40 times in 40). 127.000 has such a carrier; while
+        # a call on 128.800 held the scan in their common window it was "confirmed", recorded as hiss (9 to 33 clips a day,
+        # transcribed as "Thank you. Thank you.") and, in a Monitor listen, played. So: the level of the receiver's audio in
+        # 50 ms steps, over the last 1.5 s of the opening (its first block left out: the key is still coming up), must move
+        # 6 dB between its 10th and 90th percentile. Hiss on a levelled carrier moves 2-4 dB, speech 10 and more. On the
+        # ten-minute capture of 15 Nov (140 openings): every opening that sounds like speech and was confirmed before still
+        # is (57 of 57, the 24 unclear ones too), 0.1 s later at most; the bare carrier is refused, on the bench 0 in 40.
+        if rx.open:
+            self.rx_n += 1
+            if self.rx_n >= 2:
+                au = np.frombuffer(pcm, dtype=np.int16).astype(np.float64); h = len(au) // 2
+                if h: self.rx_lv += [20.0 * math.log10(math.sqrt(float(np.mean(au[:h] ** 2))) + 1.0), 20.0 * math.log10(math.sqrt(float(np.mean(au[h:] ** 2))) + 1.0)]; del self.rx_lv[:-30]
+        if self.rx_voice >= 3 and not self.confirmed and self.rx_n >= 4 and len(self.rx_lv) >= 6:
+            if float(np.percentile(self.rx_lv, 90) - np.percentile(self.rx_lv, 10)) >= 6.0: self.confirmed = True
         self.voice_ok = self.confirmed
         g.open = bool(is_open); g.zcr = 0.0; g.data = False; g.data_latched = False
         g.level = float(np.sqrt(np.mean(np.frombuffer(pcm, dtype=np.int16).astype(np.float64) ** 2))) if is_open else 0.0
