@@ -1895,7 +1895,7 @@ def audition(mhz, mode, secs=6.0):
 def verify_worker():
     time.sleep(90)                                            # let the scan get going first
     while True:
-        time.sleep(90)
+        time.sleep(60)                                        # (v256) was 90: see the voice check below
         try:
             with _lock: busy = _player.get("session") is not None
             if busy or os.path.exists(os.path.join(HERE, "SDRTRUNK_HAS_DONGLE")) or USER_WANTS.is_set() or time.time() - LAST_USER_PLAY[0] < 45 or not scan_running(): continue
@@ -1911,29 +1911,35 @@ def verify_worker():
             # three full laps; a net that should be on the air right now goes to the front of the list; and when somebody is talking the
             # check stays until they finish (75 s at most) instead of cutting the call at 20 s. What it heard is written to the log.
             now = time.time()
-            if now - PRIO_LAST[0] > 110:
+            # (v256) Matt, 26 Nov: "I want to scan everything consistently to create the best 'last heard' metric, as quickly as
+            # possible". Measured on the bank of that night: 169 known voice channels (25 airband, 60 VHF, 84 UHF) in 29 windows -
+            # and this check took the 40 freshest (13 windows), so 129 of them were never listened to unless somebody pressed
+            # play. Now: every known voice channel (the windows are all "fast": under half a second each when quiet), at least
+            # two laps, 45 s at most when nothing is on the air, 75 s while somebody talks; and about every minute and a half
+            # instead of every two to three minutes. The sweep has the rest of the time. Nothing is played.
+            if now - PRIO_LAST[0] > 70:
                 PRIO_LAST[0] = now
                 try:
                     import channelizer as CH
-                    chans = [c for c in monitor_list("All", minutes=30, limit=40)]
+                    chans = [c for c in monitor_list("All", minutes=30, limit=400)]
                     try:
                         import ham_nets
                         on = [(round(float(o["mhz"]), 4), "fm", o["name"]) for o in ham_nets.view()["now"] if o.get("kind") == "net" and o.get("rx") and 30 < float(o["mhz"]) < 1700]
                         chans = on + [c for c in chans if round(c[0], 4) not in {m for m, _, _ in on}]
                     except Exception: pass
                     if CH.available() and chans:
-                        take_dongle(); BG_STATE["what"] = f"voice check: listening on {len(chans)} known channels (20 s, longer while someone talks)"; BG_STATE["since"] = time.time()
+                        take_dongle(); BG_STATE["what"] = f"voice check: listening on {len(chans)} known channels (two laps, longer while someone talks)"; BG_STATE["since"] = time.time()
                         try:
                             ses = CH.Channelizer(chans, None, True, "49.6", newest_scan() or HERE, FM_LOG, on_heard=monitor_heard, trusted=trusted_set(chans))
                             t0 = time.time()
                             while not USER_WANTS.is_set():
                                 el = time.time() - t0
-                                if el >= 75 or (el >= 20 and ses.active is None): break
+                                if el >= 75 or (ses.active is None and ((el >= 20 and ses.laps >= 2) or el >= 45)): break
                                 b = ses.read(4800)
                                 if not b: break
                             got = [f"{h['name']} {h['mhz']:.4f} ({h['secs']:.0f} s)" for h in list(ses.heard)]
                             ses.stop()
-                            BG_STATE["last"] = f"{dt.datetime.now():%H:%M} voice check: " + (("heard " + ", ".join(got[:4])) if got else f"nothing on {len(chans)} channels in {ses.laps} laps")
+                            BG_STATE["last"] = f"{dt.datetime.now():%H:%M} voice check: " + (("heard " + ", ".join(got[:4])) if got else f"nothing on {len(chans)} channels in {ses.laps} laps") + f" ({len(chans)} ch, {ses.laps} laps, {time.time() - t0:.0f} s)"
                             if got: say("voice check: heard " + ", ".join(got[:6]))
                         finally:
                             BG_STATE["what"] = ""
