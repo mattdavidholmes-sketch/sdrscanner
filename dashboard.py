@@ -1892,6 +1892,34 @@ def audition(mhz, mode, secs=6.0):
     if opened >= 6 and len(g.open_levels) >= 6 and g.voice_cv < 0.15: return "DATA", f"flat bursts cv {g.voice_cv:.2f}"
     return "QUIET", f"squelch open {opened}/{blocks} blocks - nothing clear"
 
+VC_MEM = {}                                    # (v257) what the voice checks have learned about steady carriers, kept from one check to the next
+def voice_check_listen(ses, user_wants=None, heard=None, stay=10.0, clock=time.time):
+    """(v257) One silent voice check on a Channelizer: at least two laps, 45 s at most when nothing is on the air, 75 s in all.
+    v256 on the air (26 Nov 23:23, 168 channels): 1 lap in 78 s and 0 laps in 57 s - a conversation on one repeater held
+    the check where it was, as it should for somebody who is listening. Nobody is listening here: the point is to know who
+    is on the air everywhere. So a channel with confirmed speech is stamped as heard after `stay` seconds of it and is then
+    left out for the rest of THIS check (the session's own lock-out set, gone with the session): the scanner leaves it at
+    once and does not come back to it on the next stop, so a net cannot hold the laps up twice. The recording of those
+    seconds is kept. Returns the list of (mhz, name, secs) it moved on from."""
+    user_wants = user_wants or USER_WANTS; t0 = clock(); on = None; moved = []
+    while not user_wants.is_set():
+        el = clock() - t0
+        if el >= 75 or (ses.active is None and ((el >= 20 and ses.laps >= 2) or el - sum(x[2] for x in moved) >= 45)): break   # the seconds spent on a channel it then left do not count against the 45
+        a = ses.active
+        if a is None or not getattr(a, "confirmed", False): on = None
+        else:
+            k = round(a.mhz, 4)
+            if on is None or on[0] != k: on = [k, clock()]
+            elif clock() - on[1] >= stay:
+                secs = round(clock() - on[1], 1); moved.append((a.mhz, a.name, secs))
+                if heard:
+                    try: heard(a.mhz, a.name, secs, a.tones.summary() if getattr(a, "tones", None) else "")
+                    except Exception: pass
+                ses.lockout.add(k); on = None                 # the Channelizer drops a locked-out channel that is talking and hops
+        b = ses.read(4800)
+        if not b: break
+    return moved
+
 def verify_worker():
     time.sleep(90)                                            # let the scan get going first
     while True:
@@ -1931,13 +1959,10 @@ def verify_worker():
                         take_dongle(); BG_STATE["what"] = f"voice check: listening on {len(chans)} known channels (two laps, longer while someone talks)"; BG_STATE["since"] = time.time()
                         try:
                             ses = CH.Channelizer(chans, None, True, "49.6", newest_scan() or HERE, FM_LOG, on_heard=monitor_heard, trusted=trusted_set(chans))
+                            for k in ("steady", "dead_f", "dead_miss", "bias"): setattr(ses, k, VC_MEM.setdefault(k, {}))   # (v257) a carrier that never proved itself is not waited on again in the next check
                             t0 = time.time()
-                            while not USER_WANTS.is_set():
-                                el = time.time() - t0
-                                if el >= 75 or (ses.active is None and ((el >= 20 and ses.laps >= 2) or el >= 45)): break
-                                b = ses.read(4800)
-                                if not b: break
-                            got = [f"{h['name']} {h['mhz']:.4f} ({h['secs']:.0f} s)" for h in list(ses.heard)]
+                            moved = voice_check_listen(ses, heard=monitor_heard)
+                            got = [f"{h['name']} {h['mhz']:.4f} ({h['secs']:.0f} s)" for h in list(ses.heard)] + [f"{n} {m:.4f} ({s:.0f} s, moved on)" for m, n, s in moved]
                             ses.stop()
                             BG_STATE["last"] = f"{dt.datetime.now():%H:%M} voice check: " + (("heard " + ", ".join(got[:4])) if got else f"nothing on {len(chans)} channels in {ses.laps} laps") + f" ({len(chans)} ch, {ses.laps} laps, {time.time() - t0:.0f} s)"
                             if got: say("voice check: heard " + ", ".join(got[:6]))
