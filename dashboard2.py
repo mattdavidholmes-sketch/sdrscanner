@@ -582,7 +582,8 @@ _PHON = {"alpha": "A", "alfa": "A", "bravo": "B", "charlie": "C", "delta": "D", 
          "zero": "0", "one": "1", "two": "2", "three": "3", "four": "4", "five": "5", "six": "6", "seven": "7", "eight": "8", "nine": "9", "niner": "9"}
 _CALL_NA = re.compile(r"^(?:[KNW][A-Z]?|A[A-L]|V[AEOY]|C[F-KYZ]|X[J-O])\d[A-Z]{1,3}$")     # United States and Canada
 _CALL_DX = re.compile(r"^[A-Z]{1,2}\d[A-Z]{2,3}$")                                          # anywhere else: two or three letters after the digit
-def _is_call(c): return bool(_CALL_NA.match(c) or _CALL_DX.match(c))
+_NOT_CALLS = {"C4FM"}                                                                        # (v260) shaped like a call sign and said on every Fusion net: it is a modulation
+def _is_call(c): return c not in _NOT_CALLS and bool(_CALL_NA.match(c) or _CALL_DX.match(c))
 def qso_calls(text):
     """The call signs in a transcript, in the order said, each once."""
     toks = re.findall(r"[A-Za-z0-9]+(?:-[A-Za-z]+)?", text or ""); out = []; sym = []
@@ -612,7 +613,7 @@ def _clip_parts(base):
     try: return float(m.group(1)), m.group(2).replace("_", " ").strip(), time.mktime(time.strptime(m.group(3) + m.group(4), "%Y%m%d%H%M%S"))
     except ValueError: return None
 _QSO = {"t": 0.0, "rows": []}
-def qso_log(limit=600, days=30):
+def qso_log(limit=1500, days=30):
     if time.time() - _QSO["t"] < 5: return _QSO["rows"]
     rows = {}
     def add(base, text, audio=None, kept=False, secs=None):
@@ -622,9 +623,9 @@ def qso_log(limit=600, days=30):
         if not any(a <= mhz <= b for a, b in HAM_BANDS): return
         old = rows.get(base)
         if old and (old["audio"] or not audio): return                         # the copy that still has its audio wins
-        text = re.sub(r"^\(unsure\) ", "", text.strip()); own = (name.split() or [""])[0].upper()
+        text = re.sub(r"^\(unsure\) ", "", text.strip())
         rows[base] = {"file": base, "mhz": f"{mhz:.4f}", "name": name, "ts": ts, "when": time.strftime("%b %d %H:%M:%S", time.localtime(ts)), "day": time.strftime("%a %b %d", time.localtime(ts)),
-                      "text": text, "calls": [c for c in qso_calls(text) if c != own], "own": own if own in qso_calls(text) else "", "audio": audio, "kept": kept, "secs": secs}
+                      "text": text, "calls": qso_calls(text), "own": "", "audio": audio, "kept": kept, "secs": secs}
     def secs_of(wav):
         try: return round(max(0, (os.path.getsize(wav) - 44) / (RATE * 2)), 1)
         except OSError: return None
@@ -648,6 +649,21 @@ def qso_log(limit=600, days=30):
                     if isinstance(r, dict) and r.get("file"): add(str(r["file"]), str(r.get("text") or ""))
         except OSError: pass
     out = sorted(rows.values(), key=lambda r: -r["ts"])[:limit]
+    # (v260) On the Mac's own transcripts, 27 Nov 00:09 (600 rows, 231 call signs): the repeater's call sign was listed as a
+    # station wherever the clip carried a net's name instead ("146.9850 Nostalgia Net" -> VE3SKY), and cut-off hearings stood
+    # beside the whole one ("VE2V" x2 beside "VE2VB" x5, "I5HV" beside "AI5HV", "E3SKY" and "VE3SK" on VE3SKY's own channel).
+    # So, per frequency: its own call signs are those any of its clips is named after; and a call sign that is the beginning
+    # or the end of a longer one heard at least as often on that frequency is taken for a cut-off hearing of it and left out.
+    own = {}; cnt = {}
+    for r in out:
+        w = (r["name"].split() or [""])[0].upper()
+        if _is_call(w): own.setdefault(r["mhz"], set()).add(w)
+        for c in r["calls"]: cnt.setdefault(r["mhz"], {}); cnt[r["mhz"]][c] = cnt[r["mhz"]].get(c, 0) + 1
+    for r in out:
+        o = own.get(r["mhz"], set()); k = cnt.get(r["mhz"], {})
+        def cut(c): return any(len(C) > len(c) and (C.startswith(c) or C.endswith(c)) and (C in o or k.get(C, 0) >= k.get(c, 0)) for C in list(o) + list(k))
+        r["own"] = next((c for c in r["calls"] if c in o), "")
+        r["calls"] = [c for c in r["calls"] if c not in o and not cut(c)]
     _QSO.update(t=time.time(), rows=out)
     return out
 def keep_recording(name):
