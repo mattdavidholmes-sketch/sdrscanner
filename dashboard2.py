@@ -666,6 +666,115 @@ def qso_log(limit=1500, days=30):
         r["calls"] = [c for c in r["calls"] if c not in o and not cut(c)]
     _QSO.update(t=time.time(), rows=out)
     return out
+# (v262) LINKED NETWORKS, FIRST PART: ALLSTAR. Matt, 26 Nov 23:55: "allstar, echolink, ysf, p.25, all of these should be built
+# in - m17 repeaters, all of these need to be connected too". On the air an AllStar repeater is an ordinary FM repeater and is
+# heard like any other; what the dongle cannot tell is what it is linked to. AllStarLink publishes that without an account:
+#   the node list  https://allmondb.allstarlink.org/allmondb.php   node|call sign|description|location, cached 15 min there -
+#                  fetched here once a day, in the background, kept in _state/allmondb.txt;
+#   one node       https://stats.allstarlink.org/api/stats/<node>  keyed or not, the nodes linked to it; 30 requests a minute
+#                  per address allowed - here one answer is kept 60 s and no more than 12 are asked in a minute.
+# A repeater is matched to a node by its call sign AND the frequency in the node's description (a club has several nodes);
+# where the channel's name carries no call sign, by frequency alone among nodes that give a place in the Toronto area, and
+# that match is marked. Asked only when the QSO log tab is opened or a node is tapped - never from the page's own poll.
+ASL_DB = os.path.join(HERE, "_state", "allmondb.txt")
+_ASL = {"nodes": None, "mt": None, "t": 0.0, "busy": False, "stat": {}, "calls": [], "err": ""}
+_GTA = re.compile(r"toronto|etobicoke|mississauga|brampton|oakville|vaughan|markham|richmond hill|scarborough|north york|milton|burlington|pickering|ajax", re.I)
+def _asl_get(url, timeout=15):
+    import urllib.request
+    return urllib.request.urlopen(urllib.request.Request(url, headers={"User-Agent": "sdrscanner (receive-only amateur dashboard)"}), timeout=timeout).read()
+ASL_FETCH = _asl_get
+def _asl_refresh():
+    try:
+        b = ASL_FETCH("https://allmondb.allstarlink.org/allmondb.php", 40)
+        if b.count(b"|") < 3000: raise ValueError("the node list came back too short")
+        os.makedirs(os.path.dirname(ASL_DB), exist_ok=True)
+        with open(ASL_DB + ".tmp", "wb") as f: f.write(b)
+        os.replace(ASL_DB + ".tmp", ASL_DB); _ASL["err"] = ""
+        v1.say(f"linked networks: AllStarLink node list fetched ({b.count(chr(10).encode())} nodes)")
+    except Exception as e: _ASL["err"] = repr(e)[:160]
+    finally: _ASL["busy"] = False
+def asl_nodes():
+    """{'call': {call sign: [(node, description, location)]}, 'num': {node: (call sign, description, location)}} or None while there is no list yet."""
+    try: mt = os.path.getmtime(ASL_DB)
+    except OSError: mt = None
+    if (mt is None or time.time() - mt > 86400) and not _ASL["busy"] and time.time() - _ASL["t"] > 900:
+        import threading
+        _ASL["busy"] = True; _ASL["t"] = time.time(); threading.Thread(target=_asl_refresh, daemon=True).start()
+    if mt is None: return None
+    if _ASL["nodes"] is None or _ASL["mt"] != mt:
+        call = {}; num = {}
+        try:
+            with open(ASL_DB, encoding="utf-8", errors="ignore") as f:
+                for line in f:
+                    p = line.rstrip("\n").split("|")
+                    if len(p) < 4 or not p[0].strip().isdigit(): continue
+                    n = int(p[0]); c = p[1].strip().upper(); d = p[2].strip(); l = p[3].strip()
+                    call.setdefault(c, []).append((n, d, l)); num[n] = (c, d, l)
+        except OSError: return None
+        _ASL.update(nodes={"call": call, "num": num}, mt=mt)
+    return _ASL["nodes"]
+def _asl_freq(desc):
+    m = re.search(r"(?<![\d.])(\d{2,3}\.\d{2,4})(?!\d)", desc or "")
+    return float(m.group(1)) if m else None
+def asl_match(mhz, call, nodes):
+    out = []
+    for n, d, l in nodes["call"].get(call, []) if call else []:
+        f = _asl_freq(d)
+        if f is not None and abs(f - mhz) < 0.006: out.append({"node": n, "call": call, "desc": d, "loc": l, "by": "call sign"})
+    if not out and not call:
+        for n, (c, d, l) in nodes["num"].items():
+            f = _asl_freq(d)
+            if f is not None and abs(f - mhz) < 0.006 and _GTA.search(l): out.append({"node": n, "call": c, "desc": d, "loc": l, "by": "frequency"})
+    return out[:4]
+def asl_table():
+    """The amateur channels of the directory and of the QSO log that are AllStar nodes."""
+    nodes = asl_nodes()
+    if not nodes: return []
+    chans = {}
+    try:
+        from build_hub import entries
+        for e in entries():
+            if any(a <= e["mhz"] <= b for a, b in HAM_BANDS) and not e.get("digital"): chans[round(e["mhz"], 4)] = e["name"]
+    except Exception: pass
+    for r in qso_log():
+        k = round(float(r["mhz"]), 4); w = (r["name"].split() or [""])[0].upper()
+        if k not in chans or (_is_call(w) and not _is_call((chans[k].split() or [""])[0].upper())): chans[k] = r["name"]
+    out = []
+    for mhz, name in sorted(chans.items()):
+        w = (name.split() or [""])[0].upper(); call = w if _is_call(w) else ""
+        m = asl_match(mhz, call, nodes)
+        if m: out.append({"mhz": f"{mhz:.4f}", "name": name, "call": call or m[0]["call"], "nodes": m})
+    return out
+def asl_status(node):
+    """What AllStarLink says about one node right now: keyed, linked nodes. One answer is kept 60 s."""
+    import calendar
+    node = int(node); now = time.time(); c = _ASL["stat"].get(node)
+    if c and now - c["t"] < 60: return c["v"]
+    _ASL["calls"] = [t for t in _ASL["calls"] if now - t < 60]
+    if len(_ASL["calls"]) >= 12: return c["v"] if c else {"node": node, "err": "too many look-ups in this minute - try again shortly"}
+    _ASL["calls"].append(now); nodes = asl_nodes() or {"num": {}}
+    try:
+        j = json.loads(ASL_FETCH(f"https://stats.allstarlink.org/api/stats/{node}", 10)); st = j.get("stats") or {}; d = st.get("data") or {}; n = j.get("node") or st.get("user_node") or {}
+        if not n: raise ValueError("no such node")
+        links = []
+        for x in d.get("linkedNodes") or []:
+            if isinstance(x, dict): links.append({"node": x.get("name"), "call": x.get("callsign") or "", "desc": x.get("node_frequency") or "", "loc": (x.get("server") or {}).get("Location") or ""})
+        have = {str(l["node"]) for l in links}
+        for x in d.get("links") or []:
+            if str(x) not in have:
+                k = nodes["num"].get(int(x)) if str(x).isdigit() else None
+                links.append({"node": x, "call": k[0] if k else "", "desc": k[1] if k else "", "loc": k[2] if k else ""})
+        stale = ""
+        try:
+            age = now - calendar.timegm(time.strptime(str(st.get("updated_at"))[:19], "%Y-%m-%dT%H:%M:%S"))
+            if age > 900: stale = f"last report {age / 3600:.0f} h ago" if age > 7200 else f"last report {age / 60:.0f} min ago"
+        except (ValueError, TypeError): stale = "never reported" if not st else ""
+        v = {"node": node, "call": n.get("callsign") or "", "desc": n.get("node_frequency") or "", "loc": (n.get("server") or {}).get("Location") or "", "keyed": bool(d.get("keyed")), "links": links[:30], "nlinks": len(links), "stale": stale}
+    except ValueError as e: v = {"node": node, "err": "AllStarLink has no report for it" if "no such" in str(e) else "AllStarLink's answer could not be read"}
+    except Exception: v = {"node": node, "err": "AllStarLink did not answer"}
+    _ASL["stat"][node] = {"t": now, "v": v}
+    return v
+
 def keep_recording(name):
     """Move a clip and its transcript files out of the scan folder into kept/recordings/. -> (ok, text)"""
     name = os.path.basename(name or "")
@@ -2722,6 +2831,11 @@ class H2(v1.H):
             return self.send(json.dumps(st), "application/json")
         if u.path == "/api/recordings": return self.send(json.dumps(recordings()), "application/json")
         if u.path == "/api/qso": return self.send(json.dumps(qso_log()), "application/json")
+        if u.path == "/api/linked":                                           # (v262)
+            nd = parse_qs(u.query).get("node", [""])[0]
+            if nd.isdigit() and 0 < int(nd) < 10000000: return self.send(json.dumps(asl_status(nd)), "application/json")
+            t = asl_table()
+            return self.send(json.dumps({"table": t, "have_list": asl_nodes() is not None, "err": _ASL["err"]}), "application/json")
         if u.path in ("/api/keep", "/api/unkeep"):
             ok, msg = (keep_recording if u.path == "/api/keep" else unkeep_recording)(parse_qs(u.query).get("f", [""])[0])
             return self.send(json.dumps({"ok": ok, "msg": msg}), "application/json")
@@ -3317,6 +3431,7 @@ table:has(#airrows) :is(th,td):nth-child(2),table:has(#airrows) :is(th,td):nth-c
  <section id="tab-qso" style="display:none">
   <p class="sub" style="color:var(--mute);margin-top:0">Everything heard and recorded on the amateur bands - repeaters and simplex - with the call signs said in it. Listen to a net, or let the scanner run, and it fills by itself. Call signs are as the transcriber heard them: check one before you log it.</p>
   <div class="btns" style="flex-wrap:wrap;margin-bottom:8px"><select id="qsoch" style="font:inherit;background:var(--card);color:var(--ink);border:1px solid var(--line);border-radius:8px;padding:6px 8px;max-width:100%"></select><input id="qsoq" type="search" placeholder="call sign or a word that was said" style="min-width:200px;flex:1 1 200px"><button class="ghost" id="qsocsv">Download CSV</button></div>
+  <div id="lnk" class="card" style="padding:10px 12px;margin:0 0 10px"></div>
   <div id="qsowho" style="margin:6px 0 10px;display:flex;gap:6px;flex-wrap:wrap;align-items:center"></div>
   <div class="tablewrap" id="qso"></div></section>
  <section id="tab-recs" style="display:none">
@@ -3751,7 +3866,16 @@ async function delRec(f){await fetch('/delrec?f='+encodeURIComponent(f));loadRec
 async function keepRec(f){let r={};try{r=await (await fetch('/api/keep?f='+encodeURIComponent(f))).json();}catch(e){r={msg:'the app did not answer'};}toast(r.ok?'kept - the 40-clip rule will not delete it':r.msg);loadRecs();if(tab==='qso')loadQso();}
 async function unkeepRec(b,f){if(b.dataset.sure!=='1'){b.dataset.sure='1';b.textContent='Sure? remove';setTimeout(()=>{b.dataset.sure='';b.textContent='Remove';},4000);return;}let r={};try{r=await (await fetch('/api/unkeep?f='+encodeURIComponent(f))).json();}catch(e){r={msg:'the app did not answer'};}toast(r.ok?'removed - its transcript stays in the log':r.msg);loadRecs();if(tab==='qso')loadQso();}
 let QSO=[],QSO_CH='',QSO_Q='';
-async function loadQso(){try{QSO=await (await fetch('/api/qso')).json();}catch(e){QSO=[];}renderQso();}
+async function loadQso(){try{QSO=await (await fetch('/api/qso')).json();}catch(e){QSO=[];}renderQso();if(!LNK||!(LNK.table||[]).length||Date.now()-LNK_T>600000)loadLinked();}
+/* (v262) linked networks: which of the repeaters are AllStar nodes, and on a tap what one is linked to right now */
+let LNK=null,LNK_T=0;
+async function loadLinked(){try{LNK=await (await fetch('/api/linked')).json();LNK_T=Date.now();}catch(e){LNK=null;}renderLinked();}
+function renderLinked(){const el=$('#lnk');if(!el)return;if(!LNK){el.innerHTML='';el.style.display='none';return;}el.style.display='';const t=LNK.table||[];
+ if(!t.length){el.innerHTML='<b>Linked networks</b> <span class="sv">'+(LNK.have_list?'AllStarLink: none of the repeaters in the directory or in this log is in its node list':(LNK.err?'AllStarLink: the node list could not be fetched yet (it is tried again by itself)':'AllStarLink: the node list is being fetched - open this tab again in a minute'))+'</span>';return;}
+ el.innerHTML='<b>Linked networks</b> <span class="sv">AllStarLink nodes among your repeaters - tap one to see whether it is keyed and what it is linked to right now</span><div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:8px">'+t.map(r=>r.nodes.map(n=>`<button class="ghost ln" data-n="${n.node}" style="padding:3px 9px;font-size:.85em" title="${esc(n.desc)} · ${esc(n.loc)} · matched by ${n.by}">${esc(r.call||r.name)} ${(+r.mhz).toFixed(3)} · node ${n.node}${n.by==='frequency'?' ?':''}</button>`).join('')).join('')+'</div><div id="lnkst" class="sv" style="margin-top:8px;line-height:1.5"></div>';}
+async function linkedStatus(node){const el=$('#lnkst');if(!el)return;el.textContent='asking AllStarLink about node '+node+' …';let s={};try{s=await (await fetch('/api/linked?node='+node)).json();}catch(e){s={err:'the app did not answer'};}
+ if(s.err){el.textContent='node '+node+': '+s.err;return;}
+ el.innerHTML=`<b style="color:var(--ink)">${esc(s.call)} ${esc(s.desc)}</b> · node ${s.node}${s.loc?' · '+esc(s.loc):''} · `+(s.stale?'not reporting ('+esc(s.stale)+')':(s.keyed?'<span class="tag" style="color:var(--acc)">keyed now</span>':'not keyed'))+' · '+(s.links.length?'linked to '+s.links.map(l=>`<b style="color:var(--ink)">${esc(l.call||'node')}</b> ${esc(l.desc)} <span style="opacity:.7">(${esc(l.node)}${l.loc?', '+esc(l.loc):''})</span>`).join('; ')+(s.nlinks>s.links.length?' and '+(s.nlinks-s.links.length)+' more':''):'linked to nothing right now');}
 function qsoRows(){const q=QSO_Q.trim().toUpperCase();return QSO.filter(x=>(!QSO_CH||x.mhz===QSO_CH)&&(!q||x.calls.some(c=>c.includes(q))||x.text.toUpperCase().includes(q)));}
 function renderQso(){const el=$('#qso');if(!el)return;const chans={};QSO.forEach(x=>{(chans[x.mhz]=chans[x.mhz]||{n:0,name:x.name}).n++;});if(QSO_CH&&!chans[QSO_CH])QSO_CH='';
  $('#qsoch').innerHTML=`<option value="">All amateur channels (${QSO.length})</option>`+Object.keys(chans).sort((a,b)=>chans[b].n-chans[a].n).map(k=>`<option value="${k}"${k===QSO_CH?' selected':''}>${k} ${esc(chans[k].name)} (${chans[k].n})</option>`).join('');
@@ -3766,6 +3890,7 @@ function qsoCsv(){const Q=String.fromCharCode(34),NL=String.fromCharCode(10),c=v
  const t=['when,MHz,channel,call signs heard,seconds,what was said'].concat(rows.map(x=>[c(x.when),x.mhz,c(x.name),c(x.calls.join(' ')),x.secs??'',c(x.text)].join(','))).join(NL);
  const a=document.createElement('a');a.href=URL.createObjectURL(new Blob([t],{type:'text/csv'}));a.download='qso_log.csv';document.body.appendChild(a);a.click();setTimeout(()=>{URL.revokeObjectURL(a.href);a.remove();},500);}
 (function(){const ch=$('#qsoch'),q=$('#qsoq'),w=$('#qsowho'),b=$('#qsocsv');if(!ch)return;ch.onchange=()=>{QSO_CH=ch.value;renderQso();};q.oninput=()=>{QSO_Q=q.value;renderQso();};b.onclick=qsoCsv;
+ $('#lnk').onclick=e=>{const k=e.target.closest('.ln');if(k)linkedStatus(k.dataset.n);};
  w.onclick=e=>{const k=e.target.closest('.qc');if(!k)return;q.value=QSO_Q=(QSO_Q.toUpperCase()===k.dataset.c?'':k.dataset.c);renderQso();};})();
 async function loadDebug(){try{const d=await (await fetch('/debug')).json();const NL=String.fromCharCode(10);$('#dbgsum').textContent='scan '+(d.paused?'PAUSED (listening)':'running')+' · '+d.folder+' · recent USB errors: '+d.usb_errors_recent+(d.player.mhz?' · player on '+d.player.mhz:'');
  let t='WHAT HAPPENED (events.log, newest last)'+NL+((d.events||[]).join(NL)||'(nothing yet)')+NL+NL+'PROCESSES'+NL+(d.procs||'(none)')+NL+NL+'rtl_fm (listener)'+NL+d.fm_log;for(const k in d.logs)t+=NL+NL+'── '+k+NL+d.logs[k];$('#dbgout').textContent=t;}catch(e){$('#dbgout').textContent='debug failed: '+e;}}
